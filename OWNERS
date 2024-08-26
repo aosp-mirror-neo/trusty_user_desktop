@@ -1,12 +1,5 @@
 # Bug component: 1593252
-allenwebb@google.com
-apronin@google.com
-betuls@google.com
-# ecgh@google.com
-granaghan@google.com
-hardikgoyal@google.com
-jadmanski@google.com
-jbk@google.com
-jettrink@google.com
-kupiakos@google.com
-lziest@google.com
+
+include /SECURITY_OWNERS
+# TODO: b/361840829 - Include general trusty OWNERS
+
