@@ -33,4 +33,7 @@ enum LeafSet {
 
     /** Leaves for Weaver. The `id` is a Weaver slot number, starting from 0. */
     WEAVER = 2,
+
+    /** Leaves for KeyMint. The `id` is an opaque identifier for various device secrets. */
+    KEYMINT = 3,
 }
