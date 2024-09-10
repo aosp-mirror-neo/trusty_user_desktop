@@ -1,0 +1,17 @@
+aidl_interface {
+    name: "vendor.google.gsc",
+    owner: "google",
+    unstable: true,
+    vendor_available: true,
+    srcs: ["vendor/google/gsc/IGsc.aidl"],
+    frozen: false,
+    backend: {
+        rust: {
+            enabled: true,
+            apex_available: [
+                "//apex_available:platform",
+                "com.android.virt",
+            ],
+        },
+    },
+}
