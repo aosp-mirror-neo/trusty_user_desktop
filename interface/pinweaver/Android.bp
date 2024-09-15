@@ -1,0 +1,33 @@
+aidl_interface {
+    name: "vendor.google.pinweaver",
+    owner: "google",
+    unstable: true,
+    vendor_available: true,
+    srcs: [
+        "vendor/google/pinweaver/DelayScheduleEntry.aidl",
+        "vendor/google/pinweaver/InsertMode.aidl",
+        "vendor/google/pinweaver/IPinWeaver.aidl",
+        "vendor/google/pinweaver/LeafId.aidl",
+        "vendor/google/pinweaver/LeafSet.aidl",
+        "vendor/google/pinweaver/TryAuthResponse.aidl",
+    ],
+    frozen: false,
+    backend: {
+        rust: {
+            enabled: true,
+            apex_available: [
+                "//apex_available:platform",
+                "com.android.virt",
+            ],
+        },
+        java: {
+            enabled: false,
+        },
+        cpp: {
+            enabled: false,
+        },
+        ndk: {
+            enabled: false,
+        },
+    },
+}
