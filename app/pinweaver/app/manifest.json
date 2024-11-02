@@ -1,0 +1,6 @@
+{
+    "app_name": "pinweaver_app",
+    "uuid": "5807aa35-8fb9-4dd9-8d58-48643434a077",
+    "min_heap": 16384,
+    "min_stack": 16384
+}
