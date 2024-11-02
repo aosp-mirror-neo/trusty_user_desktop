@@ -11,14 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
 
 LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
 
-MODULE_AIDL_PACKAGE := vendor/google/pinweaver
-MODULE_CRATE_NAME := vendor_google_pinweaver
+MODULE_AIDL_PACKAGE := android/desktop/security/pinweaver
+MODULE_CRATE_NAME := android_desktop_security_pinweaver
 
 MODULE_AIDLS := \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/DelayScheduleEntry.aidl \
@@ -29,5 +28,8 @@ MODULE_AIDLS := \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/TryAuthResponse.aidl \
 
 MODULE_AIDL_LANGUAGE := rust
+
+MODULE_LIBRARY_DEPS += \
+	$(call FIND_CRATE,static_assertions) \
 
 include make/aidl.mk
