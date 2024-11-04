@@ -1,0 +1,16 @@
+aidl_interface {
+    name: "android.system.desktop.security.gsc",
+    owner: "google",
+    unstable: true,
+    srcs: ["android/system/desktop/security/gsc/IGsc.aidl"],
+    frozen: false,
+    backend: {
+        rust: {
+            enabled: true,
+            apex_available: [
+                "//apex_available:platform",
+                "com.android.virt",
+            ],
+        },
+    },
+}
