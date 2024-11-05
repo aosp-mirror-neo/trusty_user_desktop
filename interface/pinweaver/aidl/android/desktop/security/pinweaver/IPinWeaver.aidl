@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-package vendor.google.pinweaver;
+package android.desktop.security.pinweaver;
 
-import vendor.google.pinweaver.DelayScheduleEntry;
-import vendor.google.pinweaver.InsertMode;
-import vendor.google.pinweaver.LeafId;
-import vendor.google.pinweaver.LeafSet;
-import vendor.google.pinweaver.TryAuthResponse;
+import android.desktop.security.pinweaver.DelayScheduleEntry;
+import android.desktop.security.pinweaver.InsertMode;
+import android.desktop.security.pinweaver.LeafId;
+import android.desktop.security.pinweaver.LeafSet;
+import android.desktop.security.pinweaver.TryAuthResponse;
 
 /**
  * Adapts the ChromiumOS PinWeaver API for Android.
