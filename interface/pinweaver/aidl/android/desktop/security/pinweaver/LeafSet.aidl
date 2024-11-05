@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package vendor.google.pinweaver;
+package android.desktop.security.pinweaver;
 
 /**
  * Distinguishes IDs for different PinWeaver clients from each other, so they don't conflict.
