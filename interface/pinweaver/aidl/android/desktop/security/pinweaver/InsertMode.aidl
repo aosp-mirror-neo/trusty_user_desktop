@@ -14,22 +14,13 @@
  * limitations under the License.
  */
 
-package vendor.google.pinweaver;
+package android.desktop.security.pinweaver;
 
-import vendor.google.pinweaver.LeafSet;
+/** Whether to allow an insert with the same leaf ID. */
+enum InsertMode {
+    /** Reject the insertion if a leaf with this ID exists. */
+    NEW_ONLY = 0,
 
-/**
- * Identifies a leaf entry in PinWeaver.
- */
-@FixedSize
-parcelable LeafId {
-    /**
-     * The set of IDs to consider.
-     *
-     * The default is not valid for a LeafId and must be changed before use.
-     */
-    LeafSet leafSet = LeafSet.ALL_LEAVES;
-
-    /** Distinguishes leaves for this leaf set, selected by the client of this API. */
-    int id;
+    /** Replace the leaf with new contents if this ID is already present. */
+    REPLACE_EXISTING = 1,
 }

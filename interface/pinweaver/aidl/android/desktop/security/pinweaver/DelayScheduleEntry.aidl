@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package vendor.google.pinweaver;
+package android.desktop.security.pinweaver;
 
 /**
  * An entry in the delay schedule table, configuring rate limiting for a leaf.
