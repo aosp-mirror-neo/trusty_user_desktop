@@ -182,3 +182,8 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    test::init!();
+}
