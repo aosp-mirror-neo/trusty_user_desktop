@@ -32,6 +32,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/desktop/interface/gsc \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
-	trusty/user/base/lib/keymint-rust/wire \
+
+MODULE_RUST_TESTS := true
 
 include make/library.mk
