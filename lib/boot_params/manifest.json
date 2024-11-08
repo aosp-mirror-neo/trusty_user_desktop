@@ -1,9 +1,0 @@
-{
-    "app_name": "dice-test",
-    "uuid": "c585c81b-10a3-4a2a-b997-7ab4148df038",
-    "min_heap": 16384,
-    "min_stack": 20480,
-    "mgmt_flags": {
-        "non_critical_app": true
-    }
-}
