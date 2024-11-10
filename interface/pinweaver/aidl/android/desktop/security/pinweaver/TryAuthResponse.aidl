@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package vendor.google.pinweaver;
+package android.desktop.security.pinweaver;
 
 /** The result of an authentication attempt when it succeeds or is not attempted. */
 union TryAuthResponse {
