@@ -15,6 +15,8 @@
 */
 
 use alloc::vec::Vec;
+use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::BnGsc;
+use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
 use binder::{BinderFeatures, ExceptionCode, Interface, Result as BinderResult, Status};
 use rpcbinder::RpcServer;
 use std::borrow::Cow;
@@ -27,8 +29,6 @@ use tipc::{
     Serialize, Serializer, UnbufferedService, Uuid,
 };
 use trusty_sys::Error;
-use vendor_google_gsc::aidl::vendor::google::gsc::IGsc::BnGsc;
-use vendor_google_gsc::aidl::vendor::google::gsc::IGsc::IGsc;
 
 const APP_SERVICE_PORT: &str = "com.android.trusty.rust.GscAppService.V1";
 const TUNNEL_SERVICE_PORT: &str = "com.android.trusty.rust.GscTunnelService.V1";
