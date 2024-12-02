@@ -29,7 +29,7 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,log) \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
-	trusty/user/desktop/interface/gsc \
+	trusty/user/desktop/interface/gscd \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/base/lib/keymint-rust/wire \
