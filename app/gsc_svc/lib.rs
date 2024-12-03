@@ -14,6 +14,8 @@
 * limitations under the License.
 */
 
+mod boot_params_svc;
+
 use alloc::vec::Vec;
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::BnGsc;
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
@@ -30,8 +32,9 @@ use tipc::{
 };
 use trusty_sys::Error;
 
-const APP_SERVICE_PORT: &str = "com.android.trusty.rust.GscAppService.V1";
+const GSC_SERVICE_PORT: &str = "com.android.trusty.rust.GscAppService.V1";
 const TUNNEL_SERVICE_PORT: &str = "com.android.trusty.rust.GscTunnelService.V1";
+const BP_SERVICE_PORT: &str = "com.android.trusty.rust.BootParamsService.V1";
 
 /// A GscProxy implements the IGsc binder interface and forwards requests from trusty apps to the
 /// GSC over a GscTunnel.
@@ -149,7 +152,7 @@ service_dispatcher! {
     }
 }
 
-const PORT_COUNT: usize = 2;
+const PORT_COUNT: usize = 3;
 const CONNECTION_COUNT: usize = 4;
 
 pub fn init_and_start_loop() -> Result<(), TipcError> {
@@ -160,20 +163,28 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
 
     let mut dispatcher =
         GscDispatcher::<PORT_COUNT>::new().expect("Could not create test dispatcher");
-    let service = BnGsc::new_binder(proxy, BinderFeatures::default());
-    let rpc_server = RpcServer::new_per_session(move |_uuid| Some(service.as_binder()));
+    let gsc_service = BnGsc::new_binder(proxy, BinderFeatures::default());
+    let gsc_rpc_server = RpcServer::new_per_session(move |_uuid| Some(gsc_service.as_binder()));
 
     let app_cfg =
-        PortCfg::new(APP_SERVICE_PORT).expect("Could not create port config").allow_ta_connect();
+        PortCfg::new(GSC_SERVICE_PORT).expect("Could not create port config").allow_ta_connect();
     dispatcher
-        .add_service(Rc::new(rpc_server), app_cfg)
-        .expect("Could not add service to dispatcher");
+        .add_service(Rc::new(gsc_rpc_server), app_cfg)
+        .expect("Could not add GSC service to dispatcher");
 
     let tunnel_cfg =
         PortCfg::new(TUNNEL_SERVICE_PORT).expect("Could not create port config").allow_ns_connect();
     dispatcher
         .add_service(Rc::new(tunnel), tunnel_cfg)
-        .expect("Could not add service to dispatcher");
+        .expect("Could not add tunnel service to dispatcher");
+
+    let bp_cfg =
+        PortCfg::new(BP_SERVICE_PORT).expect("Could not create port config").allow_ta_connect();
+    let bp = boot_params_svc::create_boot_params_service()?;
+    let bp_rpc_server = RpcServer::new_per_session(move |_uuid| Some(bp.as_binder()));
+    dispatcher
+        .add_service(Rc::new(bp_rpc_server), bp_cfg)
+        .expect("Could not add bp service to dispatcher");
 
     Manager::<_, _, PORT_COUNT, CONNECTION_COUNT>::new_with_dispatcher(dispatcher, [])
         .expect("Could not create service manager")

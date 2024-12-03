@@ -1,5 +1,5 @@
 {
-    "app_name": "gsc_tunnel_app",
+    "app_name": "gsc_svc_app",
     "uuid": "77026d06-be0f-4604-a6d5-f729388a445b",
     "min_heap": 16384,
     "min_stack": 16384
