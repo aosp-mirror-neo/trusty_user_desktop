@@ -25,11 +25,10 @@ pub enum Error {
 
 #[allow(dead_code)]
 pub struct BootParams {
-    dice: DiceHandover,
-    gsc_boot_params: GscBootParams,
+    pub dice: DiceHandover,
+    pub gsc_boot_params: GscBootParams,
 }
 
-#[cfg(feature = "builtin-bcc")]
 impl Default for BootParams {
     fn default() -> Self {
         Self::new()
@@ -58,6 +57,11 @@ impl BootParams {
         let gsc_boot_params = GscBootParams::from_cbor_value(gsc_boot_params.clone()).unwrap();
 
         Self { dice, gsc_boot_params }
+    }
+
+    #[cfg(not(feature = "builtin-bcc"))]
+    pub fn new() -> Self {
+        Self { dice: DiceHandover::default(), gsc_boot_params: GscBootParams::default() }
     }
 
     /// Returns the UDS public key for the device.

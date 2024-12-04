@@ -12,7 +12,13 @@ pub struct CdiCert {
     pub cwt: CwtClaims,
     pub signature: [u8; 64],
 }
+impl Default for CdiCert {
+    fn default() -> Self {
+        Self { cwt: CwtClaims::default(), signature: [0u8; 64] }
+    }
+}
 
+#[derive(Default)]
 pub struct DiceHandover {
     pub cdi_attest: [u8; 32],
     pub cdi_seal: [u8; 32],
