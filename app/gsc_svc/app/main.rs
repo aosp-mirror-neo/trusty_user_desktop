@@ -15,5 +15,5 @@
 */
 
 fn main() {
-    gsc_tunnel::init_and_start_loop().expect("GSC tunnel service quit unexpectedly");
+    gsc_svc::init_and_start_loop().expect("GSC tunnel service quit unexpectedly");
 }
