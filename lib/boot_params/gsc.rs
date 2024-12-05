@@ -9,6 +9,15 @@ pub struct GscBootParams {
     pub session_key_seed: [u8; 32],
     pub auth_token_key_seed: [u8; 32],
 }
+impl Default for GscBootParams {
+    fn default() -> Self {
+        Self {
+            early_entropy: [0u8; 64],
+            session_key_seed: [0u8; 32],
+            auth_token_key_seed: [0u8; 32],
+        }
+    }
+}
 
 impl coset::AsCborValue for GscBootParams {
     fn from_cbor_value(value: cbor::value::Value) -> coset::Result<Self> {
