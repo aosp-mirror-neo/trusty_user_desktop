@@ -1,0 +1,6 @@
+{
+        "app_name": "manifest_lib",
+        "uuid": "f58e8e9c-4368-43b9-b74f-d51e9eb29ccb",
+        "min_heap": 20480,
+        "min_stack": 20480
+}
