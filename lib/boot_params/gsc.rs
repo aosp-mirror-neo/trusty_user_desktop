@@ -19,6 +19,16 @@ impl Default for GscBootParams {
     }
 }
 
+impl GscBootParams {
+    pub fn new(
+        early_entropy: [u8; 64],
+        session_key_seed: [u8; 32],
+        auth_token_key_seed: [u8; 32],
+    ) -> Self {
+        Self { early_entropy, session_key_seed, auth_token_key_seed }
+    }
+}
+
 impl coset::AsCborValue for GscBootParams {
     fn from_cbor_value(value: cbor::value::Value) -> coset::Result<Self> {
         if let Some(vals) = value.as_map() {
