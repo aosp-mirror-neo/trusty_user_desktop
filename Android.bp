@@ -1,0 +1,5 @@
+dirgroup {
+    name: "trusty_dirgroup_trusty_user_desktop",
+    dirs: ["."],
+    visibility: ["//trusty/vendor/google/aosp/scripts"],
+}

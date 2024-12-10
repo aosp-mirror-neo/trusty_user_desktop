@@ -14,15 +14,11 @@
  * limitations under the License.
  */
 
-package vendor.google.gsc;
+//! Defines types used to communicate between the PinWeaver storage daemon and Trusty app.
+//!
+//! The interface is versioned to perform cross-host updates of the protocol without breakage.
 
-interface IGsc {
-    /**
-     * Transmits a GSC command.
-     *
-     * @param data GSC command to be sent
-     * @return response to the command. In case of error in communicating with
-     *                  the GSC, an empty vector is returned.
-     */
-    byte[] transmit(in byte[] data);
-}
+pub mod util;
+pub mod v1;
+
+pub use v1 as current;
