@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
 
 LOCAL_DIR := $(GET_LOCAL_DIR)
 
@@ -20,21 +19,20 @@ MODULE := $(LOCAL_DIR)
 MANIFEST := $(LOCAL_DIR)/manifest.json
 
 MODULE_SRCS += \
-	$(LOCAL_DIR)/lib.rs \
+	$(LOCAL_DIR)/src/lib.rs \
 
-MODULE_CRATE_NAME := gsc_svc
+MODULE_CRATE_NAME := pinweaver
 
 MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,libc) \
 	$(call FIND_CRATE,log) \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
-	trusty/user/base/lib/vmm_obj/rust \
-	trusty/user/desktop/interface/boot_params/aidl \
-	trusty/user/desktop/interface/gscd \
-	trusty/user/desktop/lib/boot_params \
+	trusty/user/desktop/interface/pinweaver \
+	trusty/user/desktop/interface/pinweaver/storage \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
-	trusty/user/base/lib/keymint-rust/wire \
+
+MODULE_RUST_USE_CLIPPY := true
 
 include make/library.mk

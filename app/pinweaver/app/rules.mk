@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
 
 LOCAL_DIR := $(GET_LOCAL_DIR)
 
@@ -22,13 +21,13 @@ MANIFEST := $(LOCAL_DIR)/manifest.json
 MODULE_SRCS += \
 	$(LOCAL_DIR)/main.rs \
 
-MODULE_CRATE_NAME := gsc_svc_app
+MODULE_CRATE_NAME := pinweaver_app
 
 MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,libc) \
 	$(call FIND_CRATE,log) \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
-	trusty/user/desktop/app/gsc_svc \
+	trusty/user/desktop/app/pinweaver \
 
 include make/trusted_app.mk
