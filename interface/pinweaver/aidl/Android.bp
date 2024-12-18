@@ -1,0 +1,32 @@
+aidl_interface {
+    name: "android.desktop.security.pinweaver",
+    owner: "google",
+    unstable: true,
+    srcs: [
+        "android/desktop/security/pinweaver/DelayScheduleEntry.aidl",
+        "android/desktop/security/pinweaver/InsertMode.aidl",
+        "android/desktop/security/pinweaver/IPinWeaver.aidl",
+        "android/desktop/security/pinweaver/LeafId.aidl",
+        "android/desktop/security/pinweaver/LeafSet.aidl",
+        "android/desktop/security/pinweaver/TryAuthResponse.aidl",
+    ],
+    frozen: false,
+    backend: {
+        rust: {
+            enabled: true,
+            apex_available: [
+                "//apex_available:platform",
+                "com.android.virt",
+            ],
+        },
+        java: {
+            enabled: false,
+        },
+        cpp: {
+            enabled: false,
+        },
+        ndk: {
+            enabled: false,
+        },
+    },
+}
