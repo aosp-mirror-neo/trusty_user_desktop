@@ -19,46 +19,15 @@ use super::{LargeSecretInfo, LeafContents, LeafId, Path, TreeHash, TreeHashes, T
 use crate::util::{serde_enums, serde_fields, serde_zerocopy, SerdeOption};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-/// The response from the storage daemon.
-pub struct StorageResponse {
-    /// Header info that is serialized contiguously.
-    pub header: StorageResponseHeader,
-
-    /// The operation-specific data for a storage response.
-    pub op_data: StorageResponseData,
-}
-
-/// The header for [`StorageResponse`].
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
-#[repr(C)]
-pub struct StorageResponseHeader {
-    /// The status of executing the request; check this first.
-    pub status: ResponseStatus,
-
-    /// The current root hash for the tree.
-    pub root_hash: TreeHash,
-}
-
 /// The response when getting the status of PinWeaver.
 #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct GetStatusResponse {
     /// The parameters for the hash tree, as understood by the storage daemon.
     pub tree_params: TreeParams,
-}
 
-/// The status of a storage daemon operation.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
-#[repr(transparent)]
-pub struct ResponseStatus(u8);
-
-#[allow(non_upper_case_globals)]
-impl ResponseStatus {
-    /// Success.
-    pub const Ok: Self = Self(0);
-
-    /// An unknown internal error occurred.
-    pub const ErrUnknown: Self = Self(1);
+    /// The current root hash for the tree.
+    pub root_hash: TreeHash,
 }
 
 /// The response when initializing PinWeaver on disk.
@@ -67,6 +36,9 @@ impl ResponseStatus {
 pub struct InitializeResponse {
     /// The total number of leaves in this tree.
     pub num_hashes: U32,
+
+    /// The current root hash for the tree.
+    pub root_hash: TreeHash,
 }
 
 /// The response when starting an operation in PinWeaver.
@@ -86,24 +58,46 @@ pub struct CommitOpResponse {
     /// The path of the leaf that was just updated.
     pub path: Path,
 
+    /// The current root hash for the tree.
+    pub root_hash: TreeHash,
+
     /// The response data specific to this operation.
     pub op_data: CommitOpResponseData,
 }
 
 serde_enums! {
-    /// The operation-specific data for a storage response.
-    pub enum StorageResponseData {
+    /// The response from the storage daemon.
+    pub enum StorageResponse {
+        /// An error occurred.
+        Error(ResponseError) = 0,
+
         /// The response when getting the status of PinWeaver.
-        GetStatus(GetStatusResponse) = 0,
+        GetStatus(GetStatusResponse) = 1,
 
         /// The response when initializing PinWeaver.
-        Initialize(InitializeResponse) = 1,
+        Initialize(InitializeResponse) = 2,
 
         /// The response when starting an operation in PinWeaver.
-        StartOp(StartOpResponse) = 2,
+        StartOp(StartOpResponse) = 3,
 
         /// The response when committing an operation in PinWeaver.
-        CommitOp(CommitOpResponse) = 3,
+        CommitOp(CommitOpResponse) = 4,
+    }
+
+    /// The status of a storage daemon operation.
+    pub enum ResponseError {
+        /// Unknown error.
+        Unknown = 0,
+
+        /// PinWeaver data was not found: the system should be initialized
+        /// by resetting the PinWeaver tree.
+        NotInitialized = 1,
+
+        /// Unexpected arithmetic overflow occurred.
+        Overflow = 2,
+
+        /// Database access returned an error.
+        Db = 3,
     }
 
     /// The suboperation-specific data for a start-operation response.
@@ -208,9 +202,8 @@ pub struct RemoveHashes {
 }
 
 serde_fields! {
-    StorageResponse { header, op_data },
     StartOpResponse { path, tree_hashes, op_data },
-    CommitOpResponse { path, op_data },
+    CommitOpResponse { path, root_hash, op_data },
     StartInsertResponseData { replacing_path },
     StartTryAuthResponseData { secret_size, leaf_contents, large_key_info },
     ContinueRemoveBulkResponse { header, hashes },
@@ -218,9 +211,8 @@ serde_fields! {
 }
 
 serde_zerocopy!(
-    StorageResponseHeader,
+    ContinueRemoveBulkResponseHeader,
     GetStatusResponse,
     InitializeResponse,
     StartRemoveResponseData,
-    ContinueRemoveBulkResponseHeader,
 );
