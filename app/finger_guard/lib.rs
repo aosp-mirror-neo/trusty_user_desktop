@@ -14,97 +14,48 @@
 * limitations under the License.
 */
 
-use alloc::vec::Vec;
-use log::{debug, info};
-use tipc::{
-    ConnectResult, Deserialize, Handle, Manager, MessageResult, PortCfg, Serialize, Serializer,
-    TipcError, Uuid,
-};
-use trusty_std::alloc::TryAllocFrom;
+mod service;
+
+use crate::service::FingerGuardService;
+use alloc::rc::Rc;
+use binder::BinderFeatures;
+use fingerguard_api::aidl::IFingerGuard::BnFingerGuard;
+use rpcbinder::RpcServer;
+use tipc::{Manager, PortCfg, TipcError};
 
 // The port on FingerGuard TA which the Fingerprint sensor HAL connects to.
 const APP_SERVICE_PORT: &str = "com.android.trusty.rust.FingerGuard.V1";
 
-// Maximum message size.
-const MAX_MSG_SIZE: usize = 4000;
-
 const PORT_COUNT: usize = 1;
 const CONNECTION_COUNT: usize = 1;
 
-/// Newtype wrapper for opaque messages.
-// TODO(b/388311168): replace with a AIDL interface.
-struct FpMessage(Vec<u8>);
-
-impl Deserialize for FpMessage {
-    type Error = TipcError;
-    const MAX_SERIALIZED_SIZE: usize = MAX_MSG_SIZE;
-
-    fn deserialize(bytes: &[u8], _handles: &mut [Option<Handle>]) -> tipc::Result<Self> {
-        Ok(FpMessage(Vec::try_alloc_from(bytes)?))
+tipc::service_dispatcher! {
+    enum FingerGuardDispatcher {
+        RpcServer
     }
 }
-
-impl<'s> Serialize<'s> for FpMessage {
-    fn serialize<'a: 's, S: Serializer<'s>>(
-        &'a self,
-        serializer: &mut S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_bytes(&self.0.as_slice())
-    }
-}
-
-/// Struct implementing a TIPC service for FingerGuard TA.
-// TODO(b/388311168): implement a binder service.
-struct FingerGuardService;
-
-impl tipc::Service for FingerGuardService {
-    // Associates the Connection with a specific struct
-    type Connection = ();
-    // Associates the Message with a specific struct
-    type Message = FpMessage;
-
-    // This method is called whenever a client connects.
-    // It should return Ok(Some(Connection)) if the connection is to be accepted.
-    fn on_connect(
-        &self,
-        _port: &PortCfg,
-        _handle: &Handle,
-        peer: &Uuid,
-    ) -> tipc::Result<ConnectResult<Self::Connection>> {
-        info!("Accepted connection from uuid {:?}.", peer);
-        Ok(ConnectResult::Accept(()))
-    }
-    // This method is called when the service receives a message.
-    // The manager handles the deserialization into msg, which is passed to this callback.
-    fn on_message(
-        &self,
-        _connection: &Self::Connection,
-        handle: &Handle,
-        _msg: Self::Message,
-    ) -> tipc::Result<MessageResult> {
-        debug!("Received a message");
-
-        // TODO(b/388311168): implement me.
-
-        handle.send(&FpMessage(Vec::new()))?;
-
-        Ok(MessageResult::MaintainConnection)
-    }
-}
-
 pub fn init_and_start_loop() -> Result<(), TipcError> {
     trusty_log::init();
 
-    let app_cfg =
-        PortCfg::new(APP_SERVICE_PORT).expect("Could not create port config").allow_ns_connect();
-    let service = FingerGuardService {};
+    let mut dispatcher =
+        FingerGuardDispatcher::<PORT_COUNT>::new().expect("Could not create dispatcher");
+    let service = FingerGuardService::new();
+    let binder_service = BnFingerGuard::new_binder(service, BinderFeatures::default());
+    let rpc_service = RpcServer::new_per_session(move |_uuid| Some(binder_service.as_binder()));
 
-    // The manager handles the IPC event loop. Given our port configuration, buffer, and
-    // service, it forwards incoming connections & messages to the service.
-    //
+    // Allow secure (within trusty) and non-secure (outside trusty) connections.
+    // Originally only intended for non-secure connections, now allowed secure connection as well
+    // to facilitate the unit tests within the trusty environment.
+    let app_cfg = PortCfg::new(APP_SERVICE_PORT)
+        .expect("Could not create port config")
+        .allow_ta_connect()
+        .allow_ns_connect();
+    dispatcher
+        .add_service(Rc::new(rpc_service), app_cfg)
+        .expect("Could not add FingerGuardService to dispatcher");
+
     // <_, _, 1, 1> means we define a Manager with a single port, and max one connection.
-    let buffer = [0u8; MAX_MSG_SIZE];
-    Manager::<_, _, PORT_COUNT, CONNECTION_COUNT>::new(service, app_cfg, buffer)
+    Manager::<_, _, PORT_COUNT, CONNECTION_COUNT>::new_with_dispatcher(dispatcher, [])
         .expect("Could not create service manager")
         .run_event_loop()
         .expect("FingerGuard event loop failed");
@@ -117,5 +68,7 @@ mod tests {
     test::init!();
 
     #[test]
-    fn always_pass() {}
+    fn connect_server() {
+        let _service = fingerguard_api::connect_finger_guard().unwrap();
+    }
 }
