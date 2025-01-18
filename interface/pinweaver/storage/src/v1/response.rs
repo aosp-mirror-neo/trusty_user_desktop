@@ -17,7 +17,7 @@
 
 use super::{LargeSecretInfo, LeafContents, LeafId, Path, TreeHash, TreeHashes, TreeParams, U32};
 use crate::util::{serde_enums, serde_fields, serde_zerocopy, SerdeOption};
-use zerocopy::{AsBytes, FromBytes, FromZeroes};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 /// The response from the storage daemon.
 pub struct StorageResponse {
@@ -29,7 +29,7 @@ pub struct StorageResponse {
 }
 
 /// The header for [`StorageResponse`].
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct StorageResponseHeader {
     /// The status of executing the request; check this first.
@@ -40,7 +40,7 @@ pub struct StorageResponseHeader {
 }
 
 /// The response when getting the status of PinWeaver.
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct GetStatusResponse {
     /// The parameters for the hash tree, as understood by the storage daemon.
@@ -48,7 +48,7 @@ pub struct GetStatusResponse {
 }
 
 /// The status of a storage daemon operation.
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
 pub struct ResponseStatus(u8);
 
@@ -62,7 +62,7 @@ impl ResponseStatus {
 }
 
 /// The response when initializing PinWeaver on disk.
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct InitializeResponse {
     /// The total number of leaves in this tree.
@@ -157,7 +157,7 @@ pub struct StartInsertResponseData {
 }
 
 /// The response when starting removal of a leaf.
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct StartRemoveResponseData {
     /// The HMAC of the leaf to remove.
@@ -178,7 +178,7 @@ pub struct StartTryAuthResponseData {
 }
 
 /// Header for [`ContinueRemoveBulkResponse`].
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct ContinueRemoveBulkResponseHeader {
     /// The next leaf to remove as part of this bulk removal.
