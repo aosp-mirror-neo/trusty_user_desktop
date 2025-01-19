@@ -20,6 +20,7 @@ use alloc::vec::Vec;
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::BnGsc;
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
 use binder::{BinderFeatures, ExceptionCode, Interface, Result as BinderResult, Status};
+use log::{error, info};
 use rpcbinder::RpcServer;
 use std::borrow::Cow;
 use std::rc::Rc;
@@ -103,6 +104,7 @@ impl UnbufferedService for GscTunnel {
     ) -> tipc::Result<ConnectResult<Self::Connection>> {
         *self.inner.handle.lock().map_err(|_| TipcError::SystemError(Error::BadState))? =
             Some(handle.try_clone()?);
+        info!("gscd connected to the Trusty gsc_svc");
         Ok(ConnectResult::Accept(()))
     }
 
@@ -114,6 +116,11 @@ impl UnbufferedService for GscTunnel {
         _buffer: &mut [u8],
     ) -> tipc::Result<MessageResult> {
         Ok(MessageResult::MaintainConnection)
+    }
+
+    fn on_disconnect(&self, _connection: &Self::Connection) {
+        error!("gscd disconnected!");
+        *self.inner.handle.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
