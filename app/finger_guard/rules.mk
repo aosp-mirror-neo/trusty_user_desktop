@@ -30,6 +30,9 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/trusty-std \
+	trusty/user/desktop/interface/fingerguard \
+	frameworks/native/libs/binder/trusty/rust \
+	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 
 MODULE_RUST_TESTS := true
 
