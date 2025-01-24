@@ -17,7 +17,7 @@
 
 use super::{LeafContents, LeafId, TreeParams};
 use crate::util::{serde_enums, serde_fields, serde_zerocopy};
-use zerocopy::{AsBytes, FromBytes, FromZeroes};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 serde_enums! {
     /// A request to the storage daemon.
@@ -42,14 +42,14 @@ serde_enums! {
 ///
 /// An empty PinWeaver Merkle tree has tree hashes derivable
 /// from these parameters and no on-chip secrets.
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct InitializeRequest {
     tree_params: TreeParams,
 }
 
 /// The kind of operation that PinWeaver is performing and needs disk info for.
-#[derive(AsBytes, FromBytes, FromZeroes, PartialEq, Eq)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct OperationKind(u8);
 
@@ -75,7 +75,7 @@ impl OperationKind {
 ///
 /// This returns the necessary tree hashes to perform the operation.
 /// If necessary, this also tracks that the operation has begun.
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct StartOpRequest {
     /// The leaf this operation targets.
