@@ -20,8 +20,9 @@ MODULE_SRCS := $(LOCAL_DIR)/src/lib.rs
 
 MODULE_CRATE_NAME := pinweaver_storage
 
+# TODO: b/372549215 - Use `$(call FIND_CRATE,zerocopy)` when the 0.7 rules.mk is removed.
 MODULE_LIBRARY_DEPS += \
-	$(call FIND_CRATE,zerocopy) \
+	external/rust/android-crates-io/crates/zerocopy \
 	trusty/user/base/lib/tipc/rust \
 
 include make/library.mk
