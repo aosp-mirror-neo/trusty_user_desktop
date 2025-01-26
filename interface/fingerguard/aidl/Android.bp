@@ -1,0 +1,27 @@
+aidl_interface {
+    name: "android.desktop.security.fingerguard",
+    owner: "google",
+    unstable: true,
+    srcs: [
+        "android/desktop/security/fingerguard/IFingerGuard.aidl",
+    ],
+    frozen: false,
+    backend: {
+        rust: {
+            enabled: true,
+            apex_available: [
+                "//apex_available:platform",
+                "com.android.virt",
+            ],
+        },
+        java: {
+            enabled: false,
+        },
+        cpp: {
+            enabled: false,
+        },
+        ndk: {
+            enabled: false,
+        },
+    },
+}
