@@ -18,7 +18,7 @@
 
 use crate::util::{serde_fields, serde_zerocopy, SerdeVec};
 use std::fmt::Debug;
-use zerocopy::{AsBytes, FromBytes, FromZeroes};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub mod request;
 pub mod response;
@@ -61,7 +61,7 @@ pub trait StorageInterface: 'static + Sync + Send {
 pub use request::StorageRequest;
 pub use response::StorageResponse;
 
-/// Unaligned `u32` - used for `AsBytes` structs to prevent padding.
+/// Unaligned `u32` - used for [`IntoBytes`] structs to prevent padding.
 pub type U32 = zerocopy::byteorder::U32<zerocopy::byteorder::LE>;
 
 /// A leaf identifier, distinct from a [`Path`] and specific to the Android PinWeaver API.
@@ -70,7 +70,7 @@ pub type U32 = zerocopy::byteorder::U32<zerocopy::byteorder::LE>;
 ///
 /// This has a 1:1 mapping with some [`Path`] on this device,
 /// except when a leaf with some ID is currently being replaced.
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct LeafId {
     leaf_set: U32,
@@ -78,7 +78,7 @@ pub struct LeafId {
 }
 
 /// A PinWeaver leaf path, indicating where in the hash tree a leaf is located.
-#[derive(AsBytes, Clone, Copy, FromBytes, FromZeroes)]
+#[derive(Clone, Copy, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
 pub struct Path([u8; 8]);
 
@@ -86,7 +86,7 @@ pub struct Path([u8; 8]);
 pub type LeafContents = SerdeVec<u8, LEAF_SIZE>;
 
 /// Parameters for a PinWeaver hash tree.
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct TreeParams {
     /// The height of the new tree.
@@ -97,7 +97,7 @@ pub struct TreeParams {
     pub bits_per_level: u8,
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
 /// A SHA-256 digest.
 pub struct TreeHash([u8; 32]);
@@ -121,14 +121,14 @@ pub struct LargeSecretInfo {
 }
 
 /// An AES-256 Initialization Vector.
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
 pub struct LargeSecretIv([u8; 12]);
 
 /// The GCM [authentication tag] ensuring integrity of large-secret data.
 ///
 /// [authentication tag]: https://en.wikipedia.org/wiki/Authenticated_encryption
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
 pub struct LargeSecretAuthTag([u8; 4]);
 
