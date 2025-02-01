@@ -50,10 +50,6 @@ impl UnbufferedService for StorageClientService {
         Ok(tipc::MessageResult::MaintainConnection)
     }
 
-    fn max_message_length(&self) -> usize {
-        MAX_MESSAGE_SIZE
-    }
-
     fn on_disconnect(&self, _connection: &Self::Connection) {
         log::error!("Storage client disconnected");
         self.client.clear_server_handle();
