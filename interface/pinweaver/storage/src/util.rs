@@ -21,7 +21,7 @@ use std::{
     fmt::Debug,
     ops::{Deref, DerefMut},
 };
-use zerocopy::{AsBytes, FromBytes, Ref, Unalign};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unalign};
 
 /// A `Vec` wrapper that is compatible with tipc serialization.
 ///
@@ -84,7 +84,7 @@ impl<T, const MAX_LEN: u32> SerdeVec<T, MAX_LEN> {
     }
 }
 
-impl<'s, T: AsBytes + 's, const MAX_LEN: u32> Serialize<'s> for SerdeVec<T, MAX_LEN> {
+impl<'s, T: Immutable + IntoBytes + 's, const MAX_LEN: u32> Serialize<'s> for SerdeVec<T, MAX_LEN> {
     fn serialize<'a: 's, S: Serializer<'s>>(
         &'a self,
         serializer: &mut S,
@@ -94,31 +94,22 @@ impl<'s, T: AsBytes + 's, const MAX_LEN: u32> Serialize<'s> for SerdeVec<T, MAX_
     }
 }
 
-impl<'s, T: AsBytes + FromBytes + 's, const MAX_LEN: u32> DeserializePrefix
-    for SerdeVec<T, MAX_LEN>
+impl<T: Immutable + KnownLayout + IntoBytes + FromBytes + 'static, const MAX_LEN: u32>
+    DeserializePrefix for SerdeVec<T, MAX_LEN>
 {
     const MAX_SERIALIZED_SIZE: usize = size_of::<u32>() + size_of::<T>() * MAX_LEN as usize;
 
     fn deserialize_prefix(bytes: &mut &[u8]) -> Result<Self, DeserializeError> {
-        let Some((len, tail)) = Ref::<_, Unalign<u32>>::new_from_prefix(*bytes) else {
+        let Ok((len, tail)) = u32::read_from_prefix(bytes) else {
             return Err(DeserializeError::NotEnoughBuffer);
         };
-        let len = len.into_ref().into_inner();
-        let len_usize: usize = u32_to_usize(len);
-        let Some((contents, rest)) = Ref::<_, [Unalign<T>]>::new_slice_from_prefix(tail, len_usize)
+        let len_usize = u32_to_usize(len);
+        let Ok((contents, rest)) = <[Unalign<T>]>::ref_from_prefix_with_elems(tail, len_usize)
         else {
             return Err(DeserializeError::NotEnoughBuffer);
         };
-        let mut values = Vec::new();
-        values.try_reserve(len_usize)?;
-        // TODO: kupiakos - replace with `zerocopy::extend_vec_zeroed` or something
-        //                  that safely and infallibly does this in one memcpy.
-        for val in contents.into_slice() {
-            values.push(
-                T::read_from(val.as_bytes())
-                    .expect("Unalign<T> shouldn't be a different size than T"),
-            );
-        }
+        let mut values = T::new_vec_zeroed(len_usize)?;
+        values.as_mut_bytes().copy_from_slice(contents.as_bytes());
         *bytes = rest;
         Ok(Self { len, values })
     }
@@ -198,6 +189,12 @@ pub enum DeserializeError {
 
     /// Dynamic allocation failed.
     Alloc,
+}
+
+impl From<zerocopy::error::AllocError> for DeserializeError {
+    fn from(_: zerocopy::error::AllocError) -> Self {
+        DeserializeError::Alloc
+    }
 }
 
 impl From<TryReserveError> for DeserializeError {
@@ -473,13 +470,15 @@ macro_rules! serde_zerocopy {
         $(
             impl $crate::util::DeserializePrefix for $t {
                 const MAX_SERIALIZED_SIZE: usize = size_of::<Self>();
-                fn deserialize_prefix(bytes: &mut &[u8]) -> Result<Self, $crate::util::DeserializeError> {
-                    let Some((head, tail)) = zerocopy::Ref::<_, zerocopy::Unalign<$t>>
-                        ::new_from_prefix(*bytes) else {
-                            return Err($crate::util::DeserializeError::NotEnoughBuffer);
+                fn deserialize_prefix(
+                    bytes: &mut &[u8]
+                ) -> Result<Self, $crate::util::DeserializeError> {
+                    let Ok((head, tail)) = <$t as zerocopy::FromBytes>::read_from_prefix(*bytes)
+                    else {
+                        return Err($crate::util::DeserializeError::NotEnoughBuffer);
                     };
                     *bytes = tail;
-                    Ok(head.read().into_inner())
+                    Ok(head)
                 }
             }
 
