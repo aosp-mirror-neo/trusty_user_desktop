@@ -73,14 +73,17 @@ pub type U32 = zerocopy::byteorder::U32<zerocopy::byteorder::LE>;
 #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct LeafId {
-    leaf_set: U32,
-    inner_id: U32,
+    /// The group this leaf ID belongs to. See `LeafSet.aidl`.
+    pub leaf_set: U32,
+
+    /// The semantic meaning of the `inner_id` is specific to the `leaf_set`.
+    pub inner_id: U32,
 }
 
 /// A PinWeaver leaf path, indicating where in the hash tree a leaf is located.
 #[derive(Clone, Copy, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
-pub struct Path([u8; 8]);
+pub struct Path(pub [u8; 8]);
 
 /// The encrypted contents of a PinWeaver leaf on-disk.
 pub type LeafContents = SerdeVec<u8, LEAF_SIZE>;
@@ -100,7 +103,7 @@ pub struct TreeParams {
 #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
 /// A SHA-256 digest.
-pub struct TreeHash([u8; 32]);
+pub struct TreeHash(pub [u8; 32]);
 
 /// A set of auxiliary hashes for a tree.
 pub type TreeHashes = SerdeVec<TreeHash, MAX_AUX_HASHES>;
@@ -123,14 +126,14 @@ pub struct LargeSecretInfo {
 /// An AES-256 Initialization Vector.
 #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
-pub struct LargeSecretIv([u8; 12]);
+pub struct LargeSecretIv(pub [u8; 12]);
 
 /// The GCM [authentication tag] ensuring integrity of large-secret data.
 ///
 /// [authentication tag]: https://en.wikipedia.org/wiki/Authenticated_encryption
 #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
-pub struct LargeSecretAuthTag([u8; 4]);
+pub struct LargeSecretAuthTag(pub [u8; 4]);
 
 serde_fields! {
     LargeSecretInfo { iv, auth_tag, secret_ciphertext },
