@@ -45,13 +45,14 @@ serde_enums! {
 #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 pub struct InitializeRequest {
-    tree_params: TreeParams,
+    /// The parameters for the newly constructed tree.
+    pub tree_params: TreeParams,
 }
 
 /// The kind of operation that PinWeaver is performing and needs disk info for.
 #[derive(FromBytes, KnownLayout, Immutable, IntoBytes, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct OperationKind(u8);
+pub struct OperationKind(pub u8);
 
 #[allow(non_upper_case_globals)]
 impl OperationKind {
