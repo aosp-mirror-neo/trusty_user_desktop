@@ -54,7 +54,7 @@ impl IGsc for GscProxy {
 
 impl GscProxy {
     fn new(tunnel: Arc<GscTunnelInner>) -> Self {
-        Self { tunnel: tunnel }
+        Self { tunnel }
     }
 }
 
@@ -126,7 +126,7 @@ impl GscTunnelInner {
     /// it's possible the othe trusty apps will start sending messages before the connection from
     /// gscd is made.
     fn transmit(&self, data: &[u8]) -> tipc::Result<Vec<u8>> {
-        if let Some(&ref handle) =
+        if let Some(handle) =
             self.handle.lock().or(Err(TipcError::SystemError(Error::BadState)))?.as_ref()
         {
             handle.send(&Message(Cow::from(data)))?;
