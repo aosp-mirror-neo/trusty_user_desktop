@@ -37,4 +37,6 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/base/lib/keymint-rust/wire \
 
+MODULE_RUST_USE_CLIPPY := true
+
 include make/library.mk
