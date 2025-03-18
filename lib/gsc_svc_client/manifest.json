@@ -1,0 +1,6 @@
+{
+        "app_name": "gsc_svc_client",
+        "uuid": "01b7938e-abdd-4e35-9395-c6b9b4dd8001",
+        "min_heap": 16384,
+        "min_stack": 16384
+}
