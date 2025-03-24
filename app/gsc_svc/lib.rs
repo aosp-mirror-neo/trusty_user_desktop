@@ -200,3 +200,39 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use binder::Strong;
+    use rpcbinder::RpcSession;
+    use std::ffi::CStr;
+
+    test::init!();
+
+    const GSC_SERVICE_PORT: &CStr = c"com.android.trusty.rust.GscAppService.V1";
+    fn get_service(port: &CStr) -> Strong<dyn IGsc> {
+        let session = RpcSession::new();
+        log::error!("created session");
+        let ret = session.setup_trusty_client(port).expect("Failed to create GSC session");
+        log::error!("trusty setup");
+        ret
+    }
+
+    #[test]
+    fn get_random() {
+        log::error!("get port");
+        let service = get_service(GSC_SERVICE_PORT);
+        log::error!("got port");
+        let get_random =
+            vec![0x80, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x01, 0x7b, 0x00, 0x10];
+        let out = service.transmit(&get_random).unwrap();
+        assert_eq!(out[..2], [0x80, 0x01], "Bad tag");
+        assert_eq!(out[2..6], 0x1Cu32.to_be_bytes(), "Bad message size");
+        assert_eq!(out[6..10], 0u32.to_be_bytes(), "Bad status");
+        assert_eq!(out[10..12], 0x10u16.to_be_bytes(), "Bad TPM2B size");
+        assert_eq!(out[12..].len(), 0x10, "Bad vec length");
+        assert!(out[12..].iter().any(|&x| x != 0), "All zeroes for random bytes");
+    }
+}

@@ -38,5 +38,6 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/keymint-rust/wire \
 
 MODULE_RUST_USE_CLIPPY := true
+MODULE_RUST_TESTS := true
 
 include make/library.mk
