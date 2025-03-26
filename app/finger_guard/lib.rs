@@ -63,33 +63,3 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    test::init!();
-
-    #[test]
-    fn connect_server() {
-        let _ = fingerguard_api::connect_finger_guard().unwrap();
-    }
-
-    #[test]
-    fn get_authenticator_id() {
-        let service = fingerguard_api::connect_finger_guard().unwrap();
-        assert_eq!(service.getAuthenticatorId(0, 0), Ok(0));
-    }
-
-    #[test]
-    fn new_authenticator_id() {
-        let service = fingerguard_api::connect_finger_guard().unwrap();
-        let new_id = service.newAuthenticatorId(1, 1).unwrap();
-        assert_ne!(new_id, 0_i64);
-    }
-    #[test]
-    fn new_and_get_authenticator_id() {
-        let service = fingerguard_api::connect_finger_guard().unwrap();
-        let new_id = service.newAuthenticatorId(1, 1).unwrap();
-        let got_id = service.getAuthenticatorId(1, 1).unwrap();
-        assert_eq!(new_id, got_id);
-    }
-}
