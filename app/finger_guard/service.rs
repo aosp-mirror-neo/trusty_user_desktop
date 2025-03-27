@@ -12,6 +12,7 @@ use openssl::hmac::HmacCtx;
 use openssl::md::Md;
 use openssl::nid::Nid;
 use openssl::pkey::{PKey, Private, Public};
+use openssl::symm::{encrypt_aead, Cipher};
 use std::sync::RwLock;
 use storage::{OpenMode, Port, Session};
 use tipc::TipcError;
@@ -80,10 +81,10 @@ fn perform_ecdh(
 }
 
 fn compute_hmac_sha256(
-    pk: &Vec<u8>,
+    key: &FixedSizeEntropy,
     buffer: &Vec<u8>,
 ) -> Result<FixedSizeEntropy, Box<dyn std::error::Error>> {
-    let mut hmac_ctx = HmacCtx::new(pk.as_slice(), Md::sha256())?;
+    let mut hmac_ctx = HmacCtx::new(key.as_slice(), Md::sha256())?;
     hmac_ctx.update(buffer.as_slice())?;
     let mut mac = [0u8; 32];
     let _ = hmac_ctx.finalize(mac.as_mut_slice())?;
@@ -135,11 +136,12 @@ impl InitParams {
 /// Implements the `IFingerGuard` AIDL interface for other Trusty apps to call.
 pub struct FingerGuardService {
     init_params: RwLock<Option<InitParams>>,
+    sk: RwLock<Option<FixedSizeEntropy>>,
 }
 
 impl FingerGuardService {
     pub fn new() -> Self {
-        Self { init_params: RwLock::new(InitParams::load()) }
+        Self { init_params: RwLock::new(InitParams::load()), sk: RwLock::new(None) }
     }
 
     fn init_handshake(
@@ -170,6 +172,10 @@ impl FingerGuardService {
             error!("failed to derive pk: {:?}", e);
             TipcError::SystemError(Error::BadState)
         })?;
+        let pk: FixedSizeEntropy = pk.try_into().map_err(|e| {
+            error!("failed to convert pk to fixed size array: {:?}", e);
+            TipcError::SystemError(Error::BadState)
+        })?;
         // generate random 32-byte tpm_seed.
         let tpm_seed = rng::generate_random_buffer::<32>();
         let mac = compute_hmac_sha256(&pk, &b"tofu".to_vec()).map_err(|e| {
@@ -177,19 +183,60 @@ impl FingerGuardService {
             TipcError::SystemError(Error::BadState)
         })?;
         // save pk and tpm_seed to storage.
-        let new_init_params = InitParams {
-            pk: pk.try_into().map_err(|e| {
-                error!("failed to convert to fixed size array: {:?}", e);
-                TipcError::SystemError(Error::BadState)
-            })?,
-            tpm_seed: tpm_seed,
-        };
+        let new_init_params = InitParams { pk, tpm_seed };
         new_init_params.save().map_err(|e| {
             error!("failed to save init_params: {:?}", e);
             TipcError::SystemError(Error::BadState)
         })?;
         *init_params = Some(new_init_params);
         Ok(HandshakeResponse { server_public_key: server_public_key_bytes, pk_mac: mac.to_vec() })
+    }
+
+    fn new_session(&self, client_nonce: &[u8]) -> Result<SessionResponse, TipcError> {
+        if client_nonce.len() != 32 {
+            return Err(TipcError::SystemError(Error::InvalidArgs));
+        }
+        let init_params = self.init_params.read().map_err(|e| {
+            error!("failed to acquire init_param read lock: {:?}", e);
+            TipcError::SystemError(Error::BadState)
+        })?;
+        let Some(ref init_params) = *init_params else {
+            return Err(TipcError::SystemError(Error::BadState));
+        };
+        let pk = init_params.pk;
+        let tpm_seed = init_params.tpm_seed;
+        let mut sk = self.sk.write().map_err(|e| {
+            error!("failed to acquire sk write lock: {:?}", e);
+            TipcError::SystemError(Error::BadState)
+        })?;
+        if let Some(_) = *sk {
+            return Err(TipcError::SystemError(Error::BadState));
+        }
+        let nonce = rng::generate_random_vec::<32>();
+        let mut all_nonces = vec![0u8; 64];
+        all_nonces[0..32].copy_from_slice(client_nonce);
+        all_nonces[32..64].copy_from_slice(nonce.as_slice());
+        let new_sk = compute_hmac_sha256(&pk, &all_nonces).map_err(|e| {
+            error!("failed to compute sk: {:?}", e);
+            TipcError::SystemError(Error::BadState)
+        })?;
+        *sk = Some(new_sk);
+        let cipher = Cipher::aes_256_gcm();
+        let iv = rng::generate_random_vec::<12>();
+        let mut tag = vec![0u8; 16];
+        let wrapped_tpm_seed = encrypt_aead(
+            cipher,
+            new_sk.as_slice(),
+            Some(iv.as_slice()),
+            b"tpm_seed", // aad = "tpm_seed"
+            tpm_seed.as_slice(),
+            tag.as_mut_slice(),
+        )
+        .map_err(|e| {
+            error!("failed to encrypt tpm_seed: {:?}", e);
+            TipcError::SystemError(Error::BadState)
+        })?;
+        Ok(SessionResponse { nonce, wrapped_tpm_seed, iv, tag })
     }
 
     fn read_authenticator_id(&self, sensor_id: i32, user_id: i32) -> Result<i64, TipcError> {
@@ -238,9 +285,9 @@ impl IFingerGuard for FingerGuardService {
         FingerGuardService::init_handshake(&self, client_public_key)
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
-    fn newSession(&self, _client_nonce: &[u8]) -> binder::Result<SessionResponse> {
-        // TODO(b/401303604): implement
-        Err(binder::StatusCode::FAILED_TRANSACTION.into())
+    fn newSession(&self, client_nonce: &[u8]) -> binder::Result<SessionResponse> {
+        FingerGuardService::new_session(&self, client_nonce)
+            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
     fn getAuthenticatorId(&self, sensor_id: i32, user_id: i32) -> binder::Result<i64> {
         FingerGuardService::read_authenticator_id(&self, sensor_id, user_id)
@@ -254,6 +301,9 @@ impl IFingerGuard for FingerGuardService {
 
 #[cfg(test)]
 mod tests {
+    use crate::rng;
+    use crate::service::compute_hmac_sha256;
+    use crate::service::FixedSizeEntropy;
     use crate::service::NIST_P256_CURVE_NAME;
     use openssl::bn::BigNumContext;
     use openssl::derive::Deriver;
@@ -261,6 +311,7 @@ mod tests {
     use openssl::hmac::HmacCtx;
     use openssl::md::Md;
     use openssl::pkey::{PKey, Private, Public};
+    use openssl::symm::{decrypt_aead, Cipher};
     test::init!();
 
     #[test]
@@ -268,8 +319,8 @@ mod tests {
         let _ = fingerguard_api::connect_finger_guard().unwrap();
     }
 
-    #[test]
-    fn init_service() {
+    // Establish a shared PK with the fingerguard server.
+    fn init_service() -> FixedSizeEntropy {
         // Prepare the client key pair.
         let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME).unwrap();
         let mut ctx = BigNumContext::new().unwrap();
@@ -301,6 +352,53 @@ mod tests {
         let mut mac = vec![0u8; 32];
         let _ = hmac_ctx.finalize(mac.as_mut_slice()).unwrap();
         assert_eq!(mac, handshake_response.pk_mac);
+        pk.try_into().unwrap()
+    }
+
+    #[test]
+    fn new_session() {
+        let pk = init_service();
+        let client_nonce = rng::generate_random_vec::<32>();
+
+        // Start a new session with the server.
+        let service = fingerguard_api::connect_finger_guard().unwrap();
+        let session_response = service.newSession(client_nonce.as_slice()).unwrap();
+        let server_nonce = session_response.nonce;
+        let all_nonce = vec![client_nonce, server_nonce].concat();
+        let sk = compute_hmac_sha256(&pk, &all_nonce).unwrap();
+
+        // Decrypt the wrapped tpm seed.
+        let iv = session_response.iv;
+        let tag = session_response.tag;
+        let encrypted_tpm_seed = session_response.wrapped_tpm_seed;
+        let cipher = Cipher::aes_256_gcm();
+        let aad = b"tpm_seed";
+        let tpm_seed = decrypt_aead(
+            cipher,
+            sk.as_slice(),
+            Some(iv.as_slice()),
+            aad,
+            encrypted_tpm_seed.as_slice(),
+            tag.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(tpm_seed.len(), 32);
+
+        // Bad AAD leads to a decryption error.
+        assert!(decrypt_aead(
+            cipher,
+            sk.as_slice(),
+            Some(iv.as_slice()),
+            b"incorrect_aad",
+            encrypted_tpm_seed.as_slice(),
+            tag.as_slice(),
+        )
+        .is_err());
+
+        // API newSession only allows one successful invocation per boot.
+        // Calling it once more leads to an error.
+        let client_nonce = vec![0u8; 32];
+        assert!(service.newSession(client_nonce.as_slice()).is_err());
     }
 
     #[test]
