@@ -16,7 +16,25 @@
 
 package android.desktop.security.fingerguard;
 
+import android.desktop.security.fingerguard.HandshakeResponse;
+import android.desktop.security.fingerguard.SessionResponse;
+
 interface IFingerGuard {
+    /** Return the HandshakeResponse.
+     * The pairing key, PK, is derived from ECDH key agreement.
+     * The client would use HandshakeResponse to derive
+     * the same PK.
+     * Once the PK is established, it will be persisted and
+     * block further initHandshake calls until the device is
+     * powerwashed.
+     */
+    HandshakeResponse initHandshake(in byte[] client_public_key);
+    /** Return the nonce for a common shared session key and
+     * the session key encrypted TPM seed.
+     * The session key is derived from the pairing key, plus
+     * the client nonce and the returned nonce.
+     */
+    SessionResponse newSession(in byte[] client_nonce);
     /** Return the AuthenticatorId associated with
      * the (user, sensor) pair.
      */
