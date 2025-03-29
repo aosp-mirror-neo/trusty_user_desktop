@@ -4,6 +4,8 @@ aidl_interface {
     unstable: true,
     srcs: [
         "android/desktop/security/fingerguard/IFingerGuard.aidl",
+        "android/desktop/security/fingerguard/HandshakeResponse.aidl",
+        "android/desktop/security/fingerguard/SessionResponse.aidl",
     ],
     frozen: false,
     backend: {
