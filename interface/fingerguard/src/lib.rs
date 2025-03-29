@@ -5,7 +5,8 @@ use core::ffi::CStr;
 use rpcbinder::RpcSession;
 
 pub use android_desktop_security_fingerguard::aidl::android::desktop::security::fingerguard::{
-    self as aidl, IFingerGuard::IFingerGuard,
+    self as aidl, HandshakeResponse::HandshakeResponse, IFingerGuard::IFingerGuard,
+    SessionResponse::SessionResponse,
 };
 pub const PORT_CSTR: &CStr = c"com.android.trusty.rust.FingerGuard.V1";
 

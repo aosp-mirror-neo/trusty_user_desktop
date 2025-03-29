@@ -21,6 +21,8 @@ MODULE_CRATE_NAME := android_desktop_security_fingerguard
 
 MODULE_AIDLS := \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/IFingerGuard.aidl \
+	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/HandshakeResponse.aidl \
+	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/SessionResponse.aidl \
 
 MODULE_AIDL_LANGUAGE := rust
 
