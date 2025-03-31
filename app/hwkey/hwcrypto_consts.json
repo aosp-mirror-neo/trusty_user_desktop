@@ -1,11 +1,6 @@
 {
-    "header": "hwcrypto_consts.h",
+    "header": "hwkey_consts.h",
     "constants": [
-        {
-            "name": "GEN_HWCRYPTO_UUID",
-            "value": "23fe5938-ccd5-4a78-8baf-0f3d05ffc2df",
-            "type": "uuid"
-        },
         {
             "name": "HWCRYPTO_UNITTEST_APP_UUID",
             "value": "ab742471-d6e6-4806-85f6-0555b024f4da",

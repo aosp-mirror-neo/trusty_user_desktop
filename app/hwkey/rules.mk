@@ -18,25 +18,15 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
 
-MANIFEST := $(LOCAL_DIR)/manifest.json
-
 MODULE_CONSTANTS := $(LOCAL_DIR)/hwcrypto_consts.json
 
 MODULE_INCLUDES := $(LOCAL_DIR)/include
 
 MODULE_SRCS := \
-	$(LOCAL_DIR)/main.c \
+	$(LOCAL_DIR)/hwkey.c \
 	$(LOCAL_DIR)/hwkey_srv.c \
+	$(LOCAL_DIR)/hwkey_srv_gsc_provider.c \
 
-ifeq (true,$(call TOBOOL,$(WITH_FAKE_HWRNG)))
-MODULE_SRCS += $(LOCAL_DIR)/hwrng_srv_fake_provider.c
-endif
-
-ifeq (true,$(call TOBOOL,$(WITH_FAKE_HWKEY)))
-MODULE_SRCS += $(LOCAL_DIR)/hwkey_srv_fake_provider.c
-MODULE_SRCS += $(LOCAL_DIR)/hwrng_srv.c
-MODULE_DEFINES += WITH_HWCRYPTO_HWRNG=1
-endif
 
 MODULE_LIBRARY_DEPS := \
 	external/boringssl \
@@ -47,37 +37,4 @@ MODULE_LIBRARY_DEPS := \
 	trusty/user/base/lib/system_state \
 	trusty/user/base/lib/tipc \
 
-ifneq ($(APPLOADER_SIGN_PUBLIC_KEY_0_FILE),)
-MODULE_COMPILEFLAGS += \
-	-DAPPLOADER_SIGN_PUBLIC_KEY_0_FILE=\"$(APPLOADER_SIGN_PUBLIC_KEY_0_FILE)\"
-ifeq (true,$(call TOBOOL,$(APPLOADER_SIGN_KEY_0_UNLOCKED_ONLY)))
-MODULE_COMPILEFLAGS += \
-	-DAPPLOADER_SIGN_KEY_0_UNLOCKED_ONLY=1
-endif
-endif
-
-ifneq ($(APPLOADER_SIGN_PUBLIC_KEY_1_FILE),)
-MODULE_COMPILEFLAGS += \
-	-DAPPLOADER_SIGN_PUBLIC_KEY_1_FILE=\"$(APPLOADER_SIGN_PUBLIC_KEY_1_FILE)\"
-ifeq (true,$(call TOBOOL,$(APPLOADER_SIGN_KEY_1_UNLOCKED_ONLY)))
-MODULE_COMPILEFLAGS += \
-	-DAPPLOADER_SIGN_KEY_1_UNLOCKED_ONLY=1
-endif
-endif
-
-ifneq ($(APPLOADER_ENCRYPT_KEY_0_FILE),)
-MODULE_COMPILEFLAGS += \
-	-DAPPLOADER_ENCRYPT_KEY_0_FILE=\"$(APPLOADER_ENCRYPT_KEY_0_FILE)\"
-endif
-
-ifneq ($(APPLOADER_ENCRYPT_KEY_1_FILE),)
-MODULE_COMPILEFLAGS += \
-	-DAPPLOADER_ENCRYPT_KEY_1_FILE=\"$(APPLOADER_ENCRYPT_KEY_1_FILE)\"
-endif
-
-ifeq (true,$(call TOBOOL,$(WITH_FAKE_KEYBOX)))
-MODULE_DEFINES += WITH_FAKE_KEYBOX
-include $(LOCAL_DIR)/keybox/rules.mk
-endif
-
-include make/trusted_app.mk
+include make/library.mk

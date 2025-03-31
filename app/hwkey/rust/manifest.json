@@ -1,0 +1,6 @@
+{
+    "app_name": "hwkey",
+    "uuid": "8725bc1c-b333-47f7-9dff-5730aa18f6bf",
+    "min_heap": 24576,
+    "min_stack": 8192
+}

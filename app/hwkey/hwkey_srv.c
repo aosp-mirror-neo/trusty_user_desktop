@@ -26,13 +26,13 @@
 #include <uapi/err.h>
 
 #include <interface/hwkey/hwkey.h>
+#include <lib/rng/trusty_rng.h>
 #include <lib/tipc/tipc.h>
 #include <openssl/evp.h>
 #include <openssl/mem.h>
 #include <trusty_log.h>
 
-#include <hwcrypto/hwrng_dev.h>
-#include <hwcrypto_consts.h>
+#include <hwkey_consts.h>
 #include "hwkey_srv_priv.h"
 
 struct hwkey_chan_ctx {

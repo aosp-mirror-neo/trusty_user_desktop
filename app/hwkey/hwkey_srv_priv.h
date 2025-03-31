@@ -138,7 +138,10 @@ uint32_t get_opaque_key(const uuid_t* uuid,
                         size_t kbuf_len,
                         size_t* klen);
 
-int hwkey_init_srv_provider(struct tipc_hset* hset);
+int hwkey_init_srv_provider(struct tipc_hset* hset, uint8_t* encrypt,
+        size_t enrypt_size, uint8_t* attest, size_t attest_size,
+        uint8_t* auth_token_key_seed, size_t auth_token_key_seed_size,
+        int32_t rollback_version,  int32_t running_version);
 
 void hwkey_install_keys(const struct hwkey_keyslot* keys, unsigned int kcnt);
 
