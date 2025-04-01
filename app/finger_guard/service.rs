@@ -4,7 +4,6 @@ use fingerguard_api::aidl::{
     HandshakeResponse::HandshakeResponse, IFingerGuard::IFingerGuard,
     SessionResponse::SessionResponse,
 };
-use kmr_common::crypto::Rng;
 use log::error;
 use openssl::bn::BigNumContext;
 use openssl::derive::Deriver;
@@ -172,10 +171,7 @@ impl FingerGuardService {
             TipcError::SystemError(Error::BadState)
         })?;
         // generate random 32-byte tpm_seed.
-        let mut rng = rng::TrustyRng::default();
-        let mut tpm_seed = [0u8; 32];
-        rng.fill_bytes(tpm_seed.as_mut_slice());
-        // mac = HMAC-SHA256(pk, "tofu")
+        let tpm_seed = rng::generate_random_buffer::<32>();
         let mac = compute_hmac_sha256(&pk, &b"tofu".to_vec()).map_err(|e| {
             error!("failed to compute pk hmac: {:?}", e);
             TipcError::SystemError(Error::BadState)
@@ -215,9 +211,7 @@ impl FingerGuardService {
     }
 
     fn generate_authenticator_id(&self, sensor_id: i32, user_id: i32) -> Result<i64, TipcError> {
-        let mut rng = rng::TrustyRng::default();
-        let mut buffer = [0u8; 8];
-        rng.fill_bytes(buffer.as_mut_slice());
+        let buffer = rng::generate_random_buffer::<8>();
         let authenticator_id = deserialize_authenticator_id(&buffer)?;
         let index = SensorStateIndex { sensor_id, user_id };
         let file_name = index.authenticator_id_file_name();
