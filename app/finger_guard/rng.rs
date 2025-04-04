@@ -35,3 +35,11 @@ pub fn generate_random_buffer<const N: usize>() -> [u8; N] {
     rng.fill_bytes(&mut bytes);
     bytes
 }
+
+// Generate a byte vector of size N filled with random bytes.
+pub fn generate_random_vec<const N: usize>() -> Vec<u8> {
+    let mut rng = TrustyRng::default();
+    let mut bytes = vec![0u8; N];
+    rng.fill_bytes(&mut bytes.as_mut_slice());
+    bytes
+}
