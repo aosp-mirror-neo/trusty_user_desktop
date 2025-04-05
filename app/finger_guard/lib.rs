@@ -18,10 +18,10 @@ mod rng;
 mod service;
 
 use crate::service::FingerGuardService;
-use alloc::rc::Rc;
 use binder::BinderFeatures;
 use fingerguard_api::aidl::IFingerGuard::BnFingerGuard;
 use rpcbinder::RpcServer;
+use std::rc::Rc;
 use tipc::{Manager, PortCfg, TipcError};
 
 // The port on FingerGuard TA which the Fingerprint sensor HAL connects to.

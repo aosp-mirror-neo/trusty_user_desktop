@@ -259,6 +259,89 @@ pub mod get_version_info {
     }
 }
 
+/// Contains the requests and responses used to access superblock mac
+/// storage on the GSC.
+pub mod trusty_storage_superblock_mac {
+    use super::*;
+
+    /// Trusty storage application mac.
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        Default,
+        Eq,
+        FromBytes,
+        IntoBytes,
+        Immutable,
+        KnownLayout,
+        PartialEq,
+        Unaligned,
+    )]
+    #[repr(C)]
+    pub struct TrustyStorageMac(pub [u8; 16]);
+
+    /// Supported storage mac commands.
+    #[derive(Clone, Copy, Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+    #[repr(u8)]
+    pub enum TrustyStorageMacCommand {
+        /// Read operation.
+        Read = 0,
+        /// Write operation.
+        Write = 1,
+    }
+
+    /// Used by the Trusty secure storage application to store the MAC of the
+    /// current valid superblock.
+    #[derive(Clone, Copy, Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+    #[repr(u8)]
+    pub enum TrustyStorageMacFileIndex {
+        /// Tamper detect persist filesystem mac index.
+        TamperDetectPersist = 1,
+        /// Tamper detect filesystem mac index.
+        TamperDetect = 2,
+    }
+
+    /// Requests superblock mac reads/writes from the GSC.
+    #[derive(Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Request {
+        /// Operation to perform.
+        pub command: TrustyStorageMacCommand,
+        /// File identifier.
+        pub index: TrustyStorageMacFileIndex,
+        /// MAC data to write.
+        pub mac: TrustyStorageMac,
+    }
+
+    impl Request {
+        /// Create a new read request.
+        pub fn new_read(index: TrustyStorageMacFileIndex) -> Self {
+            Self { command: TrustyStorageMacCommand::Read, index, mac: TrustyStorageMac::default() }
+        }
+
+        /// Create a new write request.
+        pub fn new_write(index: TrustyStorageMacFileIndex, mac: TrustyStorageMac) -> Self {
+            Self { command: TrustyStorageMacCommand::Write, index, mac }
+        }
+    }
+
+    impl TpmvRequest for Request {
+        const TAG: U16<BE> = NO_SESSION_TAG;
+        const COMMAND_CODE: U16<BE> = U16::new(0x004D);
+        const ORDINAL: U32<BE> = VENDOR_COMMAND_ORDINAL;
+        type TpmvResponse = Response;
+    }
+
+    /// Represents a response from a [`Request`]
+    #[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Response {
+        /// Data currently stored.
+        pub mac: TrustyStorageMac,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::get_console_log;
@@ -358,6 +441,52 @@ mod tests {
 
         let tpm_response =
             TpmResponseMessage::<get_version_info::Response>::ref_from_bytes(&bytes).unwrap();
+        assert_eq!(*tpm_response, expected_response);
+    }
+
+    #[test]
+    fn test_trusty_storage_superblock_mac_serialize() {
+        use trusty_storage_superblock_mac::{Request, TrustyStorageMacFileIndex};
+        let index = TrustyStorageMacFileIndex::TamperDetectPersist;
+        let request = TpmRequestMessage::<Request>::new(Request::new_read(index));
+        let expected_bytes = vec![
+            0x80, 0x01, // header.tag
+            0x00, 0x00, 0x00, 0x1E, // header.length
+            0x20, 0x00, 0x00, 0x00, // header.ordinal
+            0x00, 0x4D, // header.subcmd
+            0x00, // request.command
+            0x01, // request.index
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, // request.mac
+        ];
+
+        assert_eq!(expected_bytes, request.as_bytes());
+    }
+
+    #[test]
+    fn test_trusty_storage_superblock_mac_deserialize() {
+        use trusty_storage_superblock_mac::{Response, TrustyStorageMac};
+        let bytes = vec![
+            0x80, 0x01, // header.tag
+            0x00, 0x00, 0x00, 0x1C, // header.length
+            0xDE, 0xAD, 0xBE, 0xEF, // header.error_code
+            0x00, 0x4D, // header.subcmd
+            0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
+            0x02, 0x02, // request.mac
+        ];
+
+        let expected_response = TpmResponseMessage {
+            header: TpmResponseHeader {
+                tag: U16::new(0x8001),
+                length: U32::new(0x0000001C),
+                error_code: U32::new(0xDEADBEEF),
+                command_code: U16::new(0x004D),
+            },
+
+            response: Response { mac: TrustyStorageMac([2u8; 16]) },
+        };
+
+        let tpm_response = TpmResponseMessage::<Response>::ref_from_bytes(&bytes).unwrap();
         assert_eq!(*tpm_response, expected_response);
     }
 }
