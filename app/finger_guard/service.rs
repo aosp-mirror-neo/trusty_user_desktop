@@ -13,6 +13,7 @@ use openssl::md::Md;
 use openssl::nid::Nid;
 use openssl::pkey::{PKey, Private, Public};
 use openssl::symm::{encrypt_aead, Cipher};
+use std::error;
 use std::sync::RwLock;
 use storage::{OpenMode, Port, Session};
 use tipc::TipcError;
@@ -32,7 +33,7 @@ impl SensorStateIndex {
     }
 }
 
-fn deserialize_authenticator_id(buffer: &[u8]) -> Result<i64, TipcError> {
+fn deserialize_authenticator_id(buffer: &[u8]) -> tipc::Result<i64> {
     if let Ok(buffer) = buffer.try_into() {
         return Ok(i64::from_ne_bytes(buffer));
     }
@@ -49,7 +50,7 @@ fn read_all_bytes(file_name: &str) -> Result<Vec<u8>, storage::Error> {
     Ok(content.to_vec())
 }
 
-fn ec_keygen() -> Result<EcKey<Private>, Box<dyn std::error::Error>> {
+fn ec_keygen() -> Result<EcKey<Private>, Box<dyn error::Error>> {
     let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
     let server_private_key: EcKey<Private> = EcKey::generate(&group)?;
     Ok(server_private_key)
@@ -57,7 +58,7 @@ fn ec_keygen() -> Result<EcKey<Private>, Box<dyn std::error::Error>> {
 
 fn ec_public_key_serialization(
     private_key: &EcKey<Private>,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+) -> Result<Vec<u8>, Box<dyn error::Error>> {
     let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
     let mut ctx = BigNumContext::new()?;
     let server_public_key_bytes =
@@ -68,7 +69,7 @@ fn ec_public_key_serialization(
 fn perform_ecdh(
     server_private_key: &PKey<Private>,
     client_public_key_bytes: &[u8],
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+) -> Result<Vec<u8>, Box<dyn error::Error>> {
     let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
     let mut ctx = BigNumContext::new()?;
     let client_public_point = EcPoint::from_bytes(&group, &client_public_key_bytes, &mut ctx)?;
@@ -83,7 +84,7 @@ fn perform_ecdh(
 fn compute_hmac_sha256(
     key: &FixedSizeEntropy,
     buffer: &Vec<u8>,
-) -> Result<FixedSizeEntropy, Box<dyn std::error::Error>> {
+) -> Result<FixedSizeEntropy, Box<dyn error::Error>> {
     let mut hmac_ctx = HmacCtx::new(key.as_slice(), Md::sha256())?;
     hmac_ctx.update(buffer.as_slice())?;
     let mut mac = [0u8; 32];
@@ -144,10 +145,7 @@ impl FingerGuardService {
         Self { init_params: RwLock::new(InitParams::load()), sk: RwLock::new(None) }
     }
 
-    fn init_handshake(
-        &self,
-        client_public_key_bytes: &[u8],
-    ) -> Result<HandshakeResponse, TipcError> {
+    fn init_handshake(&self, client_public_key_bytes: &[u8]) -> tipc::Result<HandshakeResponse> {
         let mut init_params = self
             .init_params
             .write()
@@ -188,7 +186,7 @@ impl FingerGuardService {
         Ok(HandshakeResponse { server_public_key: server_public_key_bytes, pk_mac: mac.to_vec() })
     }
 
-    fn new_session(&self, client_nonce: &[u8]) -> Result<SessionResponse, TipcError> {
+    fn new_session(&self, client_nonce: &[u8]) -> tipc::Result<SessionResponse> {
         if client_nonce.len() != 32 {
             return Err(TipcError::SystemError(Error::InvalidArgs));
         }
@@ -234,7 +232,7 @@ impl FingerGuardService {
         Ok(SessionResponse { nonce, wrapped_tpm_seed, iv, tag })
     }
 
-    fn read_authenticator_id(&self, sensor_id: i32, user_id: i32) -> Result<i64, TipcError> {
+    fn read_authenticator_id(&self, sensor_id: i32, user_id: i32) -> tipc::Result<i64> {
         let index = SensorStateIndex { sensor_id, user_id };
         let file_name = index.authenticator_id_file_name();
         let content = match read_all_bytes(&file_name) {
@@ -252,7 +250,7 @@ impl FingerGuardService {
         deserialize_authenticator_id(&content)
     }
 
-    fn generate_authenticator_id(&self, sensor_id: i32, user_id: i32) -> Result<i64, TipcError> {
+    fn generate_authenticator_id(&self, sensor_id: i32, user_id: i32) -> tipc::Result<i64> {
         let buffer = rng::generate_random_buffer::<8>();
         let authenticator_id = deserialize_authenticator_id(&buffer)?;
         let index = SensorStateIndex { sensor_id, user_id };
