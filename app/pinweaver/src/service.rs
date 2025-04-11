@@ -1,6 +1,6 @@
 use binder::Interface;
 use pinweaver_api::{DelayScheduleEntry, IPinWeaver, InsertMode, LeafId, LeafSet, TryAuthResponse};
-use pinweaver_storage::current::StorageInterface;
+use pinweaver_storage_api::StorageInterface;
 use std::sync::Arc;
 use tipc::TipcError;
 
