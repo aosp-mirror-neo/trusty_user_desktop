@@ -16,7 +16,9 @@
 
 //! Structs and items that define TPM communications with the GSC
 
-use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, Unaligned, BE, U16, U32};
+use zerocopy::{
+    FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned, BE, U16, U32,
+};
 
 /// Indicates that the request will run without a session. All TPM vendor
 /// commands use this tag
@@ -293,7 +295,7 @@ pub mod trusty_storage_superblock_mac {
 
     /// Used by the Trusty secure storage application to store the MAC of the
     /// current valid superblock.
-    #[derive(Clone, Copy, Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+    #[derive(Clone, Copy, Debug, Eq, IntoBytes, Immutable, PartialEq, TryFromBytes, Unaligned)]
     #[repr(u8)]
     pub enum TrustyStorageMacFileIndex {
         /// Tamper detect persist filesystem mac index.

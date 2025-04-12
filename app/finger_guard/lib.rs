@@ -22,7 +22,7 @@ use binder::BinderFeatures;
 use fingerguard_api::aidl::IFingerGuard::BnFingerGuard;
 use rpcbinder::RpcServer;
 use std::rc::Rc;
-use tipc::{Manager, PortCfg, TipcError};
+use tipc::{Manager, PortCfg};
 
 // The port on FingerGuard TA which the Fingerprint sensor HAL connects to.
 const APP_SERVICE_PORT: &str = "com.android.trusty.rust.FingerGuard.V1";
@@ -35,7 +35,7 @@ tipc::service_dispatcher! {
         RpcServer
     }
 }
-pub fn init_and_start_loop() -> Result<(), TipcError> {
+pub fn init_and_start_loop() -> tipc::Result<()> {
     trusty_log::init();
 
     let mut dispatcher =
