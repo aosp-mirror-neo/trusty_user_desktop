@@ -1,6 +1,6 @@
-use pinweaver_storage::{
-    current::{StorageInterface, StorageRequest, StorageResponse},
+use pinweaver_storage_api::{
     util::{DeserializeExact, ForwardTipcSerialize},
+    StorageInterface, StorageRequest, StorageResponse,
 };
 use std::sync::{Arc, Mutex, MutexGuard};
 use tipc::{Handle, TipcError, UnbufferedService};
