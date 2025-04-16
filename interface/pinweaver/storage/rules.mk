@@ -1,4 +1,4 @@
-# Copyright (C) 2024 The Android Open Source Project
+# Copyright (C) 2025 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,11 +18,10 @@ MODULE := $(LOCAL_DIR)
 
 MODULE_SRCS := $(LOCAL_DIR)/src/lib.rs
 
-MODULE_CRATE_NAME := pinweaver_storage
+MODULE_CRATE_NAME := pinweaver_storage_api
 
-# TODO: b/372549215 - Use `$(call FIND_CRATE,zerocopy)` when the 0.7 rules.mk is removed.
 MODULE_LIBRARY_DEPS += \
-	external/rust/android-crates-io/crates/zerocopy \
+	$(call FIND_CRATE,zerocopy) \
 	trusty/user/base/lib/tipc/rust \
 
 include make/library.mk
