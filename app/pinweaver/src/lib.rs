@@ -50,7 +50,7 @@ pub fn init_and_start_loop() -> tipc::Result<()> {
         .add_service(Rc::new(rpc_server), service_cfg)
         .expect("RPC service should add to dispatcher");
 
-    let storage_cfg = PortCfg::new(pinweaver_storage::current::PORT)
+    let storage_cfg = PortCfg::new(pinweaver_storage_api::PORT)
         .expect("Storage port shouldn't contain nul")
         .allow_ns_connect();
     dispatcher
