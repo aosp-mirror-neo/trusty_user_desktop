@@ -1,10 +1,7 @@
 use ciborium::de::Error as CbError;
 use coset::cbor::value::Value;
-#[cfg(feature = "builtin-bcc")]
 use coset::AsCborValue;
 use coset::CoseError;
-#[cfg(feature = "builtin-bcc")]
-use kmr_wire::read_to_value;
 
 pub mod cdi;
 pub mod cwt;
@@ -21,6 +18,7 @@ use crate::pub_key::SubjectPublicKey;
 #[derive(Debug)]
 pub enum Error {
     NotAvailable,
+    CborError,
 }
 
 #[allow(dead_code)]
@@ -29,22 +27,10 @@ pub struct BootParams {
     pub gsc_boot_params: GscBootParams,
 }
 
+#[cfg(feature = "builtin-bcc")]
 impl Default for BootParams {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(feature = "builtin-bcc")]
-const BOOT_PARAM_KEY: i32 = 2;
-#[cfg(feature = "builtin-bcc")]
-const DICE_KEY: i32 = 3;
-
-#[allow(dead_code)]
-impl BootParams {
     /// Create a boot params struct from constant data.
-    #[cfg(feature = "builtin-bcc")]
-    pub fn new() -> Self {
+    fn default() -> Self {
         let data = desktop_test_data::boot::BOOT_PARAM;
         let data = read_to_value(data).unwrap();
         let data = data.as_map().unwrap();
@@ -58,10 +44,31 @@ impl BootParams {
 
         Self { dice, gsc_boot_params }
     }
+}
 
-    #[cfg(not(feature = "builtin-bcc"))]
-    pub fn new() -> Self {
-        Self { dice: DiceHandover::default(), gsc_boot_params: GscBootParams::default() }
+#[cfg(feature = "builtin-bcc")]
+const BOOT_PARAM_KEY: i32 = 2;
+#[cfg(feature = "builtin-bcc")]
+const DICE_KEY: i32 = 3;
+
+impl BootParams {
+    pub fn new_from_dt(
+        early_entropy: [u8; 64],
+        session_key_seed: [u8; 32],
+        auth_token_key_seed: [u8; 32],
+        dice: &[u8],
+    ) -> Result<Self, Error> {
+        let dice = ciborium::de::from_reader_with_recursion_limit(dice, 16)
+            .map_err(|_| Error::CborError)?;
+        let dice = DiceHandover::from_cbor_value(dice).map_err(|_| Error::CborError)?;
+        Ok(Self {
+            dice,
+            gsc_boot_params: GscBootParams::new(
+                early_entropy,
+                session_key_seed,
+                auth_token_key_seed,
+            ),
+        })
     }
 
     /// Returns the UDS public key for the device.
@@ -80,7 +87,7 @@ impl BootParams {
     }
 
     /// Returns the CDI keypair as a tuple (attest, seal).
-    fn get_cdi_keypair(&self) -> Result<(&[u8], &[u8]), Error> {
+    pub fn get_cdi_keypair(&self) -> Result<(&[u8], &[u8]), Error> {
         Ok((&self.dice.cdi_attest, &self.dice.cdi_seal))
     }
 }

@@ -187,7 +187,7 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
 
     let bp_cfg =
         PortCfg::new(BP_SERVICE_PORT).expect("Could not create port config").allow_ta_connect();
-    let bp = boot_params_svc::create_boot_params_service()?;
+    let bp = boot_params_svc::create_boot_params_service();
     let bp_rpc_server = RpcServer::new_per_session(move |_uuid| Some(bp.as_binder()));
     dispatcher
         .add_service(Rc::new(bp_rpc_server), bp_cfg)
