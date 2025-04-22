@@ -20,8 +20,9 @@ use storage::{OpenMode, Port, Session};
 const NIST_P256_CURVE_NAME: Nid = Nid::X9_62_PRIME256V1;
 
 // Common error type for errors within the service implementation. The actual
-// service layer returns binder::Result errors but that type is too limited and
-// too limited to be useful as an error type internally.
+// service layer returns binder::Result errors but that type is basically just a
+// status code that lacks the ability to attach any kind of informative message
+// or underlying source error.
 #[derive(thiserror::Error, Debug)]
 enum ServiceError {
     // Wrapping errors or pseudo-errors that are returned by other libraries.
