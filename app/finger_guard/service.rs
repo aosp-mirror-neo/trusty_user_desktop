@@ -118,7 +118,7 @@ fn compute_hmac_sha256(
 ) -> Result<FixedSizeEntropy, openssl::error::ErrorStack> {
     let mut hmac_ctx = HmacCtx::new(key.as_slice(), Md::sha256())?;
     hmac_ctx.update(buffer.as_slice())?;
-    let mut mac = [0u8; 32];
+    let mut mac = [0u8; ENTROPY_SIZE];
     let _ = hmac_ctx.finalize(mac.as_mut_slice())?;
     Ok(mac)
 }
@@ -133,6 +133,7 @@ struct InitParams {
 
 impl InitParams {
     const INIT_PARAMS_FILE_NAME: &str = "fingerguard_init_params";
+    const FILE_SIZE: usize = 2 * ENTROPY_SIZE;
 
     fn load() -> Option<Self> {
         let init_params_bytes = match read_all_bytes(Self::INIT_PARAMS_FILE_NAME) {
@@ -143,9 +144,9 @@ impl InitParams {
             }
         };
         match init_params_bytes.len() {
-            64 => Some(InitParams {
-                pk: init_params_bytes[0..32].try_into().ok()?,
-                tpm_seed: init_params_bytes[32..64].try_into().ok()?,
+            Self::FILE_SIZE => Some(InitParams {
+                pk: init_params_bytes[0..ENTROPY_SIZE].try_into().ok()?,
+                tpm_seed: init_params_bytes[ENTROPY_SIZE..ENTROPY_SIZE * 2].try_into().ok()?,
             }),
             _ => {
                 error!("incorrect init_params size: {:?}", init_params_bytes.len());
