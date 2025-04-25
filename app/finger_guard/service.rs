@@ -13,9 +13,9 @@ use openssl::md::Md;
 use openssl::nid::Nid;
 use openssl::pkey::{PKey, Private, Public};
 use openssl::symm::{encrypt_aead, Cipher};
-use std::mem;
 use std::sync::RwLock;
 use storage::{OpenMode, Port, Session};
+use zerocopy::FromBytes;
 
 const NIST_P256_CURVE_NAME: Nid = Nid::X9_62_PRIME256V1;
 
@@ -32,6 +32,8 @@ enum ServiceError {
     TrustyStorage(&'static str, storage::Error),
     #[error("{0}: trusty storage file error at {1}: {2:?}")]
     TrustyFile(&'static str, String, storage::Error),
+    #[error("{0}: zerocopy conversion error")]
+    ZcConvert(&'static str),
 
     // Errors directly reported by the service implementation itself.
     #[error("{name} buffer size mismatch, expected {expected}, got {actual}")]
@@ -62,15 +64,14 @@ impl SensorStateIndex {
     }
 }
 
-fn deserialize_authenticator_id(buffer: &[u8]) -> ServiceResult<i64> {
-    if let Ok(buffer) = buffer.try_into() {
-        return Ok(i64::from_ne_bytes(buffer));
+#[derive(FromBytes)]
+#[repr(C)]
+struct AuthenticatorId(i64);
+
+impl AuthenticatorId {
+    fn zero() -> Self {
+        AuthenticatorId(0)
     }
-    Err(ServiceError::BufferSizeMismatch {
-        name: "auth id",
-        expected: mem::size_of::<i64>(),
-        actual: buffer.len(),
-    })
 }
 
 fn read_all_bytes(file_name: &str) -> Result<Vec<u8>, storage::Error> {
@@ -257,7 +258,11 @@ impl FingerGuardService {
         Ok(SessionResponse { nonce, wrapped_tpm_seed, iv, tag })
     }
 
-    fn read_authenticator_id(&self, sensor_id: i32, user_id: i32) -> ServiceResult<i64> {
+    fn read_authenticator_id(
+        &self,
+        sensor_id: i32,
+        user_id: i32,
+    ) -> ServiceResult<AuthenticatorId> {
         let index = SensorStateIndex { sensor_id, user_id };
         let file_name = index.authenticator_id_file_name();
         let content = match read_all_bytes(&file_name) {
@@ -265,19 +270,25 @@ impl FingerGuardService {
             Err(e) => {
                 error!("failed to read file bytes for {}: {:?}", file_name, e);
                 // Treat read failure as there is no authenticator id. Return 0.
-                return Ok(0_i64);
+                return Ok(AuthenticatorId::zero());
             }
         };
         // When no authenticator id was ever generated, return 0.
         if content.len() == 0 {
-            return Ok(0_i64);
+            return Ok(AuthenticatorId::zero());
         }
-        deserialize_authenticator_id(&content)
+        AuthenticatorId::read_from_bytes(content.as_slice())
+            .map_err(|_| ServiceError::ZcConvert("failed to parse authenticator id"))
     }
 
-    fn generate_authenticator_id(&self, sensor_id: i32, user_id: i32) -> ServiceResult<i64> {
+    fn generate_authenticator_id(
+        &self,
+        sensor_id: i32,
+        user_id: i32,
+    ) -> ServiceResult<AuthenticatorId> {
         let buffer = rng::generate_random_buffer::<8>();
-        let authenticator_id = deserialize_authenticator_id(&buffer)?;
+        let authenticator_id = AuthenticatorId::read_from_bytes(&buffer)
+            .map_err(|_| ServiceError::ZcConvert("failed to parse authenticator id"))?;
         let index = SensorStateIndex { sensor_id, user_id };
         let file_name = index.authenticator_id_file_name();
         let mut session = Session::new(Port::TamperDetect, true)
@@ -307,11 +318,13 @@ impl IFingerGuard for FingerGuardService {
     }
     fn getAuthenticatorId(&self, sensor_id: i32, user_id: i32) -> binder::Result<i64> {
         FingerGuardService::read_authenticator_id(&self, sensor_id, user_id)
+            .map(|id| id.0)
             .inspect_err(|e| error!("getAuthenticatorId failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
     fn newAuthenticatorId(&self, sensor_id: i32, user_id: i32) -> binder::Result<i64> {
         FingerGuardService::generate_authenticator_id(&self, sensor_id, user_id)
+            .map(|id| id.0)
             .inspect_err(|e| error!("newAuthenticatorId failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
