@@ -19,7 +19,7 @@ use android_desktop_security_boot_params::aidl::android::desktop::security::boot
 use android_desktop_security_boot_params::aidl::android::desktop::security::boot_params::IBootParams::BnBootParams;
 use binder::{BinderFeatures, Interface, Result as BinderResult, Strong};
 use boot_params::BootParams;
-use tipc::TipcError;
+use vmm_obj::get_vmm_obj;
 
 pub struct Server {
     params: BootParams,
@@ -34,15 +34,26 @@ impl IBootParams for Server {
 }
 
 impl Server {
-    fn new() -> Self {
-        Self { params: BootParams::new() }
+    fn new(entropy: [u8; 64], session: [u8; 32], auth: [u8; 32], dice: &[u8]) -> Self {
+        Self {
+            params: BootParams::new_from_dt(entropy, session, auth, dice)
+                .expect("Unable to start server"),
+        }
     }
 }
 
-pub fn create_boot_params_service() -> Result<Strong<dyn IBootParams>, TipcError> {
-    let srv = Server::new();
+pub(crate) fn create_boot_params_service() -> Strong<dyn IBootParams> {
+    let entropy = get_vmm_obj(c"google,early-entropy").expect("Could not get entropy");
+    let session = get_vmm_obj(c"google,session-key-seed").expect("Could not get session key seed");
+    let auth =
+        get_vmm_obj(c"google,auth-token-key-seed").expect("Could not get auth token key seed");
+    let dice = get_vmm_obj(c"google,open-dice").expect("Could not get DICE chain");
 
-    let service = BnBootParams::new_binder(srv, BinderFeatures::default());
-
-    Ok(service)
+    let srv = Server::new(
+        entropy.try_into().unwrap(),
+        session.try_into().unwrap(),
+        auth.try_into().unwrap(),
+        &dice,
+    );
+    BnBootParams::new_binder(srv, BinderFeatures::default())
 }

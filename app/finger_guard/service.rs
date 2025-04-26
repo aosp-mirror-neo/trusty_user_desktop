@@ -13,13 +13,44 @@ use openssl::md::Md;
 use openssl::nid::Nid;
 use openssl::pkey::{PKey, Private, Public};
 use openssl::symm::{encrypt_aead, Cipher};
-use std::error;
 use std::sync::RwLock;
 use storage::{OpenMode, Port, Session};
-use tipc::TipcError;
-use trusty_sys::Error;
+use zerocopy::FromBytes;
 
 const NIST_P256_CURVE_NAME: Nid = Nid::X9_62_PRIME256V1;
+
+// Common error type for errors within the service implementation. The actual
+// service layer returns binder::Result errors but that type is basically just a
+// status code that lacks the ability to attach any kind of informative message
+// or underlying source error.
+#[derive(thiserror::Error, Debug)]
+enum ServiceError {
+    // Wrapping errors or pseudo-errors that are returned by other libraries.
+    #[error("{0}: openssl error: {1:?}")]
+    OpenSsl(&'static str, #[source] openssl::error::ErrorStack),
+    #[error("{0}: trusty storage error: {1:?}")]
+    TrustyStorage(&'static str, storage::Error),
+    #[error("{0}: trusty storage file error at {1}: {2:?}")]
+    TrustyFile(&'static str, String, storage::Error),
+    #[error("{0}: zerocopy conversion error")]
+    ZcConvert(&'static str),
+
+    // Errors directly reported by the service implementation itself.
+    #[error("{name} buffer size mismatch, expected {expected}, got {actual}")]
+    BufferSizeMismatch { name: &'static str, expected: usize, actual: usize },
+    #[error("failed to acquire {name} {mode} lock")]
+    LockAcquire { name: &'static str, mode: &'static str },
+    #[error("invalid argument {0}")]
+    InvalidArg(&'static str),
+    #[error("internal state {0} already exists")]
+    StateAlreadyExists(&'static str),
+    #[error("internal state {0} was unavailable")]
+    StateUnavailable(&'static str),
+}
+
+// Returning a ServiceError Result is a common operation in this module and so
+// this is a useful alias to have.
+type ServiceResult<T> = Result<T, ServiceError>;
 
 #[derive(Hash, Eq, PartialEq, Debug)]
 struct SensorStateIndex {
@@ -33,12 +64,14 @@ impl SensorStateIndex {
     }
 }
 
-fn deserialize_authenticator_id(buffer: &[u8]) -> tipc::Result<i64> {
-    if let Ok(buffer) = buffer.try_into() {
-        return Ok(i64::from_ne_bytes(buffer));
+#[derive(FromBytes)]
+#[repr(C)]
+struct AuthenticatorId(i64);
+
+impl AuthenticatorId {
+    fn zero() -> Self {
+        AuthenticatorId(0)
     }
-    error!("failed to deserialize the auth id from buffer: expected size 8, got {}", buffer.len());
-    Err(TipcError::SystemError(Error::BadState))
 }
 
 fn read_all_bytes(file_name: &str) -> Result<Vec<u8>, storage::Error> {
@@ -50,15 +83,15 @@ fn read_all_bytes(file_name: &str) -> Result<Vec<u8>, storage::Error> {
     Ok(content.to_vec())
 }
 
-fn ec_keygen() -> Result<EcKey<Private>, Box<dyn error::Error>> {
+fn ec_keygen() -> Result<EcKey<Private>, openssl::error::ErrorStack> {
     let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
-    let server_private_key: EcKey<Private> = EcKey::generate(&group)?;
+    let server_private_key = EcKey::generate(&group)?;
     Ok(server_private_key)
 }
 
 fn ec_public_key_serialization(
     private_key: &EcKey<Private>,
-) -> Result<Vec<u8>, Box<dyn error::Error>> {
+) -> Result<Vec<u8>, openssl::error::ErrorStack> {
     let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
     let mut ctx = BigNumContext::new()?;
     let server_public_key_bytes =
@@ -69,7 +102,7 @@ fn ec_public_key_serialization(
 fn perform_ecdh(
     server_private_key: &PKey<Private>,
     client_public_key_bytes: &[u8],
-) -> Result<Vec<u8>, Box<dyn error::Error>> {
+) -> Result<Vec<u8>, openssl::error::ErrorStack> {
     let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
     let mut ctx = BigNumContext::new()?;
     let client_public_point = EcPoint::from_bytes(&group, &client_public_key_bytes, &mut ctx)?;
@@ -84,15 +117,16 @@ fn perform_ecdh(
 fn compute_hmac_sha256(
     key: &FixedSizeEntropy,
     buffer: &Vec<u8>,
-) -> Result<FixedSizeEntropy, Box<dyn error::Error>> {
+) -> Result<FixedSizeEntropy, openssl::error::ErrorStack> {
     let mut hmac_ctx = HmacCtx::new(key.as_slice(), Md::sha256())?;
     hmac_ctx.update(buffer.as_slice())?;
-    let mut mac = [0u8; 32];
+    let mut mac = [0u8; ENTROPY_SIZE];
     let _ = hmac_ctx.finalize(mac.as_mut_slice())?;
     Ok(mac)
 }
 
-type FixedSizeEntropy = [u8; 32];
+const ENTROPY_SIZE: usize = 32;
+type FixedSizeEntropy = [u8; ENTROPY_SIZE];
 
 struct InitParams {
     pk: FixedSizeEntropy,
@@ -101,6 +135,7 @@ struct InitParams {
 
 impl InitParams {
     const INIT_PARAMS_FILE_NAME: &str = "fingerguard_init_params";
+    const FILE_SIZE: usize = 2 * ENTROPY_SIZE;
 
     fn load() -> Option<Self> {
         let init_params_bytes = match read_all_bytes(Self::INIT_PARAMS_FILE_NAME) {
@@ -111,9 +146,9 @@ impl InitParams {
             }
         };
         match init_params_bytes.len() {
-            64 => Some(InitParams {
-                pk: init_params_bytes[0..32].try_into().ok()?,
-                tpm_seed: init_params_bytes[32..64].try_into().ok()?,
+            Self::FILE_SIZE => Some(InitParams {
+                pk: init_params_bytes[0..ENTROPY_SIZE].try_into().ok()?,
+                tpm_seed: init_params_bytes[ENTROPY_SIZE..ENTROPY_SIZE * 2].try_into().ok()?,
             }),
             _ => {
                 error!("incorrect init_params size: {:?}", init_params_bytes.len());
@@ -145,76 +180,68 @@ impl FingerGuardService {
         Self { init_params: RwLock::new(InitParams::load()), sk: RwLock::new(None) }
     }
 
-    fn init_handshake(&self, client_public_key_bytes: &[u8]) -> tipc::Result<HandshakeResponse> {
+    fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<HandshakeResponse> {
         let mut init_params = self
             .init_params
             .write()
-            .inspect_err(|e| error!("failed to acquire init_param write lock: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+            .map_err(|_| ServiceError::LockAcquire { name: "init_params", mode: "write" })?;
         if let Some(_) = *init_params {
-            return Err(TipcError::SystemError(Error::BadState));
+            return Err(ServiceError::StateAlreadyExists("init_params"));
         }
-        let server_private_key = ec_keygen()
-            .inspect_err(|e| error!("failed to ec keygen: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+        let server_private_key =
+            ec_keygen().map_err(|e| ServiceError::OpenSsl("failed to ec keygen", e))?;
         let server_public_key_bytes = ec_public_key_serialization(&server_private_key)
-            .inspect_err(|e| error!("failed to serialize server public key: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+            .map_err(|e| ServiceError::OpenSsl("failed to serialize server public key", e))?;
         let server_private_key: PKey<Private> = server_private_key
             .try_into()
-            .inspect_err(|e| error!("failed to convert to PKey: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+            .map_err(|e| ServiceError::OpenSsl("failed to convert ec key to pkey", e))?;
         let pk = perform_ecdh(&server_private_key, client_public_key_bytes)
-            .inspect_err(|e| error!("failed to derive pk: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
-        let pk: FixedSizeEntropy = pk
-            .try_into()
-            .inspect_err(|e| error!("failed to convert pk to fixed size array: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
-        // generate random 32-byte tpm_seed.
-        let tpm_seed = rng::generate_random_buffer::<32>();
+            .map_err(|e| ServiceError::OpenSsl("failed to derive pk", e))?;
+        let pk: FixedSizeEntropy = {
+            let len = pk.len();
+            pk.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
+                name: "pk",
+                expected: ENTROPY_SIZE,
+                actual: len,
+            })
+        }?;
+        // generate random tpm_seed.
+        let tpm_seed = rng::generate_random_buffer::<ENTROPY_SIZE>();
         let mac = compute_hmac_sha256(&pk, &b"tofu".to_vec())
-            .inspect_err(|e| error!("failed to compute pk hmac: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+            .map_err(|e| ServiceError::OpenSsl("failed to compute mac", e))?;
         // save pk and tpm_seed to storage.
         let new_init_params = InitParams { pk, tpm_seed };
         new_init_params
             .save()
-            .inspect_err(|e| error!("failed to save init_params: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+            .map_err(|e| ServiceError::TrustyStorage("failed to save init_params", e))?;
         *init_params = Some(new_init_params);
         Ok(HandshakeResponse { server_public_key: server_public_key_bytes, pk_mac: mac.to_vec() })
     }
 
-    fn new_session(&self, client_nonce: &[u8]) -> tipc::Result<SessionResponse> {
+    fn new_session(&self, client_nonce: &[u8]) -> ServiceResult<SessionResponse> {
         if client_nonce.len() != 32 {
-            return Err(TipcError::SystemError(Error::InvalidArgs));
+            return Err(ServiceError::InvalidArg("client_nonce"));
         }
         let init_params = self
             .init_params
             .read()
-            .inspect_err(|e| error!("failed to acquire init_param read lock: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+            .map_err(|_| ServiceError::LockAcquire { name: "init_params", mode: "read" })?;
         let Some(ref init_params) = *init_params else {
-            return Err(TipcError::SystemError(Error::BadState));
+            return Err(ServiceError::StateUnavailable("init_params"));
         };
         let pk = init_params.pk;
         let tpm_seed = init_params.tpm_seed;
-        let mut sk = self
-            .sk
-            .write()
-            .inspect_err(|e| error!("failed to acquire sk write lock: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+        let mut sk =
+            self.sk.write().map_err(|_| ServiceError::LockAcquire { name: "sk", mode: "write" })?;
         if let Some(_) = *sk {
-            return Err(TipcError::SystemError(Error::BadState));
+            return Err(ServiceError::StateAlreadyExists("sk"));
         }
         let nonce = rng::generate_random_vec::<32>();
         let mut all_nonces = vec![0u8; 64];
         all_nonces[0..32].copy_from_slice(client_nonce);
         all_nonces[32..64].copy_from_slice(nonce.as_slice());
         let new_sk = compute_hmac_sha256(&pk, &all_nonces)
-            .inspect_err(|e| error!("failed to compute sk: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+            .map_err(|e| ServiceError::OpenSsl("failed to compute sk", e))?;
         *sk = Some(new_sk);
         let cipher = Cipher::aes_256_gcm();
         let iv = rng::generate_random_vec::<12>();
@@ -227,12 +254,15 @@ impl FingerGuardService {
             tpm_seed.as_slice(),
             tag.as_mut_slice(),
         )
-        .inspect_err(|e| error!("failed to encrypt tpm_seed: {:?}", e))
-        .map_err(|_| TipcError::SystemError(Error::BadState))?;
+        .map_err(|e| ServiceError::OpenSsl("failed to encrypt tpm_seed", e))?;
         Ok(SessionResponse { nonce, wrapped_tpm_seed, iv, tag })
     }
 
-    fn read_authenticator_id(&self, sensor_id: i32, user_id: i32) -> tipc::Result<i64> {
+    fn read_authenticator_id(
+        &self,
+        sensor_id: i32,
+        user_id: i32,
+    ) -> ServiceResult<AuthenticatorId> {
         let index = SensorStateIndex { sensor_id, user_id };
         let file_name = index.authenticator_id_file_name();
         let content = match read_all_bytes(&file_name) {
@@ -240,32 +270,35 @@ impl FingerGuardService {
             Err(e) => {
                 error!("failed to read file bytes for {}: {:?}", file_name, e);
                 // Treat read failure as there is no authenticator id. Return 0.
-                return Ok(0_i64);
+                return Ok(AuthenticatorId::zero());
             }
         };
         // When no authenticator id was ever generated, return 0.
         if content.len() == 0 {
-            return Ok(0_i64);
+            return Ok(AuthenticatorId::zero());
         }
-        deserialize_authenticator_id(&content)
+        AuthenticatorId::read_from_bytes(content.as_slice())
+            .map_err(|_| ServiceError::ZcConvert("failed to parse authenticator id"))
     }
 
-    fn generate_authenticator_id(&self, sensor_id: i32, user_id: i32) -> tipc::Result<i64> {
+    fn generate_authenticator_id(
+        &self,
+        sensor_id: i32,
+        user_id: i32,
+    ) -> ServiceResult<AuthenticatorId> {
         let buffer = rng::generate_random_buffer::<8>();
-        let authenticator_id = deserialize_authenticator_id(&buffer)?;
+        let authenticator_id = AuthenticatorId::read_from_bytes(&buffer)
+            .map_err(|_| ServiceError::ZcConvert("failed to parse authenticator id"))?;
         let index = SensorStateIndex { sensor_id, user_id };
         let file_name = index.authenticator_id_file_name();
         let mut session = Session::new(Port::TamperDetect, true)
-            .inspect_err(|e| error!("failed to create storage session: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+            .map_err(|e| ServiceError::TrustyStorage("failed to create storage session", e))?;
         let mut secure_file = session
             .open_file(&file_name, OpenMode::Create)
-            .inspect_err(|e| error!("failed to open file {file_name}: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
-        session
-            .write_all(&mut secure_file, &buffer)
-            .inspect_err(|e| error!("failed to write the serialized auth id to {file_name}: {e:?}"))
-            .map_err(|_| TipcError::SystemError(Error::BadState))?;
+            .map_err(|e| ServiceError::TrustyFile("open failed", file_name.clone(), e))?;
+        session.write_all(&mut secure_file, &buffer).map_err(|e| {
+            ServiceError::TrustyFile("serialized auth id write failed", file_name.clone(), e)
+        })?;
         Ok(authenticator_id)
     }
 }
@@ -275,18 +308,24 @@ impl Interface for FingerGuardService {}
 impl IFingerGuard for FingerGuardService {
     fn initHandshake(&self, client_public_key: &[u8]) -> binder::Result<HandshakeResponse> {
         FingerGuardService::init_handshake(&self, client_public_key)
+            .inspect_err(|e| error!("initHandshake failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
     fn newSession(&self, client_nonce: &[u8]) -> binder::Result<SessionResponse> {
         FingerGuardService::new_session(&self, client_nonce)
+            .inspect_err(|e| error!("newSession failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
     fn getAuthenticatorId(&self, sensor_id: i32, user_id: i32) -> binder::Result<i64> {
         FingerGuardService::read_authenticator_id(&self, sensor_id, user_id)
+            .map(|id| id.0)
+            .inspect_err(|e| error!("getAuthenticatorId failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
     fn newAuthenticatorId(&self, sensor_id: i32, user_id: i32) -> binder::Result<i64> {
         FingerGuardService::generate_authenticator_id(&self, sensor_id, user_id)
+            .map(|id| id.0)
+            .inspect_err(|e| error!("newAuthenticatorId failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
 }
