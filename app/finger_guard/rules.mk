@@ -30,6 +30,7 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,thiserror) \
 	trusty/user/base/lib/keymint-rust/boringssl \
 	trusty/user/base/lib/keymint-rust/common \
+	trusty/user/base/lib/keymint-rust/wire \
 	trusty/user/base/lib/openssl-rust \
 	trusty/user/base/lib/storage/rust \
 	trusty/user/base/lib/tipc/rust \

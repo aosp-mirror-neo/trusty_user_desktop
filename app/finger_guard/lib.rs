@@ -15,6 +15,7 @@
 */
 
 mod error;
+mod keymint;
 mod rng;
 mod service;
 mod storage;
