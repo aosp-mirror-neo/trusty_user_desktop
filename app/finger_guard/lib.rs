@@ -14,8 +14,10 @@
 * limitations under the License.
 */
 
+mod error;
 mod rng;
 mod service;
+mod storage;
 
 use crate::service::FingerGuardService;
 use binder::BinderFeatures;
