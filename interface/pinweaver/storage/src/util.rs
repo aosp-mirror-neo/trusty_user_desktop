@@ -357,6 +357,40 @@ impl<T: DeserializePrefix> tipc::Deserialize for DeserializeExact<T> {
     }
 }
 
+/// A tipc-compatible serializer that coalesces all buffers into one contiguous one.
+// TODO: kupiakos - expose `write_vectored` in trusty-rs and avoid the copies.
+#[derive(Default)]
+pub struct CoalescingSerializer {
+    data: Vec<u8>,
+}
+
+impl CoalescingSerializer {
+    /// Clear the currently-serialized bytes.
+    ///
+    /// This preserves the allocation for efficiency.
+    pub fn clear(&mut self) {
+        self.data.clear()
+    }
+
+    /// Returns the bytes serialized into a contiguous slice.
+    pub fn bytes(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl<'s> Serializer<'s> for CoalescingSerializer {
+    type Ok = ();
+    type Error = std::collections::TryReserveError;
+
+    fn serialize_bytes(&mut self, bytes: &'s [u8]) -> Result<Self::Ok, Self::Error> {
+        if let Some(additional) = bytes.len().checked_sub(self.data.capacity() - self.data.len()) {
+            self.data.try_reserve(additional)?;
+        }
+        self.data.extend(bytes);
+        Ok(())
+    }
+}
+
 pub(crate) const fn field_max_serialized_size<T, U: DeserializePrefix>(
     _accessor: &impl FnOnce(&T) -> &U,
 ) -> usize {
