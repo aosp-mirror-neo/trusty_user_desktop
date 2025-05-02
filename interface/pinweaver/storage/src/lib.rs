@@ -65,7 +65,20 @@ pub use request::StorageRequest;
 pub use response::StorageResponse;
 
 /// Unaligned little-endian `u32` - used for [`IntoBytes`] structs to prevent padding.
-#[derive(Clone, Copy, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    FromBytes,
+    KnownLayout,
+    Immutable,
+    IntoBytes,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+)]
 #[repr(transparent)]
 #[cfg_attr(
     feature = "serde",
@@ -129,16 +142,18 @@ pub struct LeafId {
 pub struct LeafSet(pub U32);
 
 /// A PinWeaver leaf path, indicating where in the hash tree a leaf is located.
-#[derive(Clone, Copy, FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Clone, Copy, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
 pub struct Path(pub [u8; 8]);
 
 /// The encrypted contents of a PinWeaver leaf on-disk.
 pub type LeafContents = SerdeVec<u8, LEAF_SIZE>;
 
 /// Parameters for a PinWeaver hash tree.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct TreeParams {
     /// The height of the new tree.
     pub height: u8,
@@ -148,17 +163,19 @@ pub struct TreeParams {
     pub bits_per_level: u8,
 }
 
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
 /// A SHA-256 digest.
-pub struct TreeHash(pub [u8; 32]);
+pub struct TreeHash(#[cfg_attr(feature = "serde", serde(with = "util::hex_serde"))] pub [u8; 32]);
 
 /// A set of auxiliary hashes for a tree.
 pub type TreeHashes = SerdeVec<TreeHash, MAX_AUX_HASHES>;
 
 /// When PinWeaver needs to store a high-entropy secret that is larger than
 /// 32 bytes, the leaf's secret is an AES key used with these parameters.
-#[repr(C)]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct LargeSecretInfo {
     /// The IV for the ciphertext/key. Must not be reused.
     pub iv: LargeSecretIv,
@@ -172,16 +189,20 @@ pub struct LargeSecretInfo {
 }
 
 /// An AES-256 Initialization Vector.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
-pub struct LargeSecretIv(pub [u8; 12]);
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
+pub struct LargeSecretIv(
+    #[cfg_attr(feature = "serde", serde(with = "util::hex_serde"))] pub [u8; 12],
+);
 
 /// The GCM [authentication tag] ensuring integrity of large-secret data.
 ///
 /// [authentication tag]: https://en.wikipedia.org/wiki/Authenticated_encryption
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
-pub struct LargeSecretAuthTag(pub [u8; 4]);
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
+pub struct LargeSecretAuthTag(pub U32);
 
 serde_fields! {
     LargeSecretInfo { iv, auth_tag, secret_ciphertext },

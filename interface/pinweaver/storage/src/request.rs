@@ -77,14 +77,18 @@ serde_enums! {
 /// from these parameters and no on-chip secrets.
 ///
 /// The response root hash should equal the value returned by the GSC.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+
 pub struct InitializeRequest {
     /// The parameters for the newly constructed tree.
     pub tree_params: TreeParams,
 }
 
 /// Request to insert a leaf into PinWeaver.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Debug)]
 pub struct InsertOpRequest {
     /// The leaf this operation targets.
     pub leaf_id: LeafId,
@@ -100,6 +104,8 @@ pub struct InsertOpRequest {
 ///
 /// The new tree hashes are also calculated by the storage daemon
 /// and committed to disk.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Debug)]
 pub struct CommitOpRequest {
     /// The original start request.
     ///
