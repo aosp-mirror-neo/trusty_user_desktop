@@ -25,9 +25,8 @@ serde_enums! {
         /// Gets the status of on-disk PinWeaver data and tree info.
         GetStatus = 0,
 
-        // TODO: 359374997 - Rename this to ResetTree for clarity.
         /// Initializes a new database for PinWeaver.
-        Initialize(InitializeRequest) = 1,
+        ResetTree(ResetTreeRequest) = 1,
 
         /// Starts a mutating operation on the PinWeaver tree.
         ///
@@ -81,7 +80,7 @@ serde_enums! {
 #[repr(C)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 
-pub struct InitializeRequest {
+pub struct ResetTreeRequest {
     /// The parameters for the newly constructed tree.
     pub tree_params: TreeParams,
 }
@@ -122,4 +121,4 @@ serde_fields!(
     CommitOpRequest { start_request, new_leaf_contents },
     InsertOpRequest { leaf_id, mode, large_key_info },
 );
-serde_zerocopy!(InitializeRequest);
+serde_zerocopy!(ResetTreeRequest);

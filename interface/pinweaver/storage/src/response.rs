@@ -31,11 +31,11 @@ pub struct GetStatusResponse {
     pub root_hash: TreeHash,
 }
 
-/// The response when initializing PinWeaver on disk.
+/// The response when resetting the PinWeaver tree on disk.
 #[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-pub struct InitializeResponse {
+pub struct ResetTreeResponse {
     /// The total number of leaves in this tree.
     pub num_hashes: U32,
 
@@ -81,7 +81,7 @@ serde_enums! {
         GetStatus(GetStatusResponse) = 1,
 
         /// The response when initializing PinWeaver.
-        Initialize(InitializeResponse) = 2,
+        ResetTree(ResetTreeResponse) = 2,
 
         /// The response when starting an operation in PinWeaver.
         StartOp(StartOpResponse) = 3,
@@ -229,6 +229,6 @@ serde_fields! {
 serde_zerocopy!(
     ContinueRemoveBulkResponseHeader,
     GetStatusResponse,
-    InitializeResponse,
+    ResetTreeResponse,
     StartRemoveResponseData,
 );
