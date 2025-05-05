@@ -20,7 +20,7 @@ MODULE := $(LOCAL_DIR)
 MANIFEST := $(LOCAL_DIR)/manifest.json
 
 MODULE_SRCS += \
-	$(LOCAL_DIR)/lib.rs \
+	$(LOCAL_DIR)/src/lib.rs \
 
 MODULE_CRATE_NAME := finger_guard
 
