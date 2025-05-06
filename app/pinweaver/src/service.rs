@@ -4,22 +4,27 @@ use pinweaver_storage_api::StorageInterface;
 use std::sync::Arc;
 use tipc::TipcError;
 
-#[allow(dead_code)]
-/// Implements the `IPinWeaver` AIDL interface for other Trusty apps to call.
-pub struct PinWeaverService {
-    storage: Arc<dyn StorageInterface<Error = TipcError>>,
-    // TODO: b/359374997 - add `gsc: Arc<dyn IGSc>`
+// The `'static` is necessary for implicit `PinWeaverService<Deps>: 'static`.
+pub trait PinWeaverServiceDeps: 'static {
+    type Storage: StorageInterface<Error = TipcError> + Send + Sync + ?Sized + 'static;
 }
 
-impl PinWeaverService {
-    pub fn new(storage: Arc<dyn StorageInterface<Error = TipcError>>) -> Self {
+#[allow(dead_code)]
+/// Implements the `IPinWeaver` AIDL interface for other Trusty apps to call.
+pub struct PinWeaverService<Deps: PinWeaverServiceDeps> {
+    storage: Arc<Deps::Storage>,
+    // TODO: b/359374997 - add `gsc: Arc<Deps::Gsc>`
+}
+
+impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
+    pub fn new(storage: Arc<Deps::Storage>) -> Self {
         Self { storage }
     }
 }
 
-impl Interface for PinWeaverService {}
+impl<Deps: PinWeaverServiceDeps> Interface for PinWeaverService<Deps> {}
 
-impl IPinWeaver for PinWeaverService {
+impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
     fn insert(
         &self,
         _id: &LeafId,

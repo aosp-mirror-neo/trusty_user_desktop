@@ -53,7 +53,7 @@ pub const LEAF_SIZE: u32 = 389;
 pub const MAX_LARGE_SECRET_SIZE: u32 = 1024;
 
 /// The interface to communicate with the storage daemon.
-pub trait StorageInterface: 'static + Sync + Send {
+pub trait StorageInterface {
     /// The error while executing a storage request.
     type Error: Debug;
 
@@ -64,8 +64,57 @@ pub trait StorageInterface: 'static + Sync + Send {
 pub use request::StorageRequest;
 pub use response::StorageResponse;
 
-/// Unaligned `u32` - used for [`IntoBytes`] structs to prevent padding.
-pub type U32 = zerocopy::byteorder::U32<zerocopy::byteorder::LE>;
+/// Unaligned little-endian `u32` - used for [`IntoBytes`] structs to prevent padding.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    FromBytes,
+    KnownLayout,
+    Immutable,
+    IntoBytes,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+)]
+#[repr(transparent)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Deserialize, serde::Serialize),
+    serde(from = "u32", into = "u32")
+)]
+pub struct U32(zerocopy::byteorder::U32<zerocopy::byteorder::LE>);
+impl U32 {
+    /// Constructs an unaligned `u32`.
+    pub fn new(val: u32) -> Self {
+        Self(zerocopy::byteorder::U32::new(val))
+    }
+
+    /// Gets the underlying `u32` value.
+    pub fn get(&self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl std::fmt::Display for U32 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <u32 as std::fmt::Display>::fmt(&self.get(), f)
+    }
+}
+
+impl From<U32> for u32 {
+    fn from(val: U32) -> Self {
+        val.get()
+    }
+}
+
+impl From<u32> for U32 {
+    fn from(val: u32) -> Self {
+        Self::new(val)
+    }
+}
 
 /// A leaf identifier, distinct from a [`Path`] and specific to the Android PinWeaver API.
 ///
@@ -73,27 +122,38 @@ pub type U32 = zerocopy::byteorder::U32<zerocopy::byteorder::LE>;
 ///
 /// This has a 1:1 mapping with some [`Path`] on this device,
 /// except when a leaf with some ID is currently being replaced.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Clone, Copy, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct LeafId {
-    /// The group this leaf ID belongs to. See `LeafSet.aidl`.
-    pub leaf_set: U32,
+    /// The group this leaf ID belongs to.
+    pub leaf_set: LeafSet,
 
     /// The semantic meaning of the `inner_id` is specific to the `leaf_set`.
     pub inner_id: U32,
 }
 
-/// A PinWeaver leaf path, indicating where in the hash tree a leaf is located.
-#[derive(Clone, Copy, FromBytes, KnownLayout, Immutable, IntoBytes)]
+/// The group this leaf ID belongs to.
+///
+/// See `LeafSet.aidl`.
+#[derive(Clone, Copy, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
+pub struct LeafSet(pub U32);
+
+/// A PinWeaver leaf path, indicating where in the hash tree a leaf is located.
+#[derive(Clone, Copy, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[repr(transparent)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
 pub struct Path(pub [u8; 8]);
 
 /// The encrypted contents of a PinWeaver leaf on-disk.
 pub type LeafContents = SerdeVec<u8, LEAF_SIZE>;
 
 /// Parameters for a PinWeaver hash tree.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct TreeParams {
     /// The height of the new tree.
     pub height: u8,
@@ -103,17 +163,19 @@ pub struct TreeParams {
     pub bits_per_level: u8,
 }
 
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
 /// A SHA-256 digest.
-pub struct TreeHash(pub [u8; 32]);
+pub struct TreeHash(#[cfg_attr(feature = "serde", serde(with = "util::hex_serde"))] pub [u8; 32]);
 
 /// A set of auxiliary hashes for a tree.
 pub type TreeHashes = SerdeVec<TreeHash, MAX_AUX_HASHES>;
 
 /// When PinWeaver needs to store a high-entropy secret that is larger than
 /// 32 bytes, the leaf's secret is an AES key used with these parameters.
-#[repr(C)]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct LargeSecretInfo {
     /// The IV for the ciphertext/key. Must not be reused.
     pub iv: LargeSecretIv,
@@ -127,18 +189,41 @@ pub struct LargeSecretInfo {
 }
 
 /// An AES-256 Initialization Vector.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
-pub struct LargeSecretIv(pub [u8; 12]);
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
+pub struct LargeSecretIv(
+    #[cfg_attr(feature = "serde", serde(with = "util::hex_serde"))] pub [u8; 12],
+);
 
 /// The GCM [authentication tag] ensuring integrity of large-secret data.
 ///
 /// [authentication tag]: https://en.wikipedia.org/wiki/Authenticated_encryption
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
-pub struct LargeSecretAuthTag(pub [u8; 4]);
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
+pub struct LargeSecretAuthTag(pub U32);
 
 serde_fields! {
     LargeSecretInfo { iv, auth_tag, secret_ciphertext },
 }
-serde_zerocopy!(TreeHash, LeafId, Path, LargeSecretAuthTag, LargeSecretIv);
+serde_zerocopy!(LargeSecretAuthTag, LargeSecretIv, LeafId, LeafSet, Path, TreeHash, TreeParams);
+
+impl From<LeafId> for i64 {
+    fn from(id: LeafId) -> i64 {
+        zerocopy::transmute!(id)
+    }
+}
+
+impl From<i64> for LeafId {
+    fn from(id: i64) -> LeafId {
+        zerocopy::transmute!(id)
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl rusqlite::ToSql for LeafId {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        i64::from(*self).to_sql()
+    }
+}
