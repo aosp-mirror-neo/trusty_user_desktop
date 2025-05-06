@@ -115,7 +115,47 @@ impl<T: Immutable + KnownLayout + IntoBytes + FromBytes + 'static, const MAX_LEN
     }
 }
 
+#[cfg(feature = "serde")]
+impl<const N: u32> serde::Serialize for SerdeVec<u8, N> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        hex_serde::serialize(&self.values, serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, const N: u32> serde::Deserialize<'de> for SerdeVec<u8, N> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        let s = String::deserialize(deserializer)?;
+        hex::decode(&s)
+            .map_err(|e| D::Error::custom(format!("Failed to decode hex string {s:?}: {e}")))
+            .map(|v| Self { len: v.len().try_into().unwrap(), values: v })
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<const N: u32> serde::Serialize for SerdeVec<crate::TreeHash, N> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(&self.values[..], serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, const N: u32> serde::Deserialize<'de> for SerdeVec<crate::TreeHash, N> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        serde::Deserialize::deserialize(deserializer)
+            .map(|v: Vec<crate::TreeHash>| Self { len: v.len().try_into().unwrap(), values: v })
+    }
+}
+
 /// An `Option` alternative that is compatible with tipc serialization.
+#[derive(Debug)]
 #[repr(u8)]
 pub enum SerdeOption<T> {
     /// Equivalent to [`Option::None`].
@@ -175,6 +215,30 @@ impl<T: DeserializePrefix> DeserializePrefix for SerdeOption<T> {
         } else {
             SerdeOption::None
         })
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for SerdeOption<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(
+            &match self {
+                SerdeOption::None => None,
+                SerdeOption::Some(v) => Some(v),
+            },
+            serializer,
+        )
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for SerdeOption<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let val: Option<T> = serde::Deserialize::deserialize(deserializer)?;
+        Ok(val.into())
     }
 }
 
@@ -293,6 +357,40 @@ impl<T: DeserializePrefix> tipc::Deserialize for DeserializeExact<T> {
     }
 }
 
+/// A tipc-compatible serializer that coalesces all buffers into one contiguous one.
+// TODO: kupiakos - expose `write_vectored` in trusty-rs and avoid the copies.
+#[derive(Default)]
+pub struct CoalescingSerializer {
+    data: Vec<u8>,
+}
+
+impl CoalescingSerializer {
+    /// Clear the currently-serialized bytes.
+    ///
+    /// This preserves the allocation for efficiency.
+    pub fn clear(&mut self) {
+        self.data.clear()
+    }
+
+    /// Returns the bytes serialized into a contiguous slice.
+    pub fn bytes(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl<'s> Serializer<'s> for CoalescingSerializer {
+    type Ok = ();
+    type Error = std::collections::TryReserveError;
+
+    fn serialize_bytes(&mut self, bytes: &'s [u8]) -> Result<Self::Ok, Self::Error> {
+        if let Some(additional) = bytes.len().checked_sub(self.data.capacity() - self.data.len()) {
+            self.data.try_reserve(additional)?;
+        }
+        self.data.extend(bytes);
+        Ok(())
+    }
+}
+
 pub(crate) const fn field_max_serialized_size<T, U: DeserializePrefix>(
     _accessor: &impl FnOnce(&T) -> &U,
 ) -> usize {
@@ -375,6 +473,8 @@ macro_rules! serde_enums {
         }
     )*) => {$(
         $(#[$attr])*
+        #[derive(Debug)]
+        #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
         #[repr(u8)]
         pub enum $name {$(
             $(#[$variant_attr])*
@@ -427,6 +527,27 @@ macro_rules! serde_enums {
             }
         }
     )*};
+}
+
+#[cfg(feature = "serde")]
+pub(crate) mod hex_serde {
+    use hex;
+    use serde::{de::Error, Deserialize, Deserializer, Serializer};
+
+    pub(crate) fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&hex::encode(bytes))
+    }
+
+    pub(crate) fn deserialize<'de, D, const N: usize>(deserializer: D) -> Result<[u8; N], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let mut bytes = [0u8; N];
+        hex::decode_to_slice(&s, &mut bytes)
+            .map_err(|e| D::Error::custom(format!("Failed to decode hex string {s:?}: {e}")))?;
+        Ok(bytes)
+    }
 }
 
 /// Implements `Serialize`/`DeserializePrefix` for all of the fields in the given wire order.
