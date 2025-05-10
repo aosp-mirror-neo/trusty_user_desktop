@@ -19,57 +19,33 @@ use super::{LargeSecretInfo, LeafContents, LeafId, Path, TreeHash, TreeHashes, T
 use crate::util::{serde_enums, serde_fields, serde_zerocopy, SerdeOption};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-/// The response from the storage daemon.
-pub struct StorageResponse {
-    /// Header info that is serialized contiguously.
-    pub header: StorageResponseHeader,
-
-    /// The operation-specific data for a storage response.
-    pub op_data: StorageResponseData,
-}
-
-/// The header for [`StorageResponse`].
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+/// The response when getting the status of PinWeaver.
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
-pub struct StorageResponseHeader {
-    /// The status of executing the request; check this first.
-    pub status: ResponseStatus,
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct GetStatusResponse {
+    /// The parameters for the hash tree, as understood by the storage daemon.
+    pub tree_params: TreeParams,
 
     /// The current root hash for the tree.
     pub root_hash: TreeHash,
 }
 
-/// The response when getting the status of PinWeaver.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+/// The response when resetting the PinWeaver tree on disk.
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
-pub struct GetStatusResponse {
-    /// The parameters for the hash tree, as understood by the storage daemon.
-    pub tree_params: TreeParams,
-}
-
-/// The status of a storage daemon operation.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
-#[repr(transparent)]
-pub struct ResponseStatus(u8);
-
-#[allow(non_upper_case_globals)]
-impl ResponseStatus {
-    /// Success.
-    pub const Ok: Self = Self(0);
-
-    /// An unknown internal error occurred.
-    pub const ErrUnknown: Self = Self(1);
-}
-
-/// The response when initializing PinWeaver on disk.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
-#[repr(C)]
-pub struct InitializeResponse {
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct ResetTreeResponse {
     /// The total number of leaves in this tree.
     pub num_hashes: U32,
+
+    /// The current root hash for the tree.
+    pub root_hash: TreeHash,
 }
 
 /// The response when starting an operation in PinWeaver.
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct StartOpResponse {
     /// The path of the currently operating leaf.
     pub path: Path,
@@ -82,28 +58,52 @@ pub struct StartOpResponse {
 }
 
 /// The response when committing an operation in PinWeaver.
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct CommitOpResponse {
     /// The path of the leaf that was just updated.
     pub path: Path,
+
+    /// The current root hash for the tree.
+    pub root_hash: TreeHash,
 
     /// The response data specific to this operation.
     pub op_data: CommitOpResponseData,
 }
 
 serde_enums! {
-    /// The operation-specific data for a storage response.
-    pub enum StorageResponseData {
+    /// The response from the storage daemon.
+    pub enum StorageResponse {
+        /// An error occurred.
+        Error(ResponseError) = 0,
+
         /// The response when getting the status of PinWeaver.
-        GetStatus(GetStatusResponse) = 0,
+        GetStatus(GetStatusResponse) = 1,
 
         /// The response when initializing PinWeaver.
-        Initialize(InitializeResponse) = 1,
+        ResetTree(ResetTreeResponse) = 2,
 
         /// The response when starting an operation in PinWeaver.
-        StartOp(StartOpResponse) = 2,
+        StartOp(StartOpResponse) = 3,
 
         /// The response when committing an operation in PinWeaver.
-        CommitOp(CommitOpResponse) = 3,
+        CommitOp(CommitOpResponse) = 4,
+    }
+
+    /// The status of a storage daemon operation.
+    pub enum ResponseError {
+        /// Unknown error.
+        Unknown = 0,
+
+        /// PinWeaver data was not found: the system should be initialized
+        /// by resetting the PinWeaver tree.
+        NotInitialized = 1,
+
+        /// Unexpected arithmetic overflow occurred.
+        Overflow = 2,
+
+        /// Database access returned an error.
+        Db = 3,
     }
 
     /// The suboperation-specific data for a start-operation response.
@@ -151,20 +151,25 @@ serde_enums! {
 }
 
 /// The response when starting insert of a new leaf.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Debug)]
 pub struct StartInsertResponseData {
     /// The leaf path that is being replaced and will be deleted, if any.
     pub replacing_path: SerdeOption<Path>,
 }
 
 /// The response when starting removal of a leaf.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct StartRemoveResponseData {
     /// The HMAC of the leaf to remove.
     pub leaf_hmac: TreeHash,
 }
 
 /// The response when starting to authenticate the low-entropy secret in a leaf.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Debug)]
 pub struct StartTryAuthResponseData {
     /// The size of the high-entropy secret stored by the client in bytes.
     pub secret_size: u32,
@@ -178,8 +183,9 @@ pub struct StartTryAuthResponseData {
 }
 
 /// Header for [`ContinueRemoveBulkResponse`].
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct ContinueRemoveBulkResponseHeader {
     /// The next leaf to remove as part of this bulk removal.
     pub id: LeafId,
@@ -190,6 +196,8 @@ pub struct ContinueRemoveBulkResponseHeader {
 
 /// Response when committing the bulk removal of one leaf,
 /// and there are more leaves to remove.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Debug)]
 pub struct ContinueRemoveBulkResponse {
     /// Header info that is serialized contiguously.
     pub header: ContinueRemoveBulkResponseHeader,
@@ -199,6 +207,8 @@ pub struct ContinueRemoveBulkResponse {
 }
 
 /// Response when a leaf should be removed after a commit operation.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Debug)]
 pub struct RemoveHashes {
     /// The HMAC for the leaf to remove removed.
     pub leaf_hmac: TreeHash,
@@ -208,9 +218,8 @@ pub struct RemoveHashes {
 }
 
 serde_fields! {
-    StorageResponse { header, op_data },
     StartOpResponse { path, tree_hashes, op_data },
-    CommitOpResponse { path, op_data },
+    CommitOpResponse { path, root_hash, op_data },
     StartInsertResponseData { replacing_path },
     StartTryAuthResponseData { secret_size, leaf_contents, large_key_info },
     ContinueRemoveBulkResponse { header, hashes },
@@ -218,9 +227,8 @@ serde_fields! {
 }
 
 serde_zerocopy!(
-    StorageResponseHeader,
-    GetStatusResponse,
-    InitializeResponse,
-    StartRemoveResponseData,
     ContinueRemoveBulkResponseHeader,
+    GetStatusResponse,
+    ResetTreeResponse,
+    StartRemoveResponseData,
 );

@@ -15,8 +15,8 @@
  */
 //! v1 storage request
 
-use super::{LeafContents, LeafId, TreeParams};
-use crate::util::{serde_enums, serde_fields, serde_zerocopy};
+use super::{LargeSecretInfo, LeafContents, LeafId, LeafSet, TreeParams};
+use crate::util::{serde_enums, serde_fields, serde_zerocopy, SerdeOption};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 serde_enums! {
@@ -26,7 +26,7 @@ serde_enums! {
         GetStatus = 0,
 
         /// Initializes a new database for PinWeaver.
-        Initialize(InitializeRequest) = 1,
+        ResetTree(ResetTreeRequest) = 1,
 
         /// Starts a mutating operation on the PinWeaver tree.
         ///
@@ -36,63 +36,80 @@ serde_enums! {
         /// Commits a mutating operation on the PinWeaver tree.
         CommitOp(CommitOpRequest) = 3,
     }
+
+    /// Start a PinWeaver transaction.
+    ///
+    /// Describes a multi-step operation which may be interrupted by
+    /// power loss, de-syncing disk and on-chip PinWeaver state.
+    ///
+    /// This responds with the necessary tree hashes to perform the
+    /// operation. If necessary, this also tracks that it's begun.
+    pub enum StartOpRequest {
+        /// Insert a leaf into PinWeaver.
+        Insert(InsertOpRequest) = 0,
+
+        /// Authenticate a leaf.
+        /// Disk state is always mutated for auth attempts.
+        TryAuth(LeafId) = 1,
+
+        /// Remove a specific leaf in PinWeaver.
+        Remove(LeafId) = 2,
+
+        /// Remove many leaves in PinWeaver.
+        RemoveBulk(LeafSet) = 3,
+    }
+
+    /// Whether to allow an insert with the same leaf ID as in the
+    /// [`InsertOpRequest`].
+    pub enum InsertMode {
+        /// Reject the insertion if a leaf with this ID exists.
+        NewOnly = 0,
+
+        /// Replace the leaf with new contents if this ID is already present.
+        ReplaceExisting = 1,
+    }
 }
 
 /// Clear any existing PinWeaver state and reinitialize.
 ///
 /// An empty PinWeaver Merkle tree has tree hashes derivable
 /// from these parameters and no on-chip secrets.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+///
+/// The response root hash should equal the value returned by the GSC.
+#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
-pub struct InitializeRequest {
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+
+pub struct ResetTreeRequest {
     /// The parameters for the newly constructed tree.
     pub tree_params: TreeParams,
 }
 
-/// The kind of operation that PinWeaver is performing and needs disk info for.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct OperationKind(pub u8);
-
-#[allow(non_upper_case_globals)]
-impl OperationKind {
-    /// Inserting a new leaf. Reject existing leaves with the same ID.
-    pub const InsertNew: Self = Self(0);
-
-    /// Inserting a new leaf. Replace a leaf with the same ID.
-    pub const Insert: Self = Self(1);
-
-    /// Trying to authenticate a low-entropy secret with a leaf.
-    pub const TryAuth: Self = Self(2);
-
-    /// Removing a specific leaf.
-    pub const Remove: Self = Self(3);
-
-    /// Removing a set of leaves.
-    pub const RemoveBulk: Self = Self(4);
-}
-
-/// Start a PinWeaver transaction.
-///
-/// This returns the necessary tree hashes to perform the operation.
-/// If necessary, this also tracks that the operation has begun.
-#[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
-#[repr(C)]
-pub struct StartOpRequest {
+/// Request to insert a leaf into PinWeaver.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Debug)]
+pub struct InsertOpRequest {
     /// The leaf this operation targets.
     pub leaf_id: LeafId,
 
-    /// The kind of operation being performed on this leaf.
-    pub op_kind: OperationKind,
+    /// Whether to allow an insert when a leaf with `leaf_id` exists.
+    pub mode: InsertMode,
+
+    /// The large key info associated with the new leaf.
+    pub large_key_info: SerdeOption<LargeSecretInfo>,
 }
 
 /// Commit a PinWeaver transaction to disk.
 ///
 /// The new tree hashes are also calculated by the storage daemon
 /// and committed to disk.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Debug)]
 pub struct CommitOpRequest {
     /// The original start request.
-    pub request: StartOpRequest,
+    ///
+    /// Large key info is not included.
+    pub start_request: StartOpRequest,
 
     /// The new contents of the leaf returned by PinWeaver.
     ///
@@ -100,5 +117,8 @@ pub struct CommitOpRequest {
     pub new_leaf_contents: LeafContents,
 }
 
-serde_fields!(CommitOpRequest { request, new_leaf_contents });
-serde_zerocopy!(InitializeRequest, StartOpRequest);
+serde_fields!(
+    CommitOpRequest { start_request, new_leaf_contents },
+    InsertOpRequest { leaf_id, mode, large_key_info },
+);
+serde_zerocopy!(ResetTreeRequest);

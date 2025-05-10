@@ -31,13 +31,20 @@ mod storage;
 const PORT_COUNT: usize = 2;
 const CONNECTION_COUNT: usize = 4;
 
+struct ProdDeps;
+impl service::PinWeaverServiceDeps for ProdDeps {
+    type Storage = StorageClient;
+}
+
 pub fn init_and_start_loop() -> tipc::Result<()> {
     trusty_log::init();
     let storage = Arc::new(StorageClient::default());
     let storage_service = StorageClientService::new(storage.clone());
 
-    let service =
-        BnPinWeaver::new_binder(PinWeaverService::new(storage), BinderFeatures::default());
+    let service = BnPinWeaver::new_binder(
+        PinWeaverService::<ProdDeps>::new(storage),
+        BinderFeatures::default(),
+    );
     let rpc_server = RpcServer::new_per_session(move |_uuid| Some(service.as_binder()));
 
     let mut dispatcher =

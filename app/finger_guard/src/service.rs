@@ -15,6 +15,7 @@
  */
 
 use crate::error::{ServiceError, ServiceResult};
+use crate::keymint;
 use crate::rng;
 use crate::storage::{AuthenticatorId, SensorStateIndex};
 use binder::Interface;
@@ -136,11 +137,16 @@ impl InitParams {
 pub struct FingerGuardService {
     init_params: RwLock<Option<InitParams>>,
     sk: RwLock<Option<FixedSizeEntropy>>,
+    _auth_token_key: Option<FixedSizeEntropy>,
 }
 
 impl FingerGuardService {
     pub fn new() -> Self {
-        Self { init_params: RwLock::new(InitParams::load()), sk: RwLock::new(None) }
+        Self {
+            init_params: RwLock::new(InitParams::load()),
+            sk: RwLock::new(None),
+            _auth_token_key: keymint::get_auth_token_key(),
+        }
     }
 
     fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<HandshakeResponse> {

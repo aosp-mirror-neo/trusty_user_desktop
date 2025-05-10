@@ -16,7 +16,10 @@ rust_library {
     name: "libpinweaver_storage_api",
     srcs: ["src/lib.rs"],
     crate_name: "pinweaver_storage_api",
+    features: ["serde"],
     rustlibs: [
+        "libhex",
+        "libserde",
         "libtrusty-rs",
         "libzerocopy",
     ],
