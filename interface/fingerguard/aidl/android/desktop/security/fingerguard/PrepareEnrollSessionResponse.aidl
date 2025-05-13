@@ -18,9 +18,9 @@ package android.desktop.security.fingerguard;
 
 parcelable PrepareEnrollSessionResponse {
     // The session counter monotonically increases.
-    int session_counter;
-    // 32-byte random nonce.
-    byte[] nonce;
+    long sessionCounter;
+    // Random nonce.
+    byte[32] nonce;
     /**
      * The MAC is a 32 bytes HMAC-SHA256 with the session key over the
      * following string:

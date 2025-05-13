@@ -52,6 +52,8 @@ pub enum ServiceError {
     StateAlreadyExists(&'static str),
     #[error("internal state {0} was unavailable")]
     StateUnavailable(&'static str),
+    #[error("incorrect mac for {0}")]
+    BadMac(&'static str),
 }
 
 /// Common Result type for service methods.
