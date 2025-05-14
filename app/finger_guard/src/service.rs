@@ -20,8 +20,9 @@ use crate::rng;
 use crate::storage::{AuthenticatorId, SensorStateIndex};
 use binder::Interface;
 use fingerguard_api::aidl::{
-    HandshakeResponse::HandshakeResponse, IFingerGuard::IFingerGuard,
-    SessionResponse::SessionResponse,
+    EnrollmentResult::EnrollmentResult, HandshakeResponse::HandshakeResponse,
+    HardwareAuthToken::HardwareAuthToken, IFingerGuard::IFingerGuard,
+    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
 };
 use log::error;
 use openssl::bn::BigNumContext;
@@ -284,6 +285,24 @@ impl IFingerGuard for FingerGuardService {
         FingerGuardService::new_session(&self, client_nonce)
             .inspect_err(|e| error!("newSession failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+    }
+    fn prepareEnrollSession(
+        &self,
+        _sensor_id: i32,
+        _user_id: i32,
+        _hat: &HardwareAuthToken,
+    ) -> binder::Result<PrepareEnrollSessionResponse> {
+        // TODO(401302256): implement.
+        Err(binder::StatusCode::FAILED_TRANSACTION.into())
+    }
+    fn finishEnrollSession(
+        &self,
+        _sensor_id: i32,
+        _user_id: i32,
+        _result: &EnrollmentResult,
+    ) -> binder::Result<()> {
+        // TODO(401302256): implement.
+        Err(binder::StatusCode::FAILED_TRANSACTION.into())
     }
     fn getAuthenticatorId(&self, sensor_id: i32, user_id: i32) -> binder::Result<i64> {
         FingerGuardService::read_authenticator_id(&self, sensor_id, user_id)
