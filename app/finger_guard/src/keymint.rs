@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
+use crate::error::{ServiceError, ServiceResult};
 use kmr_common::wire::legacy::{self, TrustyKeymasterSecureOperation};
-use log::error;
 use std::ffi::CStr;
 use tipc::{Deserialize, Handle, Serialize, Serializer, TipcError};
 use trusty_std::alloc::TryAllocFrom;
 use zerocopy::FromBytes;
+
+// The port string for keymint.
+const KEYMINT_PORT: &CStr = c"com.android.trusty.keymaster.secure";
 
 // Create a byte buffer contains the serialized GetAuthTokenKeyRequest.
 fn get_auth_token_key_request() -> Vec<u8> {
@@ -59,9 +62,7 @@ impl Deserialize for KMMessage {
 }
 
 fn raw_get_auth_token_key_response() -> tipc::Result<Vec<u8>> {
-    // Keymint port that handles secure world messages.
-    let port = CStr::from_bytes_with_nul(b"com.android.trusty.keymaster.secure\0").unwrap();
-    let session = Handle::connect(port)?;
+    let session = Handle::connect(KEYMINT_PORT)?;
     let req = KMMessage(get_auth_token_key_request());
     session.send(&req)?;
     let mut buf = [0u8; MAX_MESSAGE_SIZE];
@@ -85,24 +86,18 @@ struct ErrorMessage {
 
 // Parse the raw response of GetAuthTokenKey and returns the 32-byte auth token
 // key if any.
-pub fn get_auth_token_key() -> Option<[u8; 32]> {
-    let Some(raw_response) = raw_get_auth_token_key_response()
-        .inspect_err(|e| error!("Keymint connection failed: {e:?}"))
-        .ok()
-    else {
-        return None;
-    };
+pub fn get_auth_token_key() -> ServiceResult<[u8; 32]> {
+    let raw_response = raw_get_auth_token_key_response()
+        .map_err(|e| ServiceError::TipcError("Keymint connection failed", e))?;
 
     // For GetAuthTokenKey, the client has to distinguish between OK and error
     // responses by the size of the result byte array: 4+32 for OK, 4+4 for
     // error. C.f. system/keymint/wire/src/legacy.rs
-    if let Some(success_message) = AuthTokenKeyMessage::read_from_bytes(&raw_response).ok() {
-        Some(success_message.auth_token_key)
-    } else if let Some(error_message) = ErrorMessage::read_from_bytes(&raw_response).ok() {
-        error!("Keymint GetAuthTokenKey returns an error code: {:?}", error_message.error_code);
-        None
+    if let Ok(success_message) = AuthTokenKeyMessage::read_from_bytes(&raw_response) {
+        Ok(success_message.auth_token_key)
+    } else if let Ok(error_message) = ErrorMessage::read_from_bytes(&raw_response) {
+        Err(ServiceError::KeymintError { cmd: "GetAuthTokenKey", code: error_message.error_code })
     } else {
-        error!("Malformed Keymint GetAuthTokenKey response.");
-        None
+        Err(ServiceError::KeymintBadResponse { cmd: "GetAuthTokenKey" })
     }
 }

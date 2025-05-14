@@ -145,7 +145,9 @@ impl FingerGuardService {
         Self {
             init_params: RwLock::new(InitParams::load()),
             sk: RwLock::new(None),
-            _auth_token_key: keymint::get_auth_token_key(),
+            _auth_token_key: keymint::get_auth_token_key()
+                .inspect_err(|e| error!("error getting auth_token_key: {:?}", e))
+                .ok(),
         }
     }
 

@@ -32,6 +32,14 @@ pub enum ServiceError {
     TrustyFile(&'static str, String, storage::Error),
     #[error("{0}: zerocopy conversion error")]
     ZcConvert(&'static str),
+    #[error("{0}: {1:?}")]
+    TipcError(&'static str, tipc::TipcError),
+
+    // Errors from interacting with keymint.
+    #[error("Keymint {cmd} returned an error code: {code}")]
+    KeymintError { cmd: &'static str, code: u32 },
+    #[error("Keymint {cmd} returned an unparseable response")]
+    KeymintBadResponse { cmd: &'static str },
 
     // Errors directly reported by the service implementation itself.
     #[error("{name} buffer size mismatch, expected {expected}, got {actual}")]
