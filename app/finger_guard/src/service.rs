@@ -17,11 +17,12 @@
 use crate::error::{ServiceError, ServiceResult};
 use crate::keymint;
 use crate::rng;
-use crate::storage::{AuthenticatorId, SensorStateIndex};
+use crate::storage::{AuthenticatorId, PersistedState, SensorStateIndex, SingleFileState};
 use binder::Interface;
 use fingerguard_api::aidl::{
-    HandshakeResponse::HandshakeResponse, IFingerGuard::IFingerGuard,
-    SessionResponse::SessionResponse,
+    EnrollmentResult::EnrollmentResult, HandshakeResponse::HandshakeResponse,
+    HardwareAuthToken::HardwareAuthToken, IFingerGuard::IFingerGuard,
+    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
 };
 use log::error;
 use openssl::bn::BigNumContext;
@@ -33,19 +34,9 @@ use openssl::nid::Nid;
 use openssl::pkey::{PKey, Private, Public};
 use openssl::symm::{encrypt_aead, Cipher};
 use std::sync::RwLock;
-use storage::{OpenMode, Port, Session};
-use zerocopy::FromBytes;
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 const NIST_P256_CURVE_NAME: Nid = Nid::X9_62_PRIME256V1;
-
-fn read_all_bytes(file_name: &str) -> Result<Vec<u8>, storage::Error> {
-    let mut session = Session::new(Port::TamperDetect, true)?;
-    let secure_file = session.open_file(&file_name, OpenMode::Open)?;
-    let file_size = session.get_size(&secure_file)?;
-    let mut buffer = vec![0u8; file_size];
-    let content = session.read_all(&secure_file, buffer.as_mut_slice())?;
-    Ok(content.to_vec())
-}
 
 fn ec_keygen() -> Result<EcKey<Private>, openssl::error::ErrorStack> {
     let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
@@ -92,45 +83,16 @@ fn compute_hmac_sha256(
 const ENTROPY_SIZE: usize = 32;
 type FixedSizeEntropy = [u8; ENTROPY_SIZE];
 
+#[derive(FromBytes, IntoBytes, Immutable)]
+#[repr(C)]
 struct InitParams {
     pk: FixedSizeEntropy,
     tpm_seed: FixedSizeEntropy,
 }
 
-impl InitParams {
-    const INIT_PARAMS_FILE_NAME: &str = "fingerguard_init_params";
-    const FILE_SIZE: usize = 2 * ENTROPY_SIZE;
-
-    fn load() -> Option<Self> {
-        let init_params_bytes = match read_all_bytes(Self::INIT_PARAMS_FILE_NAME) {
-            Ok(content) => content,
-            Err(e) => {
-                error!("failed to read init_params: {:?}", e);
-                return None;
-            }
-        };
-        match init_params_bytes.len() {
-            Self::FILE_SIZE => Some(InitParams {
-                pk: init_params_bytes[0..ENTROPY_SIZE].try_into().ok()?,
-                tpm_seed: init_params_bytes[ENTROPY_SIZE..ENTROPY_SIZE * 2].try_into().ok()?,
-            }),
-            _ => {
-                error!("incorrect init_params size: {:?}", init_params_bytes.len());
-                None
-            }
-        }
-    }
-
-    fn save(&self) -> Result<(), storage::Error> {
-        let mut session = Session::new(Port::TamperDetect, true)?;
-        let mut transaction = session.begin_transaction();
-        let mut secure_file =
-            transaction.open_file(Self::INIT_PARAMS_FILE_NAME, OpenMode::Create)?;
-        transaction.write_at(&mut secure_file, 0, &self.pk.as_slice())?;
-        transaction.write_at(&mut secure_file, self.pk.len(), &self.tpm_seed.as_slice())?;
-        transaction.commit()?;
-        Ok(())
-    }
+impl PersistedState for InitParams {}
+impl SingleFileState for InitParams {
+    const FILE_NAME: &str = "fingerguard_init_params";
 }
 
 /// Implements the `IFingerGuard` AIDL interface for other Trusty apps to call.
@@ -143,7 +105,11 @@ pub struct FingerGuardService {
 impl FingerGuardService {
     pub fn new() -> Self {
         Self {
-            init_params: RwLock::new(InitParams::load()),
+            init_params: RwLock::new(
+                InitParams::load()
+                    .inspect_err(|e| error!("failed to load init_params: {e:?}"))
+                    .ok(),
+            ),
             sk: RwLock::new(None),
             _auth_token_key: keymint::get_auth_token_key()
                 .inspect_err(|e| error!("error getting auth_token_key: {:?}", e))
@@ -182,9 +148,7 @@ impl FingerGuardService {
             .map_err(|e| ServiceError::OpenSsl("failed to compute mac", e))?;
         // save pk and tpm_seed to storage.
         let new_init_params = InitParams { pk, tpm_seed };
-        new_init_params
-            .save()
-            .map_err(|e| ServiceError::TrustyStorage("failed to save init_params", e))?;
+        new_init_params.save()?;
         *init_params = Some(new_init_params);
         Ok(HandshakeResponse { server_public_key: server_public_key_bytes, pk_mac: mac.to_vec() })
     }
@@ -236,20 +200,12 @@ impl FingerGuardService {
     ) -> ServiceResult<AuthenticatorId> {
         let index = SensorStateIndex::new(sensor_id, user_id);
         let file_name = index.authenticator_id_file_name();
-        let content = match read_all_bytes(&file_name) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                error!("failed to read file bytes for {}: {:?}", file_name, e);
-                // Treat read failure as there is no authenticator id. Return 0.
-                return Ok(AuthenticatorId::zero());
-            }
-        };
-        // When no authenticator id was ever generated, return 0.
-        if content.len() == 0 {
-            return Ok(AuthenticatorId::zero());
-        }
-        AuthenticatorId::read_from_bytes(content.as_slice())
-            .map_err(|_| ServiceError::ZcConvert("failed to parse authenticator id"))
+        // Treat read failure as there is no authenticator id and use the default
+        // value of 0.
+        let authenticator_id = AuthenticatorId::load_from(&file_name)
+            .inspect_err(|e| error!("failed to read authenticator id: {e:?}"))
+            .unwrap_or(AuthenticatorId::zero());
+        Ok(authenticator_id)
     }
 
     fn generate_authenticator_id(
@@ -262,14 +218,7 @@ impl FingerGuardService {
             .map_err(|_| ServiceError::ZcConvert("failed to parse authenticator id"))?;
         let index = SensorStateIndex::new(sensor_id, user_id);
         let file_name = index.authenticator_id_file_name();
-        let mut session = Session::new(Port::TamperDetect, true)
-            .map_err(|e| ServiceError::TrustyStorage("failed to create storage session", e))?;
-        let mut secure_file = session
-            .open_file(&file_name, OpenMode::Create)
-            .map_err(|e| ServiceError::TrustyFile("open failed", file_name.clone(), e))?;
-        session.write_all(&mut secure_file, &buffer).map_err(|e| {
-            ServiceError::TrustyFile("serialized auth id write failed", file_name.clone(), e)
-        })?;
+        authenticator_id.save_to(&file_name)?;
         Ok(authenticator_id)
     }
 }
@@ -286,6 +235,24 @@ impl IFingerGuard for FingerGuardService {
         FingerGuardService::new_session(&self, client_nonce)
             .inspect_err(|e| error!("newSession failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+    }
+    fn prepareEnrollSession(
+        &self,
+        _sensor_id: i32,
+        _user_id: i32,
+        _hat: &HardwareAuthToken,
+    ) -> binder::Result<PrepareEnrollSessionResponse> {
+        // TODO(401302256): implement.
+        Err(binder::StatusCode::FAILED_TRANSACTION.into())
+    }
+    fn finishEnrollSession(
+        &self,
+        _sensor_id: i32,
+        _user_id: i32,
+        _result: &EnrollmentResult,
+    ) -> binder::Result<()> {
+        // TODO(401302256): implement.
+        Err(binder::StatusCode::FAILED_TRANSACTION.into())
     }
     fn getAuthenticatorId(&self, sensor_id: i32, user_id: i32) -> binder::Result<i64> {
         FingerGuardService::read_authenticator_id(&self, sensor_id, user_id)

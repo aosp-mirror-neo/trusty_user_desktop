@@ -16,6 +16,79 @@
 
 //! Types and utilities for data which is stored persistently on the device.
 
+use crate::error::ServiceError;
+use storage::{OpenMode, Port, Session};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
+
+/// A utility function to read the full content of a file.
+fn read_all_bytes(file_name: &str) -> Result<Vec<u8>, storage::Error> {
+    let mut session = Session::new(Port::TamperDetect, true)?;
+    let secure_file = session.open_file(&file_name, OpenMode::Open)?;
+    let file_size = session.get_size(&secure_file)?;
+    let mut buffer = vec![0u8; file_size];
+    let content = session.read_all(&secure_file, buffer.as_mut_slice())?;
+    Ok(content.to_vec())
+}
+
+/// Indicates that the type is persisted as a file in the Trusty Storage.
+///
+/// This trait is required for types that keeps service states across reboots.
+/// It provides a default save_to and load_from implementation, which should
+/// satisfy the needs of most types.
+///
+/// # Safety
+///
+/// This trait does not guarantee thread safety against read write races.
+pub trait PersistedState: FromBytes + IntoBytes + Immutable {
+    fn load_from(file_name: &str) -> Result<Self, ServiceError>
+    where
+        Self: Sized,
+    {
+        let all_bytes = read_all_bytes(&file_name)
+            .map_err(|e| ServiceError::TrustyFile("failed to read", file_name.to_owned(), e))?;
+        Self::read_from_bytes(&all_bytes)
+            .map_err(|_| ServiceError::ZcConvert("failed to deserialize file content"))
+    }
+
+    fn save_to(&self, file_name: &str) -> Result<(), ServiceError> {
+        let mut session = Session::new(Port::TamperDetect, true)
+            .map_err(|e| ServiceError::TrustyStorage("failed to create storage session", e))?;
+        let mut secure_file = session
+            .open_file(&file_name, OpenMode::Create)
+            .map_err(|e| ServiceError::TrustyFile("open failed", file_name.to_owned(), e))?;
+        let serialized_bytes = Self::as_bytes(&self);
+        session
+            .write_all(&mut secure_file, &serialized_bytes)
+            .map_err(|e| ServiceError::TrustyFile("write failed", file_name.to_owned(), e))?;
+        Ok(())
+    }
+}
+
+/// Indicates that the type is pesisted to one single file.
+///
+/// This trait suits those global singleton service states.
+/// This trait requires the type implement the PersistedState trait first.
+///
+/// # Safety
+///
+/// This trait does not guarantee thread safety against read write races.
+pub trait SingleFileState: PersistedState {
+    const FILE_NAME: &str;
+    fn load() -> Result<Self, ServiceError>
+    where
+        Self: Sized,
+    {
+        Self::load_from(Self::FILE_NAME)
+    }
+    fn save(&self) -> Result<(), ServiceError>
+    where
+        Self: PersistedState,
+    {
+        Self::save_to(&self, Self::FILE_NAME)
+    }
+}
+
+// TODO(b/408451664): Have SensorStateIndex in the service interface as well.
 #[derive(Hash, Eq, PartialEq, Debug)]
 pub struct SensorStateIndex {
     sensor_id: i32,
@@ -34,7 +107,7 @@ impl SensorStateIndex {
     }
 }
 
-#[derive(Hash, Eq, PartialEq, zerocopy::FromBytes)]
+#[derive(Hash, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
 /// Newtype that encapsulates an authenticator id.
 pub struct AuthenticatorId(i64);
@@ -53,3 +126,5 @@ impl AuthenticatorId {
         self.0
     }
 }
+
+impl PersistedState for AuthenticatorId {}
