@@ -25,6 +25,7 @@ use fingerguard_api::aidl::{
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
 };
 use log::error;
+use once_cell::sync::OnceCell;
 use openssl::bn::BigNumContext;
 use openssl::derive::Deriver;
 use openssl::ec::{EcGroup, EcKey, EcPoint, PointConversionForm};
@@ -99,7 +100,7 @@ impl SingleFileState for InitParams {
 pub struct FingerGuardService {
     init_params: RwLock<Option<InitParams>>,
     sk: RwLock<Option<FixedSizeEntropy>>,
-    _auth_token_key: Option<FixedSizeEntropy>,
+    _auth_token_key: OnceCell<FixedSizeEntropy>,
 }
 
 impl FingerGuardService {
@@ -111,10 +112,13 @@ impl FingerGuardService {
                     .ok(),
             ),
             sk: RwLock::new(None),
-            _auth_token_key: keymint::get_auth_token_key()
-                .inspect_err(|e| error!("error getting auth_token_key: {:?}", e))
-                .ok(),
+            _auth_token_key: OnceCell::new(),
         }
+    }
+
+    #[allow(dead_code)] // Remove once this is used.
+    fn get_auth_token_key(&self) -> ServiceResult<&FixedSizeEntropy> {
+        self._auth_token_key.get_or_try_init(|| keymint::get_auth_token_key())
     }
 
     fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<HandshakeResponse> {

@@ -28,6 +28,7 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,zerocopy) \
 	$(call FIND_CRATE,thiserror) \
+	$(call FIND_CRATE,once_cell) \
 	trusty/user/base/lib/keymint-rust/boringssl \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/keymint-rust/wire \
