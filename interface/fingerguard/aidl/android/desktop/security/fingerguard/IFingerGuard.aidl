@@ -16,8 +16,11 @@
 
 package android.desktop.security.fingerguard;
 
+import android.desktop.security.fingerguard.EnrollmentResult;
 import android.desktop.security.fingerguard.HandshakeResponse;
+import android.desktop.security.fingerguard.PrepareEnrollSessionResponse;
 import android.desktop.security.fingerguard.SessionResponse;
+import android.desktop.security.fingerguard.HardwareAuthToken;
 
 interface IFingerGuard {
     /** Return the HandshakeResponse.
@@ -35,6 +38,16 @@ interface IFingerGuard {
      * the client nonce and the returned nonce.
      */
     SessionResponse newSession(in byte[] client_nonce);
+    /** Create an enroll session for a given pair of (user, sensor).
+     * A nonce and a session counter will be returned, along with the associated MAC.
+     * The details of the MAC computation is up to the agreement between FingerGuard
+     * and its client.
+     */
+    PrepareEnrollSessionResponse prepareEnrollSession(in int sensorId, in int userId, in HardwareAuthToken hat);
+    /** Finish a created enroll session.
+     * The associated AuthenticatorID will be updated with a successful enrollment.
+     */
+    void finishEnrollSession(in int sensorId, in int userId, in EnrollmentResult result);
     /** Return the AuthenticatorId associated with
      * the (user, sensor) pair.
      */
