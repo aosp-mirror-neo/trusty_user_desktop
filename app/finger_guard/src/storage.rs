@@ -17,6 +17,7 @@
 //! Types and utilities for data which is stored persistently on the device.
 
 use crate::error::ServiceError;
+use fingerguard_api::aidl::SensorUserPair::SensorUserPair;
 use storage::{OpenMode, Port, Session};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -88,36 +89,41 @@ pub trait SingleFileState: PersistedState {
     }
 }
 
-// TODO(b/408451664): Have SensorStateIndex in the service interface as well.
 #[derive(Hash, Eq, PartialEq, Debug)]
+/// Represents a key to index sensor state.
+/// It is equivalent to a SensorUserPair defined in the service interface.
+/// Within the service, this type should be used instead of the AIDL object.
 pub struct SensorStateIndex {
-    sensor_id: i32,
-    user_id: i32,
+    sensor_id: u32,
+    user_id: u32,
+}
+
+impl From<&SensorUserPair> for SensorStateIndex {
+    fn from(sensor_user_pair: &SensorUserPair) -> Self {
+        SensorStateIndex {
+            sensor_id: sensor_user_pair.sensorId as u32,
+            user_id: sensor_user_pair.userId as u32,
+        }
+    }
 }
 
 impl SensorStateIndex {
-    /// Construct an index for the given sensor and user.
-    pub fn new(sensor_id: i32, user_id: i32) -> Self {
-        SensorStateIndex { sensor_id, user_id }
+    /// Big endian representation of user_id.
+    pub fn user_id_be_bytes(&self) -> [u8; 4] {
+        self.user_id.to_be_bytes()
     }
-
     /// The file name used to store persistent state associated with this index.
     pub fn authenticator_id_file_name(&self) -> String {
         format!("s{}.u{}.authenticator_id", self.sensor_id, self.user_id)
     }
 }
 
-#[derive(Hash, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
+#[derive(Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
 /// Newtype that encapsulates an authenticator id.
 pub struct AuthenticatorId(i64);
 
 impl AuthenticatorId {
-    /// Construct a default-value zero id.
-    pub fn zero() -> Self {
-        AuthenticatorId(0)
-    }
-
     /// Convert the id to an i64.
     ///
     /// This should only be used to return the id across an AIDL interface. For
@@ -128,3 +134,25 @@ impl AuthenticatorId {
 }
 
 impl PersistedState for AuthenticatorId {}
+
+#[derive(Default, FromBytes, IntoBytes, Immutable)]
+#[repr(C)]
+/// Newtype that encapsulates the sensor session counter.
+pub struct SensorSessionCounter(u64);
+impl SensorSessionCounter {
+    pub fn increment(&self) -> Self {
+        Self(self.0 + 1)
+    }
+    /// Convert the id to an i64.
+    ///
+    /// This should only be used to return the counter across an AIDL interface. For
+    /// storage the (de)serialization traits should be used.
+    pub fn as_i64(&self) -> i64 {
+        self.0 as i64
+    }
+}
+
+impl PersistedState for SensorSessionCounter {}
+impl SingleFileState for SensorSessionCounter {
+    const FILE_NAME: &str = "fingerguard_sensor_session_counter";
+}

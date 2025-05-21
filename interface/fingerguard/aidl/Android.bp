@@ -8,6 +8,7 @@ aidl_interface {
         "android/desktop/security/fingerguard/HardwareAuthToken.aidl",
         "android/desktop/security/fingerguard/IFingerGuard.aidl",
         "android/desktop/security/fingerguard/PrepareEnrollSessionResponse.aidl",
+        "android/desktop/security/fingerguard/SensorUserPair.aidl",
         "android/desktop/security/fingerguard/SessionResponse.aidl",
     ],
     frozen: false,

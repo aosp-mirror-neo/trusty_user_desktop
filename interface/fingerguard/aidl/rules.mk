@@ -25,6 +25,7 @@ MODULE_AIDLS := \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/HardwareAuthToken.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/IFingerGuard.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/PrepareEnrollSessionResponse.aidl \
+	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/SensorUserPair.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/SessionResponse.aidl \
 
 MODULE_AIDL_LANGUAGE := rust

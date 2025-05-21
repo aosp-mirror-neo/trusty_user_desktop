@@ -19,6 +19,7 @@ package android.desktop.security.fingerguard;
 import android.desktop.security.fingerguard.EnrollmentResult;
 import android.desktop.security.fingerguard.HandshakeResponse;
 import android.desktop.security.fingerguard.PrepareEnrollSessionResponse;
+import android.desktop.security.fingerguard.SensorUserPair;
 import android.desktop.security.fingerguard.SessionResponse;
 import android.desktop.security.fingerguard.HardwareAuthToken;
 
@@ -31,29 +32,29 @@ interface IFingerGuard {
      * block further initHandshake calls until the device is
      * powerwashed.
      */
-    HandshakeResponse initHandshake(in byte[] client_public_key);
+    HandshakeResponse initHandshake(in byte[] clientPublicKey);
     /** Return the nonce for a common shared session key and
      * the session key encrypted TPM seed.
      * The session key is derived from the pairing key, plus
      * the client nonce and the returned nonce.
      */
-    SessionResponse newSession(in byte[] client_nonce);
-    /** Create an enroll session for a given pair of (user, sensor).
+    SessionResponse newSession(in byte[] clientNonce);
+    /** Create an enroll session for a given pair of (sensor, user).
      * A nonce and a session counter will be returned, along with the associated MAC.
      * The details of the MAC computation is up to the agreement between FingerGuard
      * and its client.
      */
-    PrepareEnrollSessionResponse prepareEnrollSession(in int sensorId, in int userId, in HardwareAuthToken hat);
+    PrepareEnrollSessionResponse prepareEnrollSession(in SensorUserPair sensorUserPair, in HardwareAuthToken hat);
     /** Finish a created enroll session.
      * The associated AuthenticatorID will be updated with a successful enrollment.
      */
-    void finishEnrollSession(in int sensorId, in int userId, in EnrollmentResult result);
+    void finishEnrollSession(in SensorUserPair sensorUserPair, in EnrollmentResult result);
     /** Return the AuthenticatorId associated with
-     * the (user, sensor) pair.
+     * the (sensor, user) pair.
      */
-    long getAuthenticatorId(in int sensorId, in int userId);
+    long getAuthenticatorId(in SensorUserPair sensorUserPair);
      /** Return a newly generated AuthenticatorId associated with
-     * the (user, sensor) pair.
+     * the (sensor, user) pair.
      */
-    long newAuthenticatorId(in int sensorId, in int userId);
+    long newAuthenticatorId(in SensorUserPair sensorUserPair);
 }

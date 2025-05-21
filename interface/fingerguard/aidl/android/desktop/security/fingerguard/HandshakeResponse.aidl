@@ -17,7 +17,7 @@
 package android.desktop.security.fingerguard;
 
 parcelable HandshakeResponse {
-    byte[] server_public_key;
-    byte[] pk_mac;
+    byte[] serverPublicKey;
+    byte[] pkMac;
 }
 

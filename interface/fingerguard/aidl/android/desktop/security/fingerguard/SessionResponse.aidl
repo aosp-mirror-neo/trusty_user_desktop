@@ -18,7 +18,7 @@ package android.desktop.security.fingerguard;
 
 parcelable SessionResponse {
     byte[] nonce;
-    byte[] wrapped_tpm_seed;
+    byte[] wrappedTpmSeed;
     byte[] iv;
     byte[] tag;
 }
