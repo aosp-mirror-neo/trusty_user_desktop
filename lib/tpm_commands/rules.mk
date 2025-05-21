@@ -25,6 +25,8 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := tpm_commands
 
 MODULE_LIBRARY_DEPS += \
+	$(call FIND_CRATE,open-enum) \
+	$(call FIND_CRATE,paste) \
 	$(call FIND_CRATE,thiserror) \
 	$(call FIND_CRATE,zerocopy) \
 	trusty/user/base/lib/trusty-std \

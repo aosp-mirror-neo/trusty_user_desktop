@@ -366,6 +366,8 @@ pub mod get_version_info {
     }
 }
 
+pub mod pinweaver;
+
 /// Contains the requests and responses used to access superblock mac
 /// storage on the GSC.
 pub mod trusty_storage_superblock_mac {
