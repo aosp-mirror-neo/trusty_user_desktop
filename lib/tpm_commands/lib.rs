@@ -17,7 +17,8 @@
 //! Structs and items that define TPM communications with the GSC
 
 use zerocopy::{
-    FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned, BE, U16, U32,
+    ConvertError, FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, TryFromBytes,
+    TryReadError, Unaligned, BE, U16, U32,
 };
 
 /// Indicates that the request will run without a session. All TPM vendor
@@ -86,9 +87,10 @@ impl UpdateStatus {
     pub const DevIdMismatch: Self = UpdateStatus(U32::new(14));
 }
 
-/// A trait used to define the constants required by each type of TPMV request
-/// All TPMV requests are required to implement this trait
-pub trait TpmvRequest: IntoBytes + Immutable + Unaligned + Sized {
+/// Defines the constants required by each type of TPM vendor request.
+///
+/// All TPMV requests are required to implement this trait.
+pub trait TpmvRequest: IntoBytes + Immutable + Unaligned {
     /// The first 4 bytes of every TPM request and response.
     /// Used to indicate if the request requires a session to be run
     const TAG: U16<BE>;
@@ -101,15 +103,39 @@ pub trait TpmvRequest: IntoBytes + Immutable + Unaligned + Sized {
     const ORDINAL: U32<BE>;
 
     /// Each request type has an associated response type used to deserialize
-    /// bytes received from the TPM after a request is processed
-    type TpmvResponse: FromBytes + ?Sized + Unaligned;
+    /// bytes received from the TPM after a request is processed.
+    type TpmvResponse: TryFromBytes + ?Sized + Unaligned;
+}
+
+/// Operations to build a dynamically-sized request type.
+///
+/// See [`TpmRequestMessage::new_in_vec`].
+pub trait TpmvRequestBuild: TpmvRequest + FromZeros + KnownLayout {
+    /// Parameters to build an self-consistent instance of this request from zeros.
+    ///
+    /// This does not need to fill every field of the request, only those that should
+    /// be static for every instance of this message.
+    type BuildParams;
+
+    /// Error in initialization or size calculation.
+    type Err;
+
+    /// The expected size for the request in bytes, excluding the TPM header.
+    ///
+    /// If `Self: Sized` this should be `size_of::<Self>()`.
+    fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err>;
+
+    /// Initializes a zeroed `self` to an internally consistent state.
+    ///
+    /// This is where data length fields should be initialized, for example.
+    fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err>;
 }
 
 /// Represents a complete TPM request. Contains both the request header and any
 /// additional fields required by the request type
-#[derive(Debug, Eq, IntoBytes, Immutable, PartialEq)]
+#[derive(Debug, Eq, TryFromBytes, IntoBytes, Immutable, PartialEq, KnownLayout, Unaligned)]
 #[repr(C)]
-pub struct TpmRequestMessage<T: TpmvRequest> {
+pub struct TpmRequestMessage<T: TpmvRequest + ?Sized> {
     /// The request header
     header: TpmRequestHeader,
 
@@ -118,28 +144,89 @@ pub struct TpmRequestMessage<T: TpmvRequest> {
 }
 
 impl<T: TpmvRequest> TpmRequestMessage<T> {
-    /// Generates a new `TpmvRequest` of the provided type T
+    /// Generates a new `TpmvRequest` for the provided type `T`.
     pub fn new(request: T) -> Self {
-        Self {
-            header: TpmRequestHeader {
-                tag: T::TAG,
-                length: U32::new(size_of::<Self>() as u32),
-                ordinal: T::ORDINAL,
-                command_code: T::COMMAND_CODE,
-            },
-            request,
+        Self { header: TpmRequestHeader::for_request::<T>(), request }
+    }
+}
+
+/// An error while building a TPM Request from a buffer.
+#[derive(thiserror::Error)]
+pub enum TpmRequestBuildError<Req: ?Sized + TpmvRequestBuild> {
+    /// Failed to allocate enough space for the request.
+    #[error("failed to allocate enough space for the request")]
+    Alloc,
+
+    /// The size returned by the request was invalid.
+    #[error("the request code gave an invalid size")]
+    Size,
+
+    /// `init` or `expected_size` in [`TpmvRequestBuild`] failed.
+    #[error("internal request build error: {0}")]
+    Internal(Req::Err),
+}
+
+impl<Req: ?Sized + TpmvRequestBuild> std::fmt::Debug for TpmRequestBuildError<Req>
+where
+    Req::Err: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Alloc => write!(f, "Alloc"),
+            Self::Size => write!(f, "Size"),
+            Self::Internal(arg0) => f.debug_tuple("Internal").field(arg0).finish(),
         }
     }
 }
 
+impl<Req: ?Sized + TpmvRequestBuild> From<std::collections::TryReserveError>
+    for TpmRequestBuildError<Req>
+{
+    fn from(_: std::collections::TryReserveError) -> Self {
+        Self::Alloc
+    }
+}
+
+impl<T: ?Sized + TpmvRequestBuild> TpmRequestMessage<T> {
+    /// Builds a request message using the given `Vec` as backing memory.
+    pub fn new_in_vec(
+        buf: &mut Vec<u8>,
+        params: <T as TpmvRequestBuild>::BuildParams,
+    ) -> Result<&mut Self, TpmRequestBuildError<T>> {
+        let data_size: usize = T::expected_size(&params)
+            .map_err(TpmRequestBuildError::Internal)?
+            .try_into()
+            .map_err(|_| TpmRequestBuildError::Size)?;
+        let total_size = data_size
+            .checked_add(size_of::<TpmRequestHeader>())
+            .ok_or(TpmRequestBuildError::Size)?;
+        let total_size_u32: u32 = total_size.try_into().map_err(|_| TpmRequestBuildError::Size)?;
+        if let Some(additional) = total_size.checked_sub(buf.len()) {
+            buf.try_reserve(additional)?;
+        }
+        buf.clear();
+        buf.resize(total_size, 0);
+        let out = match Self::try_mut_from_bytes(&mut buf[..]).map_err(TryReadError::from) {
+            Ok(m) if size_of_val(m) == total_size => Ok(m),
+            Ok(_) | Err(ConvertError::Size(_)) => Err(TpmRequestBuildError::Size),
+            Err(ConvertError::Validity(_)) => unreachable!("T: FromZeros"),
+        }?;
+        out.header = TpmRequestHeader::for_request_with_total_size::<T>(total_size_u32);
+        out.request.init(params).map_err(TpmRequestBuildError::Internal)?;
+        Ok(out)
+    }
+}
+
 /// Represents the initial bytes of every TPM request.
-#[derive(Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+#[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, PartialEq, Unaligned)]
 #[repr(C)]
 pub struct TpmRequestHeader {
     /// The first 4 bytes of every TPM request
     pub tag: U16<BE>,
 
     /// The total number of bytes in the request
+    ///
+    /// Rust usually calls this term a "size" - `[u32; 3]` has a size of 12, but a length of 3.
     pub length: U32<BE>,
 
     /// The request's ordinal
@@ -148,6 +235,24 @@ pub struct TpmRequestHeader {
     /// A code that is unique to each request type that the TPM will recognize
     /// and know how to process
     pub command_code: U16<BE>,
+}
+
+impl TpmRequestHeader {
+    /// Constructs a `TpmRequestHeader` for the given request and total message size in bytes.
+    pub fn for_request_with_total_size<T: TpmvRequest + ?Sized>(size: u32) -> Self {
+        TpmRequestHeader {
+            tag: T::TAG,
+            length: U32::new(size),
+            ordinal: T::ORDINAL,
+            command_code: T::COMMAND_CODE,
+        }
+    }
+
+    /// Constructs a `TpmRequestHeader` for the given fixed-size request.
+    pub fn for_request<T: TpmvRequest>() -> Self {
+        const { assert!(size_of::<TpmRequestMessage<T>>() as u64 <= u32::MAX as u64) }
+        Self::for_request_with_total_size::<T>(size_of::<TpmRequestMessage<T>>() as u32)
+    }
 }
 
 /// Represents a complete TPM response. Contains both the response header and any
@@ -346,8 +451,6 @@ pub mod trusty_storage_superblock_mac {
 
 #[cfg(test)]
 mod tests {
-    use super::get_console_log;
-    use super::get_version_info;
     use super::*;
 
     #[test]
@@ -490,5 +593,132 @@ mod tests {
 
         let tpm_response = TpmResponseMessage::<Response>::ref_from_bytes(&bytes).unwrap();
         assert_eq!(*tpm_response, expected_response);
+    }
+
+    #[test]
+    fn test_request_new_in_vec() {
+        #[derive(FromZeros, KnownLayout, IntoBytes, Immutable, Unaligned)]
+        #[repr(C, packed)]
+        struct FakeRequest {
+            rest_len: U32<BE>,
+            must_be_zero: [ZeroU32; 3],
+            rest: [u8],
+        }
+        impl TpmvRequest for FakeRequest {
+            const TAG: U16<BE> = NO_SESSION_TAG;
+            const ORDINAL: U32<BE> = U32::new(2);
+            const COMMAND_CODE: U16<BE> = U16::new(1);
+            type TpmvResponse = FakeResponse;
+        }
+        impl TpmvRequestBuild for FakeRequest {
+            type BuildParams = u32;
+            type Err = ();
+
+            fn init(&mut self, rest_len: u32) -> Result<(), ()> {
+                self.rest_len.set(rest_len);
+                Ok(())
+            }
+
+            fn expected_size(rest_len: &u32) -> Result<u32, ()> {
+                Ok((size_of::<U32<BE>>()
+                    + 3 * size_of::<ZeroU32>()
+                    + usize::try_from(*rest_len).unwrap()) as u32)
+            }
+        }
+        #[derive(FromZeros, KnownLayout, IntoBytes, Immutable, Unaligned)]
+        #[repr(C)]
+        struct FakeResponse;
+        let mut buf = Vec::new();
+        let req = TpmRequestMessage::<FakeRequest>::new_in_vec(&mut buf, 10).unwrap();
+        assert_eq!(req.request.rest_len.get(), 10);
+        assert_eq!(req.request.rest, [0; 10]);
+        req.request.rest[0] = 10;
+        assert_eq!(
+            req.as_bytes(),
+            [
+                0x80, 1, 0, 0, 0, 38, 0, 0, 0, 2, 0, 1, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
+        );
+        assert_eq!(buf.len(), 38);
+
+        let req = TpmRequestMessage::<FakeRequest>::new_in_vec(&mut buf, 5).unwrap();
+        assert_eq!(req.request.rest_len.get(), 5);
+        assert_eq!(req.request.rest, [0; 5], "buf should have been zeroed");
+        assert_eq!(buf.len(), 33, "buf should have been truncated");
+    }
+
+    #[test]
+    fn test_request_new_in_vec_overflow() {
+        #[derive(FromZeros, KnownLayout, IntoBytes, Immutable, Unaligned)]
+        #[repr(C)]
+        struct FakeRequest;
+        impl TpmvRequest for FakeRequest {
+            const TAG: U16<BE> = NO_SESSION_TAG;
+            const ORDINAL: U32<BE> = U32::new(2);
+            const COMMAND_CODE: U16<BE> = U16::new(1);
+            type TpmvResponse = FakeResponse;
+        }
+        impl TpmvRequestBuild for FakeRequest {
+            type BuildParams = ();
+            type Err = ();
+
+            fn init(&mut self, _: ()) -> Result<(), ()> {
+                Ok(())
+            }
+
+            fn expected_size(_: &()) -> Result<u32, ()> {
+                Ok(u32::MAX)
+            }
+        }
+        #[derive(FromZeros, KnownLayout, IntoBytes, Immutable, Unaligned)]
+        #[repr(C)]
+        struct FakeResponse;
+        let mut buf = vec![1, 2, 3];
+        let res = TpmRequestMessage::<FakeRequest>::new_in_vec(&mut buf, ());
+        assert!(matches!(res, Err(TpmRequestBuildError::Size)));
+        assert_eq!(buf, [1, 2, 3], "expected size error should not affect buf")
+    }
+
+    #[test]
+    fn test_request_new_in_vec_internal_error() {
+        #[derive(Debug, FromZeros, KnownLayout, IntoBytes, Immutable, Unaligned)]
+        #[repr(C)]
+        struct FakeRequest;
+        impl TpmvRequest for FakeRequest {
+            const TAG: U16<BE> = NO_SESSION_TAG;
+            const ORDINAL: U32<BE> = U32::new(2);
+            const COMMAND_CODE: U16<BE> = U16::new(1);
+            type TpmvResponse = FakeResponse;
+        }
+        impl TpmvRequestBuild for FakeRequest {
+            type BuildParams = bool;
+            type Err = &'static str;
+
+            fn init(&mut self, fail_init: bool) -> Result<(), Self::Err> {
+                if fail_init {
+                    Err("init")
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn expected_size(&fail_init: &bool) -> Result<u32, Self::Err> {
+                if !fail_init {
+                    Err("expected_size")
+                } else {
+                    Ok(0)
+                }
+            }
+        }
+        #[derive(FromZeros, KnownLayout, IntoBytes, Immutable, Unaligned)]
+        #[repr(C)]
+        struct FakeResponse;
+        let mut buf = vec![1, 2, 3];
+        let res = TpmRequestMessage::<FakeRequest>::new_in_vec(&mut buf, false);
+        assert!(matches!(res, Err(TpmRequestBuildError::Internal("expected_size"))));
+        assert_eq!(buf, [1, 2, 3], "expected_size error should not affect buf");
+        let res = TpmRequestMessage::<FakeRequest>::new_in_vec(&mut buf, true);
+        assert!(matches!(res, Err(TpmRequestBuildError::Internal("init"))));
     }
 }

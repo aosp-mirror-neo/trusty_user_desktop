@@ -15,6 +15,7 @@
 rust_defaults {
     name: "libdesktop_hwsec_tpm_commands_defaults",
     rustlibs: [
+        "libthiserror",
         "libzerocopy",
     ],
 }
@@ -33,4 +34,5 @@ rust_test {
     defaults: ["libdesktop_hwsec_tpm_commands_defaults"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
+    host_supported: true,
 }
