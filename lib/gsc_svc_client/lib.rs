@@ -18,11 +18,11 @@ use android_system_desktop_security_gsc::aidl::android::system::desktop::securit
 use binder::Strong;
 use rpcbinder::RpcSession;
 use std::ffi::CStr;
-use tpm_commands::TpmvRequest;
+use tpm_commands::{TpmResponseHeader, TpmvRequest};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub use tpm_commands::trusty_storage_superblock_mac::{
-    TrustyStorageMac, TrustyStorageMacFileIndex,
+    TrustyStorageFlags, TrustyStorageMac, TrustyStorageMacData, TrustyStorageMacFileIndex,
 };
 
 const GSC_SERVICE_PORT: &CStr = c"com.android.trusty.rust.GscAppService.V1";
@@ -36,6 +36,8 @@ pub enum GscServiceClientError {
     TransmitError,
     /// Message processing error.
     Deserialization,
+    /// Tpm error.
+    Tpm(u32),
 }
 
 fn get_service(port: &CStr) -> Result<Strong<dyn IGsc>, GscServiceClientError> {
@@ -62,21 +64,34 @@ impl GscServiceClient {
     pub fn read_trusty_storage_superblock_mac(
         &self,
         index: TrustyStorageMacFileIndex,
-    ) -> Result<TrustyStorageMac, GscServiceClientError> {
+    ) -> Result<TrustyStorageMacData, GscServiceClientError> {
         use tpm_commands::trusty_storage_superblock_mac::{Request, Response};
         let response: Response = self.transmit(Request::new_read(index))?;
 
-        Ok(response.mac)
+        Ok(response.data)
     }
 
-    /// Set the superblock `mac` value stored on the GSC for a given `index`.
+    /// Set the superblock mac `data` value stored on the GSC for a given
+    /// `index`.
     pub fn write_trusty_storage_superblock_mac(
         &self,
         index: TrustyStorageMacFileIndex,
-        mac: TrustyStorageMac,
+        data: TrustyStorageMacData,
     ) -> Result<(), GscServiceClientError> {
         use tpm_commands::trusty_storage_superblock_mac::{Request, Response};
-        let _: Response = self.transmit(Request::new_write(index, mac))?;
+        let _: Response = self.transmit(Request::new_write(index, data))?;
+
+        Ok(())
+    }
+
+    /// Uninitialize the superblock mac `data` value stored on the GSC for a
+    /// given `index`. The seven lower `flags` bits will be preserved.
+    pub fn delete_trusty_storage_superblock_mac(
+        &self,
+        index: TrustyStorageMacFileIndex,
+    ) -> Result<(), GscServiceClientError> {
+        use tpm_commands::trusty_storage_superblock_mac::{Request, Response};
+        let _: Response = self.transmit(Request::new_delete(index))?;
 
         Ok(())
     }
@@ -93,6 +108,14 @@ impl GscServiceClient {
             .0
             .transmit(request.as_bytes())
             .map_err(|_| GscServiceClientError::TransmitError)?;
+
+        // Check for TPM errors
+        let (header, _) = TpmResponseHeader::ref_from_prefix(&bytes)
+            .map_err(|_| GscServiceClientError::Deserialization)?;
+        if header.error_code != 0 {
+            return Err(GscServiceClientError::Tpm(header.error_code.into()));
+        }
+
         let response = TpmResponseMessage::<Rsp>::read_from_bytes(&bytes)
             .map_err(|_| GscServiceClientError::Deserialization)?;
 
@@ -107,6 +130,29 @@ mod tests {
     test::init!();
 
     #[test]
+    fn send_bad_tpmv_request() {
+        use zerocopy::*;
+        #[derive(Default, IntoBytes, Immutable, Unaligned)]
+        #[repr(C)]
+        pub struct Request;
+
+        #[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+        #[repr(C)]
+        pub struct Response;
+
+        impl TpmvRequest for Request {
+            const TAG: U16<BE> = U16::new(0x8001);
+            const COMMAND_CODE: U16<BE> = U16::new(0x0004);
+            const ORDINAL: U32<BE> = U32::new(0x20000000);
+            type TpmvResponse = Response;
+        }
+
+        let client = GscServiceClient::new().unwrap();
+        let res: Result<Response, GscServiceClientError> = client.transmit(Request);
+        assert_eq!(Err(GscServiceClientError::Tpm(0x508)), res);
+    }
+
+    #[test]
     fn read_trusty_storage_superblock_mac() {
         let client = GscServiceClient::new().unwrap();
         let index = TrustyStorageMacFileIndex::TamperDetectPersist;
@@ -119,16 +165,33 @@ mod tests {
     fn write_trusty_storage_superblock_mac() {
         let client = GscServiceClient::new().unwrap();
         let index = TrustyStorageMacFileIndex::TamperDetectPersist;
-        let mac = TrustyStorageMac([0u8; 16]);
 
-        let res = client.read_trusty_storage_superblock_mac(index);
-        assert_eq!(Ok(mac), res);
-
-        let mac = TrustyStorageMac([2u8; 16]);
-        let res = client.write_trusty_storage_superblock_mac(index, mac);
+        // Reset mac storage
+        let empty_data = TrustyStorageMacData::default();
+        let res = client.write_trusty_storage_superblock_mac(index, empty_data);
         assert_eq!(Ok(()), res);
-
+        let res = client.delete_trusty_storage_superblock_mac(index);
+        assert_eq!(Ok(()), res);
         let res = client.read_trusty_storage_superblock_mac(index);
-        assert_eq!(Ok(mac), res);
+        assert_eq!(Ok(empty_data), res);
+
+        // Verify that 0x80 bit is set on write
+        let data = TrustyStorageMacData {
+            mac: TrustyStorageMac([0xabu8; 16]),
+            flags: TrustyStorageFlags(0x43),
+        };
+        let res = client.write_trusty_storage_superblock_mac(index, data);
+        assert_eq!(Ok(()), res);
+        let expected =
+            TrustyStorageMacData { mac: data.mac, flags: TrustyStorageFlags(0x80 | data.flags.0) };
+        let res = client.read_trusty_storage_superblock_mac(index);
+        assert_eq!(Ok(expected), res);
+
+        // Verify that flags 0x7f are preserved when delete is called
+        let res = client.delete_trusty_storage_superblock_mac(index);
+        assert_eq!(Ok(()), res);
+        let expected = TrustyStorageMacData { mac: TrustyStorageMac::default(), flags: data.flags };
+        let res = client.read_trusty_storage_superblock_mac(index);
+        assert_eq!(Ok(expected), res);
     }
 }
