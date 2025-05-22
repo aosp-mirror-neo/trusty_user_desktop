@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::crypto::{self, FixedSizeEntropy, ENTROPY_SIZE};
 use crate::error::{ServiceError, ServiceResult};
 use crate::keymint;
 use crate::rng;
@@ -29,64 +30,11 @@ use fingerguard_api::aidl::{
 };
 use log::error;
 use once_cell::sync::OnceCell;
-use openssl::bn::BigNumContext;
-use openssl::derive::Deriver;
-use openssl::ec::{EcGroup, EcKey, EcPoint, PointConversionForm};
-use openssl::hmac::HmacCtx;
-use openssl::md::Md;
-use openssl::nid::Nid;
-use openssl::pkey::{PKey, Private, Public};
+use openssl::pkey::{PKey, Private};
 use openssl::symm::{encrypt_aead, Cipher};
 use std::default::Default;
 use std::sync::Mutex;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
-
-const NIST_P256_CURVE_NAME: Nid = Nid::X9_62_PRIME256V1;
-
-fn ec_keygen() -> Result<EcKey<Private>, openssl::error::ErrorStack> {
-    let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
-    let server_private_key = EcKey::generate(&group)?;
-    Ok(server_private_key)
-}
-
-fn ec_public_key_serialization(
-    private_key: &EcKey<Private>,
-) -> Result<Vec<u8>, openssl::error::ErrorStack> {
-    let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
-    let mut ctx = BigNumContext::new()?;
-    let server_public_key_bytes =
-        private_key.public_key().to_bytes(&group, PointConversionForm::COMPRESSED, &mut ctx)?;
-    Ok(server_public_key_bytes.to_vec())
-}
-
-fn perform_ecdh(
-    server_private_key: &PKey<Private>,
-    client_public_key_bytes: &[u8],
-) -> Result<Vec<u8>, openssl::error::ErrorStack> {
-    let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
-    let mut ctx = BigNumContext::new()?;
-    let client_public_point = EcPoint::from_bytes(&group, &client_public_key_bytes, &mut ctx)?;
-    let client_public_key: PKey<Public> =
-        EcKey::from_public_key(&group, &client_public_point)?.try_into()?;
-    let mut pk_deriver = Deriver::new(&server_private_key)?;
-    pk_deriver.set_peer(&client_public_key)?;
-    let pk = pk_deriver.derive_to_vec()?;
-    Ok(pk)
-}
-
-fn compute_hmac_sha256(
-    key: &FixedSizeEntropy,
-    buffer: &Vec<u8>,
-) -> Result<FixedSizeEntropy, openssl::error::ErrorStack> {
-    let mut hmac_ctx = HmacCtx::new(key.as_slice(), Md::sha256())?;
-    hmac_ctx.update(buffer.as_slice())?;
-    let mut mac = [0u8; ENTROPY_SIZE];
-    let _ = hmac_ctx.finalize(mac.as_mut_slice())?;
-    Ok(mac)
-}
-
-const ENTROPY_SIZE: usize = 32;
-type FixedSizeEntropy = [u8; ENTROPY_SIZE];
 
 #[derive(FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
@@ -148,13 +96,13 @@ impl FingerGuardService {
             return Err(ServiceError::StateAlreadyExists("init_params"));
         }
         let server_private_key =
-            ec_keygen().map_err(|e| ServiceError::OpenSsl("failed to ec keygen", e))?;
-        let server_public_key_bytes = ec_public_key_serialization(&server_private_key)
+            crypto::ec_keygen().map_err(|e| ServiceError::OpenSsl("failed to ec keygen", e))?;
+        let server_public_key_bytes = crypto::ec_public_key_serialization(&server_private_key)
             .map_err(|e| ServiceError::OpenSsl("failed to serialize server public key", e))?;
         let server_private_key: PKey<Private> = server_private_key
             .try_into()
             .map_err(|e| ServiceError::OpenSsl("failed to convert ec key to pkey", e))?;
-        let pk = perform_ecdh(&server_private_key, client_public_key_bytes)
+        let pk = crypto::perform_ecdh(&server_private_key, client_public_key_bytes)
             .map_err(|e| ServiceError::OpenSsl("failed to derive pk", e))?;
         let pk: FixedSizeEntropy = {
             let len = pk.len();
@@ -166,8 +114,7 @@ impl FingerGuardService {
         }?;
         // generate random tpm_seed.
         let tpm_seed = rng::generate_random_buffer::<ENTROPY_SIZE>();
-        let mac = compute_hmac_sha256(&pk, &b"tofu".to_vec())
-            .map_err(|e| ServiceError::OpenSsl("failed to compute mac", e))?;
+        let mac = crypto::HmacGenerator::compute(&pk, b"tofu")?;
         // save pk and tpm_seed to storage.
         let new_init_params = InitParams { pk, tpm_seed };
         new_init_params.save()?;
@@ -196,11 +143,10 @@ impl FingerGuardService {
             return Err(ServiceError::StateAlreadyExists("sk"));
         }
         let nonce = rng::generate_random_vec::<32>();
-        let mut all_nonces = vec![0u8; 64];
+        let mut all_nonces = [0u8; 64];
         all_nonces[0..32].copy_from_slice(client_nonce);
         all_nonces[32..64].copy_from_slice(nonce.as_slice());
-        let new_sk = compute_hmac_sha256(&pk, &all_nonces)
-            .map_err(|e| ServiceError::OpenSsl("failed to compute sk", e))?;
+        let new_sk = crypto::HmacGenerator::compute(&pk, &all_nonces)?;
         *sk = Some(new_sk);
         let cipher = Cipher::aes_256_gcm();
         let iv = rng::generate_random_vec::<12>();
@@ -252,27 +198,17 @@ impl FingerGuardService {
          * Compute mac as HMAC_SHA256(sk, msg) where
          * msg = nonce || user_id || "fingerguard" || "enroll" || session_counter
          */
-        let mut hmac_ctx = HmacCtx::new(sk.as_slice(), Md::sha256())
-            .map_err(|e| ServiceError::OpenSsl("failed to init mac", e))?;
-        hmac_ctx.update(&nonce).map_err(|e| ServiceError::OpenSsl("failed to mac update", e))?;
-        hmac_ctx
-            .update(&sensor_state_index.user_id_be_bytes())
-            .map_err(|e| ServiceError::OpenSsl("failed to mac update", e))?;
-        hmac_ctx
-            .update(b"fingerguard")
-            .map_err(|e| ServiceError::OpenSsl("failed to mac update", e))?;
-        hmac_ctx.update(b"enroll").map_err(|e| ServiceError::OpenSsl("failed to mac update", e))?;
-        hmac_ctx
-            .update(&session_counter.as_i64().to_be_bytes())
-            .map_err(|e| ServiceError::OpenSsl("failed to mac update", e))?;
-        let mut mac = [0u8; ENTROPY_SIZE];
-        let _ = hmac_ctx
-            .finalize(mac.as_mut_slice())
-            .map_err(|e| ServiceError::OpenSsl("failed to finalize mac", e))?;
+        let mut hmac_gen = crypto::HmacGenerator::new(sk)?;
+        hmac_gen.update(&nonce)?;
+        hmac_gen.update(&sensor_state_index.user_id_be_bytes())?;
+        hmac_gen.update(b"fingerguard")?;
+        hmac_gen.update(b"enroll")?;
+        hmac_gen.update(&session_counter.as_i64().to_be_bytes())?;
+        let hmac = hmac_gen.complete()?;
         Ok(PrepareEnrollSessionResponse {
             sessionCounter: session_counter.as_i64(),
             nonce,
-            mac: mac.to_vec(),
+            mac: hmac.to_vec(),
         })
     }
 
@@ -303,34 +239,20 @@ impl FingerGuardService {
         if result.enrolled {
             // Compute mac as HMAC_SHA256(sk, msg) where
             // msg = nonce || user_id || "fpmcu" | "enroll" || session_counter
-            let mut hmac_ctx = HmacCtx::new(sk.as_slice(), Md::sha256())
-                .map_err(|e| ServiceError::OpenSsl("failed to init mac", e))?;
-            hmac_ctx
-                .update(&nonce)
-                .map_err(|e| ServiceError::OpenSsl("failed to mac update", e))?;
-            hmac_ctx
-                .update(&sensor_state_index.user_id_be_bytes())
-                .map_err(|e| ServiceError::OpenSsl("failed to mac update", e))?;
-            hmac_ctx
-                .update(b"fpmcu")
-                .map_err(|e| ServiceError::OpenSsl("failed to mac update", e))?;
-            hmac_ctx
-                .update(b"enroll")
-                .map_err(|e| ServiceError::OpenSsl("failed to mac update", e))?;
-            hmac_ctx
-                .update(&session_counter.as_i64().to_be_bytes())
-                .map_err(|e| ServiceError::OpenSsl("failed to mac update", e))?;
-            let mut mac = [0u8; ENTROPY_SIZE];
-            let _ = hmac_ctx
-                .finalize(mac.as_mut_slice())
-                .map_err(|e| ServiceError::OpenSsl("failed to finalize mac", e))?;
+            let mut hmac_gen = crypto::HmacGenerator::new(sk)?;
+            hmac_gen.update(&nonce)?;
+            hmac_gen.update(&sensor_state_index.user_id_be_bytes())?;
+            hmac_gen.update(b"fpmcu")?;
+            hmac_gen.update(b"enroll")?;
+            hmac_gen.update(&session_counter.as_i64().to_be_bytes())?;
+            let hmac = hmac_gen.complete()?;
             // Note that we don't use the constant time comparison for mac check.
             // because
             // 1. The attacker can't retry the mac: the session has closed regardless
             //    the verification result. So the attack surface is non-existent.
             // 2. It is complex to convince the Rust compiler not to optimize
             //    the plain for loop over two slices.
-            if mac != result.mac.as_slice() {
+            if hmac != result.mac.as_slice() {
                 return Err(ServiceError::BadMac("enrollment result"));
             }
             // Generate and save a new AuthenticatorId.
@@ -418,10 +340,8 @@ impl IFingerGuard for FingerGuardService {
 
 #[cfg(test)]
 mod tests {
+    use crate::crypto::{self, FixedSizeEntropy, NIST_P256_CURVE_NAME};
     use crate::rng;
-    use crate::service::compute_hmac_sha256;
-    use crate::service::FixedSizeEntropy;
-    use crate::service::NIST_P256_CURVE_NAME;
     use fingerguard_api::aidl::{
         EnrollmentResult::EnrollmentResult, HardwareAuthToken::HardwareAuthToken,
         SensorUserPair::SensorUserPair,
@@ -429,8 +349,6 @@ mod tests {
     use openssl::bn::BigNumContext;
     use openssl::derive::Deriver;
     use openssl::ec::{EcGroup, EcKey, EcPoint, PointConversionForm};
-    use openssl::hmac::HmacCtx;
-    use openssl::md::Md;
     use openssl::pkey::{PKey, Private, Public};
     use openssl::symm::{decrypt_aead, Cipher};
     test::init!();
@@ -466,14 +384,12 @@ mod tests {
         pk_deriver.set_peer(&server_public_key).unwrap();
         let pk = pk_deriver.derive_to_vec().unwrap();
         assert_eq!(pk.len(), 32);
+        let pk = pk.try_into().unwrap();
 
         // Check the computed MAC matches the one in the response.
-        let mut hmac_ctx = HmacCtx::new(&pk.as_slice(), Md::sha256()).unwrap();
-        hmac_ctx.update(b"tofu").unwrap();
-        let mut mac = vec![0u8; 32];
-        let _ = hmac_ctx.finalize(mac.as_mut_slice()).unwrap();
-        assert_eq!(mac, handshake_response.pkMac);
-        pk.try_into().unwrap()
+        let hmac = crypto::HmacGenerator::compute(&pk, b"tofu").unwrap();
+        assert_eq!(hmac.as_slice(), handshake_response.pkMac.as_slice());
+        pk
     }
 
     #[test]
@@ -486,7 +402,7 @@ mod tests {
         let session_response = service.newSession(client_nonce.as_slice()).unwrap();
         let server_nonce = session_response.nonce;
         let all_nonce = vec![client_nonce, server_nonce].concat();
-        let sk = compute_hmac_sha256(&pk, &all_nonce).unwrap();
+        let sk = crypto::HmacGenerator::compute(&pk, &all_nonce).unwrap();
 
         // Decrypt the wrapped tpm seed.
         let iv = session_response.iv;
@@ -537,24 +453,22 @@ mod tests {
             mac: vec![],
         };
         let session_resp = service.prepareEnrollSession(&sup, &hat).unwrap();
-        let mut hmac_ctx = HmacCtx::new(sk.as_slice(), Md::sha256()).unwrap();
-        hmac_ctx.update(&session_resp.nonce).unwrap();
-        hmac_ctx.update(&user_id.to_be_bytes()).unwrap();
-        hmac_ctx.update(b"fingerguardenroll").unwrap();
-        hmac_ctx.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
-        let mut mac = [0u8; 32];
-        let _ = hmac_ctx.finalize(mac.as_mut_slice()).unwrap();
-        assert_eq!(mac.to_vec(), session_resp.mac);
+        let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
+        hmac_gen.update(&session_resp.nonce).unwrap();
+        hmac_gen.update(&user_id.to_be_bytes()).unwrap();
+        hmac_gen.update(b"fingerguardenroll").unwrap();
+        hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
+        let hmac = hmac_gen.complete().unwrap();
+        assert_eq!(hmac.to_vec(), session_resp.mac);
 
         let old_auth_id = service.getAuthenticatorId(&sup).unwrap();
-        let mut hmac_ctx = HmacCtx::new(sk.as_slice(), Md::sha256()).unwrap();
-        hmac_ctx.update(&session_resp.nonce).unwrap();
-        hmac_ctx.update(&user_id.to_be_bytes()).unwrap();
-        hmac_ctx.update(b"fpmcuenroll").unwrap();
-        hmac_ctx.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
-        let mut mac = [0u8; 32];
-        let _ = hmac_ctx.finalize(mac.as_mut_slice()).unwrap();
-        let enrollment_result = EnrollmentResult { enrolled: true, mac: mac.to_vec() };
+        let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
+        hmac_gen.update(&session_resp.nonce).unwrap();
+        hmac_gen.update(&user_id.to_be_bytes()).unwrap();
+        hmac_gen.update(b"fpmcuenroll").unwrap();
+        hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
+        let hmac = hmac_gen.complete().unwrap();
+        let enrollment_result = EnrollmentResult { enrolled: true, mac: hmac.to_vec() };
         let _ = service.finishEnrollSession(&sup, &enrollment_result).unwrap();
         // Ensure the authenticator id updates after enrollment.
         let new_auth_id = service.getAuthenticatorId(&sup).unwrap();

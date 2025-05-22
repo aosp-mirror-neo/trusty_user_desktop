@@ -14,6 +14,7 @@
 * limitations under the License.
 */
 
+mod crypto;
 mod error;
 mod keymint;
 mod rng;
