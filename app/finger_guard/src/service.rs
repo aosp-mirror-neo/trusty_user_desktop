@@ -23,8 +23,9 @@ use crate::storage::{
 };
 use binder::Interface;
 use fingerguard_api::aidl::{
-    EnrollmentResult::EnrollmentResult, HandshakeResponse::HandshakeResponse,
-    HardwareAuthToken::HardwareAuthToken, IFingerGuard::IFingerGuard,
+    AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
+    HandshakeResponse::HandshakeResponse, HardwareAuthToken::HardwareAuthToken,
+    IFingerGuard::IFingerGuard, PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SensorUserPair::SensorUserPair,
     SessionResponse::SessionResponse,
 };
@@ -323,6 +324,22 @@ impl IFingerGuard for FingerGuardService {
         FingerGuardService::finish_enroll_session(&self, sensor_user_pair, result)
             .inspect_err(|e| error!("finishEnrollSession failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+    }
+    // TODO(b/401303587): implement.
+    fn prepareAuthSession(
+        &self,
+        _sensor_user_pair: &SensorUserPair,
+    ) -> binder::Result<PrepareAuthSessionResponse> {
+        Err(binder::StatusCode::FAILED_TRANSACTION.into())
+    }
+    // TODO(b/401303587): implement.
+    fn finishAuthSession(
+        &self,
+        _sensor_user_pair: &SensorUserPair,
+        _result: &AuthenticationResult,
+        _tbs_hat: &HardwareAuthToken,
+    ) -> binder::Result<HardwareAuthToken> {
+        Err(binder::StatusCode::FAILED_TRANSACTION.into())
     }
     fn getAuthenticatorId(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
         FingerGuardService::read_authenticator_id(&self, sensor_user_pair)
