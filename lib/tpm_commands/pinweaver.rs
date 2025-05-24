@@ -1,0 +1,457 @@
+//! Contains the requests and responses used to access PinWeaver on the GSC.
+//!
+//! This is based on the Chromium PinWeaver [source][0], but was not mechanically derived.
+//!
+//! [0]: https://chromium.googlesource.com/chromiumos/platform/pinweaver/+/main/pinweaver_types.h
+
+#![allow(dead_code)] // Many private fields exist to be serialized and deserialized from bytes.
+
+use crate::{TpmRequestMessage, TpmResponseMessage};
+use paste::paste;
+use zerocopy::{
+    FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned, LE, U16, U32,
+    U64,
+};
+
+pub mod request;
+pub mod response;
+
+/// The protocol version recognized by this implementation.
+pub const PROTOCOL_VERSION: u8 = 2;
+
+macro_rules! export_request_response {
+    ($($name:ident),* $(,)?) => {
+        paste! {$(
+            #[doc = concat!("A full PinWeaver ", stringify!($name), " request.")]
+            pub type [<$name Request>] = TpmRequestMessage<request::Request<request::$name>>;
+            #[doc = concat!("A full PinWeaver ", stringify!($name), " response.")]
+            pub type [<$name Response>] = TpmResponseMessage<response::Response<response::$name>>;
+        )*}
+    };
+}
+export_request_response!(ResetTree, InsertLeaf, RemoveLeaf, TryAuth, SysInfo);
+
+/// Overflow error while performing size arithmetic or integer conversion.
+///
+/// Not expected in normal usage.
+#[derive(Debug, thiserror::Error)]
+#[error("unexpected arithmetic overflow")]
+pub struct Overflow;
+
+/// Parameters for a tree.
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct TreeParams {
+    /// The number of bits to distinguish each level of the tree.
+    pub bits_per_level: u8,
+
+    /// The height of the tree, measured as edge count from root to leaf.
+    pub height: u8,
+}
+
+/// Requests and responses which include the contents of a leaf on disk.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C, packed)]
+pub struct WithUnimportedLeafData<Head> {
+    /// Data before the leaf data.
+    pub head: Head,
+
+    /// The leaf data persisted off-GSC.
+    pub unimported_leaf_data: UnimportedLeafData,
+}
+
+impl<Head: FromBytes + KnownLayout + Immutable + IntoBytes + Unaligned + std::fmt::Debug>
+    std::fmt::Debug for WithUnimportedLeafData<Head>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WithUnimportedLeafData")
+            .field("header", self.head())
+            .field("unimported_leaf_data", &&self.unimported_leaf_data)
+            .finish()
+    }
+}
+
+impl<Head: FromBytes + KnownLayout + Immutable + IntoBytes + Unaligned>
+    WithUnimportedLeafData<Head>
+{
+    /// Gets a reference to the head of this message.
+    ///
+    /// Taking a reference to a generic field gives an error because Rust doesn't
+    /// know about `Unaligned` making `repr(packed)` alignment errors impossible.
+    pub fn head(&self) -> &Head {
+        Head::ref_from_prefix(self.as_bytes()).unwrap().0
+    }
+
+    /// Gets a mutable reference to the head of this message..
+    pub fn head_mut(&mut self) -> &mut Head {
+        Head::mut_from_prefix(self.as_mut_bytes()).unwrap().0
+    }
+}
+
+/// Version of leaf data.
+///
+/// This is largely ignored by Android - all that matters is consistency with GSC data.
+/// The below is adapted from the original doc:
+///
+/// `minor` comes first so this struct will be compatible with `u32`
+/// comparisons for little endian to make version comparisons easier.
+/// Changes to minor versions are allowed to add new fields, but not
+/// remove existing fields, and they are allowed to be interpreted by
+/// previous versions---any extra fields are truncated.
+/// Leafs will reject future major versions assuming they are
+/// incompatible, so fields in public data and ciphertext data in
+/// the [`UnimportedLeafData`] may be removed for new major versions.
+/// Upgrades across major versions will require explicit logic to
+/// map the old struct to the new struct or vice versa.
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct LeafVersion {
+    /// Minor version - can interop with other versions with the same `major`.
+    minor: U16<LE>,
+
+    /// Major version - upgrading is incompatible.
+    major: U16<LE>,
+}
+
+impl LeafVersion {
+    /// Builds a new `LeafVersion`.
+    pub fn new(minor: u16, major: u16) -> Self {
+        Self { minor: minor.into(), major: major.into() }
+    }
+
+    /// Gets the minor version.
+    pub fn minor(&self) -> u16 {
+        self.minor.get()
+    }
+
+    /// Gets the major version.
+    pub fn major(&self) -> u16 {
+        self.major.get()
+    }
+}
+
+/// Identifies the version and layout of a leaf.
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct LeafHeader {
+    /// The version of the leaf structure.
+    leaf_version: LeafVersion,
+
+    /// Length of the public data.
+    pub_len: U16<LE>,
+
+    /// Length of the ciphertext data.
+    sec_len: U16<LE>,
+}
+
+impl LeafHeader {
+    /// Gets the length of the public data in the `UnimportedLeafData` `data` field.
+    pub fn pub_len(&self) -> u16 {
+        self.pub_len.get()
+    }
+
+    /// Gets the length of the ciphertext data in the `UnimportedLeafData` `data` field.
+    pub fn sec_len(&self) -> u16 {
+        self.pub_len.get()
+    }
+
+    /// Gets the leaf version.
+    pub fn leaf_version(&self) -> &LeafVersion {
+        &self.leaf_version
+    }
+}
+
+/// Returns the number of auxiliary hashes to include in requests that require them.
+///
+/// Depends on the tree parameters.
+pub fn path_auxiliary_hash_count(bits_per_level: u8, height: u8) -> Result<usize, Overflow> {
+    ((1usize.checked_shl(bits_per_level.into()).ok_or(Overflow)?) - 1)
+        .checked_mul(height.into())
+        .ok_or(Overflow)
+}
+
+/// Leaf data persisted off-GSC.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C, packed)] // The `packed` is required for DST IntoBytes at the moment.
+pub struct UnimportedLeafData {
+    header: LeafHeader,
+    /// HMAC for the leaf - covers head, iv, and payload, excluding the path hashes.
+    pub hmac: Hash,
+
+    /// IV used to calculate the HMAC.
+    pub iv: Iv,
+
+    /// Blob of remaining data. Has the following layout:
+    ///
+    /// ```
+    /// #[repr(C)]
+    /// struct Tail {
+    ///     pub_data: [u8; header.pub_len],
+    ///     cipher_text: [u8; header.sec_len],
+    ///     // For requests only (size expected external to this struct):
+    ///     path_hashes: [Hash; path_auxiliary_hash_count(bits_per_level, height)],
+    /// }
+    /// ```
+    pub data: [u8],
+}
+
+// Cannot `derive(Debug)` for `repr(packed)`
+impl std::fmt::Debug for UnimportedLeafData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnimportedLeafData")
+            .field("head", &self.header)
+            .field("hmac", &self.hmac)
+            .field("iv", &self.iv)
+            .field("data", &&self.data)
+            .finish()
+    }
+}
+
+/// Error in the consistency of sizes in an [`UnimportedLeafData`].
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum UnimportedLeafDataSizeError {
+    /// Bad leaf data size.
+    #[error("leaf data size invalid - got {pub_len} + {sec_len}, expected {total_received}")]
+    LeafDataSizes {
+        /// The length of public data reported in the invalid header.
+        pub_len: u16,
+
+        /// The length of ciphertext data reported in the invalid header.
+        sec_len: u16,
+
+        /// The total length of dynamic data in the invalid [`UnimportedLeafData`].
+        total_received: usize,
+    },
+
+    /// Trailing path hash sizes not divisible by the hash size.
+    #[error("remaining leaf data size not divisible by hash size: {size_for_hashes}")]
+    HashDataSizeNotDivisible {
+        /// The size in bytes remaining for hashes after subtracting public and secure lengths.
+        size_for_hashes: usize,
+    },
+
+    /// Trailing data for path hashes in the `UnimportedLeafData` wasn't the right size.
+    #[error(
+        "unexpected hash count in leaf data: got {num_hashes_got}, expected {num_hashes_expected}"
+    )]
+    HashDataLen {
+        /// The number of hashes present in the leaf data.
+        num_hashes_got: usize,
+
+        /// The number of expected hashes in the leaf based on the current tree parameters.
+        num_hashes_expected: usize,
+    },
+
+    /// Invalid tree parameters.
+    #[error("tried to check consistency with invalid tree params {0:?}")]
+    InvalidTreeParams(TreeParams),
+}
+
+impl UnimportedLeafData {
+    /// Gets the unimported leaf header.
+    pub fn header(&self) -> &LeafHeader {
+        &self.header
+    }
+
+    /// Gets the path hashes to fill in for a request.
+    ///
+    /// Returns `None` if the header does not have valid sizes.
+    /// Note that this will be `Some([])` for a self-consistent response message.
+    ///
+    /// If `check_consistency` returned `Ok` with `Some(TreeParams)`, then the length of the
+    /// returned slice will be the number of sibling hashes needed for a path in that tree.
+    pub fn path_hashes_mut(&mut self) -> Option<&mut [Hash]> {
+        let hashes_offset = usize::from(self.header.pub_len()) + usize::from(self.header.sec_len());
+        self.data
+            .get_mut(hashes_offset..)
+            .and_then(|hashes_bytes| <[Hash]>::mut_from_bytes(hashes_bytes).ok())
+    }
+
+    /// Checks the consistency of the unimported leaf data header against its dynamic size.
+    ///
+    /// `request_tree_params` should only be `Some` for request messages, which use path hashes.
+    pub fn check_consistency(
+        &self,
+        request_tree_params: Option<&TreeParams>,
+    ) -> Result<(), UnimportedLeafDataSizeError> {
+        use UnimportedLeafDataSizeError::*;
+        let total_received = self.data.len();
+        let pub_len = self.header.pub_len.get();
+        let sec_len = self.header.sec_len.get();
+        let num_expected_hashes = request_tree_params
+            .map(|&tree_params| {
+                path_auxiliary_hash_count(tree_params.bits_per_level, tree_params.height)
+                    .map_err(|Overflow| InvalidTreeParams(tree_params))
+            })
+            .transpose()?;
+
+        let dyn_leaf_data_size = usize::from(pub_len) + usize::from(sec_len);
+        match (total_received.checked_sub(dyn_leaf_data_size), num_expected_hashes) {
+            (Some(0), None) => Ok(()),
+            (Some(1..), None) | (None, _) => {
+                Err(LeafDataSizes { pub_len, sec_len, total_received })
+            }
+            (Some(size_for_hashes), Some(_)) if size_for_hashes % size_of::<Hash>() != 0 => {
+                Err(HashDataSizeNotDivisible { size_for_hashes })
+            }
+            (Some(size_for_hashes), Some(num_hashes_expected)) => {
+                let num_hashes_got = size_for_hashes / size_of::<Hash>();
+                if num_hashes_got == num_hashes_expected {
+                    Ok(())
+                } else {
+                    Err(HashDataLen { num_hashes_got, num_hashes_expected })
+                }
+            }
+        }
+    }
+}
+
+/// Unencrypted part of the leaf data.
+#[derive(Clone, Debug, IntoBytes, Immutable, KnownLayout, TryFromBytes, Unaligned)]
+#[repr(C)]
+pub struct LeafPublicData {
+    /// The label of the leaf.
+    pub label: Label,
+
+    /// The delay schedule for the new leaf.
+    pub delay_schedule: DelaySchedule,
+
+    /// The last access of the tree.
+    pub last_access: Timestamp,
+
+    /// The number of attempted auths against this leaf since the last successful auth.
+    ///
+    /// Capped at `u32::MAX`.
+    pub attempt_count: U32<LE>,
+
+    /// The PCR criteria used to validate a leaf.
+    pub valid_pcr_criteria: ValidPcrCriteria,
+
+    /// Timestamp when the leaf data expires and authentication is always rejected.
+    ///
+    /// All zeroes if expiration will not take place.
+    pub expiration: Timestamp,
+
+    /// The delay from creation of this leaf to when its expiration.
+    ///
+    /// 0 indicates no expiration will take place.
+    ///
+    /// Kept here to update `expiration` after resetting a leaf.
+    pub expiration_delay: TimeDiff,
+
+    /// The type of PinWeaver leaf.
+    pub leaf_type: LeafType,
+}
+
+/// A single entry in a delay schedule table.
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct DelayScheduleEntry {
+    /// The number of attempts taken before this entry takes effect.
+    pub attempt_count: U32<LE>,
+
+    /// The time interval to wait after `attempt_count` attempts, in seconds.
+    /// Use `u32::MAX` to block all subsequent attempts.
+    pub time_diff: TimeDiff,
+}
+
+/// The number of delay schedule entries allowed for a PinWeaver leaf.
+pub const DELAY_SCHEDULE_ENTRIES: usize = 16;
+
+/// The delay schedule for a PinWeaver leaf upon unsuccessful auth.
+///
+/// `attempt_count` and `time_diff` must not be less than previous entries.
+pub type DelaySchedule = [DelayScheduleEntry; DELAY_SCHEDULE_ENTRIES];
+
+/// A label in the tree. Synonymous with "path" - used interchangeably.
+pub type Label = U64<LE>;
+
+/// Contents of a PinWeaver secret.
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(transparent)]
+pub struct Secret(pub [u8; 32]);
+
+/// A hash in the PinWeaver tree. Unrelated to the size of `Secret`s.
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(transparent)]
+pub struct Hash(pub [u8; 32]);
+
+/// The block size of encryption used for wrapped leaf data.
+const WRAP_BLOCK_SIZE: usize = 16;
+
+/// An IV for a PinWeaver leaf's HMAC calculation.
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(transparent)]
+pub struct Iv(pub [u8; WRAP_BLOCK_SIZE]);
+
+/// Time difference in seconds.
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(transparent)]
+pub struct TimeDiff(U32<LE>);
+
+impl TimeDiff {
+    /// Used to block all subsequent attempts in a [`DelayScheduleEntry`].
+    pub const BLOCK_ATTEMPTS: Self = Self::from_secs(u32::MAX);
+
+    /// Converts from seconds.
+    pub const fn from_secs(secs: u32) -> Self {
+        Self(U32::new(secs))
+    }
+
+    /// Converts to seconds.
+    pub const fn to_secs(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl From<TimeDiff> for std::time::Duration {
+    fn from(value: TimeDiff) -> Self {
+        std::time::Duration::from_secs(value.to_secs().into())
+    }
+}
+
+/// The maximum number of criteria for valid PCR values.
+pub const MAX_PCR_CRITERIA_COUNT: usize = 2;
+
+/// The set of PCR criteria used to validate a leaf.
+pub type ValidPcrCriteria = [ValidPcrValue; MAX_PCR_CRITERIA_COUNT];
+
+/// The type of PinWeaver leaf. As of writing, only `Normal` is supported by this version.
+#[derive(Clone, Copy, Debug, FromZeros, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(u8)]
+pub enum LeafType {
+    /// A normal leaf.
+    Normal = 0,
+
+    /// A biometrics leaf.
+    Biometrics = 1,
+}
+
+/// Represents a set of PCR values hashed into a single digest.
+///
+/// This is a criterion that can be added to a leaf. A leaf is only valid if at least one
+/// of the `ValidPcrValue` criteria it contains is satisfied.
+#[derive(Clone, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct ValidPcrValue {
+    /// The set of PCR indexes that have to pass the validation.
+    pub bitmask: [u8; 2],
+
+    /// The hash digest of the PCR values contained in the bitmask.
+    pub digest: Hash,
+}
+
+/// Represents a notion of time for PinWeaver.
+///
+/// Note that this is not wall clock time.
+#[derive(Clone, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct Timestamp {
+    /// Number of boots.
+    ///
+    /// Used to track if the GSC has rebooted since `timer_value` was recorded.
+    pub boot_count: U32<LE>,
+
+    /// Seconds since boot.
+    pub timer_value: U64<LE>,
+}
