@@ -26,16 +26,16 @@ use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
-use tipc::TipcError;
 use tipc::{
     service_dispatcher, ConnectResult, Deserialize, Handle, Manager, MessageResult, PortCfg,
     Serialize, Serializer, UnbufferedService, Uuid,
 };
+use tipc::{wrap_service, TipcError};
 use trusty_sys::Error;
 
 const GSC_SERVICE_PORT: &str = "com.android.trusty.rust.GscAppService.V1";
 const TUNNEL_SERVICE_PORT: &str = "com.android.trusty.rust.GscTunnelService.V1";
-const BP_SERVICE_PORT: &str = "com.android.trusty.rust.BootParamsService.V1";
+const BP_SERVICE_PORT: &str = "com.android.trusty.rust.BootParamsService.V1.bnd";
 
 /// A GscProxy implements the IGsc binder interface and forwards requests from trusty apps to the
 /// GSC over a GscTunnel.
@@ -152,15 +152,19 @@ impl GscTunnel {
     }
 }
 
+wrap_service!(GscService(RpcServer: UnbufferedService));
+wrap_service!(BpService(RpcServer: UnbufferedService));
+
 service_dispatcher! {
     enum GscDispatcher {
-        RpcServer,
+        GscService,
         GscTunnel,
+        BpService,
     }
 }
 
 const PORT_COUNT: usize = 3;
-const CONNECTION_COUNT: usize = 4;
+const CONNECTION_COUNT: usize = 8;
 
 pub fn init_and_start_loop() -> Result<(), TipcError> {
     trusty_log::init();
@@ -176,7 +180,7 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
     let app_cfg =
         PortCfg::new(GSC_SERVICE_PORT).expect("Could not create port config").allow_ta_connect();
     dispatcher
-        .add_service(Rc::new(gsc_rpc_server), app_cfg)
+        .add_service(Rc::new(GscService(gsc_rpc_server)), app_cfg)
         .expect("Could not add GSC service to dispatcher");
 
     let tunnel_cfg =
@@ -190,7 +194,7 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
     let bp = boot_params_svc::create_boot_params_service();
     let bp_rpc_server = RpcServer::new_per_session(move |_uuid| Some(bp.as_binder()));
     dispatcher
-        .add_service(Rc::new(bp_rpc_server), bp_cfg)
+        .add_service(Rc::new(BpService(bp_rpc_server)), bp_cfg)
         .expect("Could not add bp service to dispatcher");
 
     Manager::<_, _, PORT_COUNT, CONNECTION_COUNT>::new_with_dispatcher(dispatcher, [])

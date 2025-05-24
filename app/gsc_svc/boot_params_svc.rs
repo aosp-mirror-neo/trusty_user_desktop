@@ -31,6 +31,15 @@ impl IBootParams for Server {
     fn getEarlyEntropy(&self) -> BinderResult<Vec<u8>> {
         Ok(self.params.gsc_boot_params.early_entropy.to_vec())
     }
+    fn getCdiSeal(&self) -> BinderResult<Vec<u8>> {
+        Ok(self.params.dice.cdi_seal.to_vec())
+    }
+    fn getCdiAttest(&self) -> BinderResult<Vec<u8>> {
+        Ok(self.params.dice.cdi_attest.to_vec())
+    }
+    fn getAuthTokenKeySeed(&self) -> BinderResult<Vec<u8>> {
+        Ok(self.params.gsc_boot_params.auth_token_key_seed.to_vec())
+    }
 }
 
 impl Server {

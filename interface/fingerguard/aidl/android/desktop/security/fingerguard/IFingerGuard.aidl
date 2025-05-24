@@ -16,44 +16,65 @@
 
 package android.desktop.security.fingerguard;
 
+import android.desktop.security.fingerguard.AuthenticationResult;
 import android.desktop.security.fingerguard.EnrollmentResult;
 import android.desktop.security.fingerguard.HandshakeResponse;
+import android.desktop.security.fingerguard.PrepareAuthSessionResponse;
 import android.desktop.security.fingerguard.PrepareEnrollSessionResponse;
+import android.desktop.security.fingerguard.SensorUserPair;
 import android.desktop.security.fingerguard.SessionResponse;
 import android.desktop.security.fingerguard.HardwareAuthToken;
 
 interface IFingerGuard {
-    /** Return the HandshakeResponse.
-     * The pairing key, PK, is derived from ECDH key agreement.
-     * The client would use HandshakeResponse to derive
-     * the same PK.
-     * Once the PK is established, it will be persisted and
-     * block further initHandshake calls until the device is
-     * powerwashed.
+    /**
+     * Return the HandshakeResponse.
+     * The pairing key, PK, is derived from ECDH key agreement. The client
+     * would use HandshakeResponse to derive the same PK.
+     * Once the PK is established, it will be persisted and block further
+     * initHandshake calls until the device is powerwashed.
      */
-    HandshakeResponse initHandshake(in byte[] client_public_key);
-    /** Return the nonce for a common shared session key and
-     * the session key encrypted TPM seed.
-     * The session key is derived from the pairing key, plus
-     * the client nonce and the returned nonce.
+    HandshakeResponse initHandshake(in byte[] clientPublicKey);
+    /**
+     * Return the nonce for a common shared session key and the session key
+     * encrypted TPM seed.
+     * The session key is derived from the pairing key, plus the client nonce
+     * and the returned nonce.
      */
-    SessionResponse newSession(in byte[] client_nonce);
-    /** Create an enroll session for a given pair of (user, sensor).
-     * A nonce and a session counter will be returned, along with the associated MAC.
-     * The details of the MAC computation is up to the agreement between FingerGuard
-     * and its client.
+    SessionResponse newSession(in byte[] clientNonce);
+    /**
+     * Create an enroll session for a given pair of (sensor, user).
+     * A nonce and a session counter will be returned, along with the
+     * associated MAC. The details of the MAC computation is up to the
+     * agreement between FingerGuard and its client.
      */
-    PrepareEnrollSessionResponse prepareEnrollSession(in int sensorId, in int userId, in HardwareAuthToken hat);
-    /** Finish a created enroll session.
-     * The associated AuthenticatorID will be updated with a successful enrollment.
+    PrepareEnrollSessionResponse prepareEnrollSession(in SensorUserPair sensorUserPair, in HardwareAuthToken hat);
+    /**
+     * Finish a created enroll session.
+     * The associated AuthenticatorID will be updated with a successful
+     * enrollment.
      */
-    void finishEnrollSession(in int sensorId, in int userId, in EnrollmentResult result);
-    /** Return the AuthenticatorId associated with
-     * the (user, sensor) pair.
+    void finishEnrollSession(in SensorUserPair sensorUserPair, in EnrollmentResult result);
+    /**
+     * Create an auth session for a given pair of (sensor, user).
+     * A nonce and a session counter will be returned, along with the
+     * associated MAC. The details of the MAC computation is up to the
+     * agreement between FingerGuard and its client.
      */
-    long getAuthenticatorId(in int sensorId, in int userId);
-     /** Return a newly generated AuthenticatorId associated with
-     * the (user, sensor) pair.
+    PrepareAuthSessionResponse prepareAuthSession(in SensorUserPair sensorUserPair);
+    /**
+     * Finish a created auth session.
+     * If the authentication succeeds, return a valid auth token by attaching a
+     * valid mac to tbsHat (to-be-signed HardwareAuthToken). Otherwise, return
+     * an empty token.
      */
-    long newAuthenticatorId(in int sensorId, in int userId);
+    HardwareAuthToken finishAuthSession(in SensorUserPair sensorUserPair, in AuthenticationResult result, in HardwareAuthToken tbsHat);
+    /**
+     * Return the AuthenticatorId associated with the (sensor, user) pair.
+     */
+    long getAuthenticatorId(in SensorUserPair sensorUserPair);
+    /**
+     * Return a newly generated AuthenticatorId associated with the
+     * (sensor, user) pair.
+     */
+    long newAuthenticatorId(in SensorUserPair sensorUserPair);
 }

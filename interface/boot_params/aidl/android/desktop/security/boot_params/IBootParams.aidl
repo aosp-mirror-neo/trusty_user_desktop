@@ -27,4 +27,25 @@ interface IBootParams {
      *
      */
     byte[] getEarlyEntropy();
+    /**
+     * Requests the CDI sealing key.
+     *
+     * @return             The CDI sealing key.
+     *
+     */
+    byte[] getCdiSeal();
+    /**
+     * Requests the CDI attestation key.
+     *
+     * @return             The CDI attestation key.
+     *
+     */
+    byte[] getCdiAttest();
+    /**
+     * Requests the auth token key seed.
+     *
+     * @return             The auth token key seed.
+     *
+     */
+    byte[] getAuthTokenKeySeed();
 }
