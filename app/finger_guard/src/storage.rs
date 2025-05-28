@@ -112,9 +112,13 @@ impl SensorStateIndex {
     pub fn user_id_be_bytes(&self) -> [u8; 4] {
         self.user_id.to_be_bytes()
     }
-    /// The file name used to store persistent state associated with this index.
+    /// The file name for the authenticator id with this index.
     pub fn authenticator_id_file_name(&self) -> String {
         format!("s{}.u{}.authenticator_id", self.sensor_id, self.user_id)
+    }
+    /// The file name for the secure user id with this index.
+    pub fn secure_user_id_file_name(&self) -> String {
+        format!("s{}.u{}.secure_user_id", self.sensor_id, self.user_id)
     }
 }
 
@@ -134,6 +138,26 @@ impl AuthenticatorId {
 }
 
 impl PersistedState for AuthenticatorId {}
+
+#[derive(Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
+#[repr(C)]
+/// Newtype that encapsulates a secure user id.
+pub struct SecureUserId(u64);
+
+impl From<i64> for SecureUserId {
+    fn from(value: i64) -> Self {
+        Self(value as u64)
+    }
+}
+
+impl SecureUserId {
+    /// Convert the id to an i64.
+    pub fn as_i64(&self) -> i64 {
+        self.0 as i64
+    }
+}
+
+impl PersistedState for SecureUserId {}
 
 #[derive(Default, FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
