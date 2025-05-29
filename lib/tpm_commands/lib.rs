@@ -43,7 +43,7 @@ pub enum AlignedZeroU32 {
 }
 
 /// An unaligned wrapper around [`AlignedZeroU32`]
-/// TODO: https://github.com/google/zerocopy/issues/2273 - Replace with zerocopy implementation
+/// TODO: <https://github.com/google/zerocopy/issues/2273> - Replace with zerocopy implementation
 #[repr(C, packed)]
 #[derive(
     Clone,
@@ -65,7 +65,7 @@ pub struct ZeroU32(AlignedZeroU32);
     Clone, Copy, Debug, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq, Unaligned,
 )]
 #[repr(C)]
-// TODO: https://github.com/kupiakos/open-enum/issues/27 - use open_enum when it supports U32<BE>
+// TODO: <https://github.com/kupiakos/open-enum/issues/27> - use open_enum when it supports U32<BE>
 pub struct UpdateStatus(pub U32<BE>);
 
 impl UpdateStatus {
