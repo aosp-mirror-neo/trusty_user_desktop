@@ -251,13 +251,10 @@ impl FingerGuardService {
                 &sensor_state_index,
                 &session_counter,
             )?;
-            // Note that we don't use the constant time comparison for mac check.
-            // because
-            // 1. The attacker can't retry the mac: the session has closed regardless
-            //    the verification result. So the attack surface is non-existent.
-            // 2. It is complex to convince the Rust compiler not to optimize
-            //    the plain for loop over two slices.
-            if hmac != result.mac.as_slice() {
+            // Use a constant-time comparison to avoid timing attacks against
+            // the session hmac. This would be difficult to exploit anyway
+            // because retries are not possible, but better safe than sorry.
+            if !openssl::memcmp::eq(&hmac, result.mac.as_slice()) {
                 return Err(ServiceError::BadMac("enrollment result"));
             }
             // Generate and save a new AuthenticatorId.
@@ -362,8 +359,10 @@ impl FingerGuardService {
                 &sensor_state_index,
                 &session_counter,
             )?;
-            // Note that we don't use the constant time comparison for mac check.
-            if hmac != result.mac.as_slice() {
+            // Use a constant-time comparison to avoid timing attacks against
+            // the session hmac. This would be difficult to exploit anyway
+            // because retries are not possible, but better safe than sorry.
+            if !openssl::memcmp::eq(&hmac, result.mac.as_slice()) {
                 return Err(ServiceError::BadMac("authentication result"));
             }
             // TODO(b/419332065): add a valid mac to HAT.
