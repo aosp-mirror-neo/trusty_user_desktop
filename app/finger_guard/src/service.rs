@@ -70,7 +70,7 @@ pub struct FingerGuardService {
     init_params: Mutex<Option<InitParams>>,
     sk: Mutex<Option<FixedSizeEntropy>>,
     sensor_session: Mutex<SensorSession>,
-    _auth_token_key: OnceCell<FixedSizeEntropy>,
+    auth_token_key: OnceCell<FixedSizeEntropy>,
 }
 
 impl FingerGuardService {
@@ -83,13 +83,12 @@ impl FingerGuardService {
             ),
             sk: Mutex::new(None),
             sensor_session: Mutex::new(SensorSession::default()),
-            _auth_token_key: OnceCell::new(),
+            auth_token_key: OnceCell::new(),
         }
     }
 
-    #[allow(dead_code)] // Remove once this is used.
     fn get_auth_token_key(&self) -> ServiceResult<&FixedSizeEntropy> {
-        self._auth_token_key.get_or_try_init(|| keymint::get_auth_token_key())
+        self.auth_token_key.get_or_try_init(|| keymint::get_auth_token_key())
     }
 
     fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<HandshakeResponse> {
@@ -168,7 +167,6 @@ impl FingerGuardService {
         Ok(SessionResponse { nonce, wrappedTpmSeed: wrapped_tpm_seed, iv, tag })
     }
 
-    // TODO(b/401302256): Verify |hat| before start the session.
     // TODO(b/401303592): Clear sensor lockout with the HAT verification.
     fn prepare_enroll_session(
         &self,
@@ -188,6 +186,16 @@ impl FingerGuardService {
             .map_err(|_| ServiceError::LockAcquire { name: "sensor_session", mode: "write" })?;
         if *sensor_session != SensorSession::NONE {
             return Err(ServiceError::StateAlreadyExists("ongoing sensor session"));
+        }
+        let auth_token_key = self.get_auth_token_key()?;
+
+        // TODO(b/401302256): Check the challenge in HAT matches the previously
+        //                    generated one and revoke the generated challenge
+        //                    once HAT verification is done. This effectively
+        //                    denies any retry of MAC probing.
+        let mac = crypto::hardware_auth_token_mac(&auth_token_key, hat)?;
+        if !openssl::memcmp::eq(&mac, hat.mac.as_slice()) {
+            return Err(ServiceError::BadMac("hardware auth token"));
         }
 
         // Start a new enroll session.
@@ -285,7 +293,6 @@ impl FingerGuardService {
         if *sensor_session != SensorSession::NONE {
             return Err(ServiceError::StateAlreadyExists("ongoing sensor session"));
         }
-
         // Start a new auth session.
         let stored_counter = SensorSessionCounter::load().unwrap_or_default();
         let session_counter = stored_counter.increment();
@@ -465,6 +472,7 @@ impl IFingerGuard for FingerGuardService {
 #[cfg(test)]
 mod tests {
     use crate::crypto::{self, FixedSizeEntropy, NIST_P256_CURVE_NAME};
+    use crate::keymint;
     use crate::rng;
     use fingerguard_api::aidl::{
         AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
@@ -518,6 +526,7 @@ mod tests {
 
     #[test]
     fn everything_with_a_shared_session() {
+        let auth_token_key = keymint::get_auth_token_key().unwrap();
         let pk = init_service();
         let client_nonce = rng::generate_random_vec::<32>();
 
@@ -557,8 +566,7 @@ mod tests {
         .is_err());
 
         // Ensure newSession only allows one successful invocation per boot.
-        let client_nonce = vec![0u8; 32];
-        assert!(service.newSession(client_nonce.as_slice()).is_err());
+        assert!(service.newSession(vec![0u8; 32].as_slice()).is_err());
 
         let sensor_id = 1_i32;
         let user_id = 1_i32;
@@ -567,8 +575,7 @@ mod tests {
         // ---- Start Enrollment Test ----
 
         let secure_user_id = 0x1337BEEF as i64;
-        // TODO(b/401302256): use a valid HAT.
-        let hat = HardwareAuthToken {
+        let mut hat = HardwareAuthToken {
             version: 0,
             challenge: 0,
             userId: secure_user_id,
@@ -577,6 +584,7 @@ mod tests {
             timestamp: 0,
             mac: vec![],
         };
+        hat.mac = Vec::from(crypto::hardware_auth_token_mac(&auth_token_key, &hat).unwrap());
         let session_resp = service.prepareEnrollSession(&sup, &hat).unwrap();
         assert_eq!(session_resp.sessionCounter, 1);
         let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();

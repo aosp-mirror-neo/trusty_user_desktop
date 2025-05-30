@@ -29,7 +29,7 @@ parcelable HardwareAuthToken {
 
     long authenticatorId;
 
-    long authenticatorType = 0;
+    int authenticatorType = 0;
 
     long timestamp;
 
@@ -44,7 +44,7 @@ parcelable HardwareAuthToken {
      * are represented as unsigned values, the full width of the type.  The challenge, userId and
      * authenticatorId values are in machine order, but authenticatorType and timestamp are in
      * network order (big-endian).  This odd construction is compatible with the hw_auth_token_t
-     * structure,
+     * structure.
      *
      * Note that mac can be empty indicates the auth token is not yet signed and not valid.
      */
