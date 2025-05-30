@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::clock;
 use crate::crypto::{self, FixedSizeEntropy, ENTROPY_SIZE};
 use crate::error::{ServiceError, ServiceResult};
 use crate::keymint;
@@ -348,8 +349,7 @@ impl FingerGuardService {
             userId: secure_user_id.as_i64(),
             authenticatorId: authenticator_id.as_i64(),
             authenticatorType: 2, // Fingerprint
-            // TODO(b/419332065): Use the Trusty API gettime().
-            timestamp: 0,
+            timestamp: clock::elapsed_real_time_milli()?,
             mac: vec![],
         };
         // If enrollment succeeds, compute and compare the mac.
@@ -641,6 +641,7 @@ mod tests {
         assert_eq!(valid_hat.challenge, challenge);
         assert_eq!(valid_hat.userId, secure_user_id);
         assert_eq!(valid_hat.authenticatorId, new_auth_id);
+        assert_ne!(valid_hat.timestamp, 0);
         // TODO(b/419332065): Check timestamp and mac.
 
         // ---- End Authentication Test ----
