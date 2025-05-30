@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::clock;
 use crate::crypto::{self, FixedSizeEntropy, ENTROPY_SIZE};
 use crate::error::{ServiceError, ServiceResult};
 use crate::keymint;
@@ -62,6 +63,7 @@ enum SensorSession {
     },
     AUTH {
         nonce: FixedSizeEntropy,
+        challenge: i64,
     },
 }
 
@@ -278,6 +280,7 @@ impl FingerGuardService {
     fn prepare_auth_session(
         &self,
         sensor_user_pair: &SensorUserPair,
+        challenge: i64,
     ) -> ServiceResult<PrepareAuthSessionResponse> {
         let sk = self
             .sk
@@ -299,7 +302,7 @@ impl FingerGuardService {
         session_counter.save()?;
 
         let nonce = rng::generate_random_buffer::<32>();
-        *sensor_session = SensorSession::AUTH { nonce };
+        *sensor_session = SensorSession::AUTH { nonce, challenge };
 
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
         let hmac = crypto::sensor_session_message_hmac(
@@ -321,7 +324,6 @@ impl FingerGuardService {
         &self,
         sensor_user_pair: &SensorUserPair,
         result: &AuthenticationResult,
-        tbs_hat: &HardwareAuthToken,
     ) -> ServiceResult<HardwareAuthToken> {
         let sk = self
             .sk
@@ -334,7 +336,7 @@ impl FingerGuardService {
             .sensor_session
             .try_lock()
             .map_err(|_| ServiceError::LockAcquire { name: "sensor_session", mode: "write" })?;
-        let SensorSession::AUTH { nonce } = *sensor_session else {
+        let SensorSession::AUTH { nonce, challenge } = *sensor_session else {
             return Err(ServiceError::StateUnavailable("ongoing auth session"));
         };
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
@@ -348,12 +350,11 @@ impl FingerGuardService {
         let secure_user_id = SecureUserId::load_from(&sid_file_name)?;
         let hat = HardwareAuthToken {
             version: 0,
-            challenge: tbs_hat.challenge,
+            challenge: challenge,
             userId: secure_user_id.as_i64(),
             authenticatorId: authenticator_id.as_i64(),
             authenticatorType: 2, // Fingerprint
-            // TODO(b/419332065): Use the Trusty API gettime().
-            timestamp: 0,
+            timestamp: clock::elapsed_real_time_milli()?,
             mac: vec![],
         };
         // If enrollment succeeds, compute and compare the mac.
@@ -440,8 +441,9 @@ impl IFingerGuard for FingerGuardService {
     fn prepareAuthSession(
         &self,
         sensor_user_pair: &SensorUserPair,
+        challenge: i64,
     ) -> binder::Result<PrepareAuthSessionResponse> {
-        FingerGuardService::prepare_auth_session(&self, sensor_user_pair)
+        FingerGuardService::prepare_auth_session(&self, sensor_user_pair, challenge)
             .inspect_err(|e| error!("prepareAuthSession failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
@@ -449,9 +451,8 @@ impl IFingerGuard for FingerGuardService {
         &self,
         sensor_user_pair: &SensorUserPair,
         result: &AuthenticationResult,
-        tbs_hat: &HardwareAuthToken,
     ) -> binder::Result<HardwareAuthToken> {
-        FingerGuardService::finish_auth_session(&self, sensor_user_pair, result, tbs_hat)
+        FingerGuardService::finish_auth_session(&self, sensor_user_pair, result)
             .inspect_err(|e| error!("finishAuthSession failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
@@ -617,7 +618,8 @@ mod tests {
         // ---- End Enrollment Test ----
 
         // ---- Start Authentication Test ----
-        let session_resp = service.prepareAuthSession(&sup).unwrap();
+        let challenge = 0xc4a11e49e as i64;
+        let session_resp = service.prepareAuthSession(&sup, challenge).unwrap();
         assert_eq!(session_resp.sessionCounter, 3);
         let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
         hmac_gen.update(&session_resp.nonce).unwrap();
@@ -627,16 +629,6 @@ mod tests {
         let hmac = hmac_gen.complete().unwrap();
         assert_eq!(hmac.to_vec(), session_resp.mac);
 
-        let challenge = 0xc4a11e49e as i64;
-        let tbs_hat = HardwareAuthToken {
-            version: 0,
-            challenge: challenge,
-            userId: 0,
-            authenticatorId: 0,
-            authenticatorType: 0,
-            timestamp: 0,
-            mac: vec![],
-        };
         let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
         hmac_gen.update(&session_resp.nonce).unwrap();
         hmac_gen.update(&user_id.to_be_bytes()).unwrap();
@@ -644,11 +636,12 @@ mod tests {
         hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
         let hmac = hmac_gen.complete().unwrap();
         let auth_result = AuthenticationResult { authenticated: true, mac: hmac.to_vec() };
-        let valid_hat = service.finishAuthSession(&sup, &auth_result, &tbs_hat).unwrap();
+        let valid_hat = service.finishAuthSession(&sup, &auth_result).unwrap();
         assert_eq!(valid_hat.challenge, challenge);
         assert_eq!(valid_hat.userId, secure_user_id);
         assert_eq!(valid_hat.authenticatorId, new_auth_id);
-        // TODO(b/419332065): Check timestamp and mac.
+        assert_ne!(valid_hat.timestamp, 0);
+        // TODO(b/419332065): Check mac.
 
         // ---- End Authentication Test ----
     }

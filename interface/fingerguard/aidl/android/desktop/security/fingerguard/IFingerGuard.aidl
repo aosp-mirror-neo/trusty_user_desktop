@@ -60,14 +60,13 @@ interface IFingerGuard {
      * associated MAC. The details of the MAC computation is up to the
      * agreement between FingerGuard and its client.
      */
-    PrepareAuthSessionResponse prepareAuthSession(in SensorUserPair sensorUserPair);
+    PrepareAuthSessionResponse prepareAuthSession(in SensorUserPair sensorUserPair, in long challenge);
     /**
      * Finish a created auth session.
-     * If the authentication succeeds, return a valid auth token by attaching a
-     * valid mac to tbsHat (to-be-signed HardwareAuthToken). Otherwise, return
-     * an empty token.
+     * If the authentication succeeds, return a valid auth token contains
+     * the challenge in prepareAuthSession. Otherwise, return an empty token.
      */
-    HardwareAuthToken finishAuthSession(in SensorUserPair sensorUserPair, in AuthenticationResult result, in HardwareAuthToken tbsHat);
+    HardwareAuthToken finishAuthSession(in SensorUserPair sensorUserPair, in AuthenticationResult result);
     /**
      * Return the AuthenticatorId associated with the (sensor, user) pair.
      */
