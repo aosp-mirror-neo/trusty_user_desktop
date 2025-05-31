@@ -18,6 +18,7 @@
 
 use crate::error::{ServiceError, ServiceResult};
 use crate::storage::{SensorSessionCounter, SensorStateIndex};
+use fingerguard_api::aidl::HardwareAuthToken::HardwareAuthToken;
 use openssl::bn::BigNumContext;
 use openssl::derive::Deriver;
 use openssl::ec::{EcGroup, EcKey, EcPoint, PointConversionForm};
@@ -147,5 +148,30 @@ pub fn sensor_session_message_hmac(
     generator.update(sender_name)?;
     generator.update(session_name)?;
     generator.update(&session_counter.as_i64().to_be_bytes())?;
+    Ok(generator.complete()?)
+}
+
+/// Helper to compute the MAC for a given HardwareAuthToken.
+/// The MAC is a 32 bytes HMAC-SHA256 with the auth token signing key over the
+/// following string
+///         version || challenge || user_id || authenticator_id || authenticator_type || timestamp
+///
+/// where ``||'' represents concatenation, the leading version is a single
+/// byte, and all integers are represented as unsigned values, the full width
+/// of the type.  The challenge, userId and authenticatorId values are in
+/// machine order, but authenticatorType and timestamp are in network order
+/// (big-endian). This odd construction is compatible with the hw_auth_token_t
+/// structure.
+pub fn hardware_auth_token_mac(
+    key: &FixedSizeEntropy,
+    hat: &HardwareAuthToken,
+) -> ServiceResult<FixedSizeEntropy> {
+    let mut generator = HmacGenerator::new(key)?;
+    generator.update(&hat.version.to_ne_bytes())?;
+    generator.update(&hat.challenge.to_ne_bytes())?;
+    generator.update(&hat.userId.to_ne_bytes())?;
+    generator.update(&hat.authenticatorId.to_ne_bytes())?;
+    generator.update(&hat.authenticatorType.to_be_bytes())?;
+    generator.update(&hat.timestamp.to_be_bytes())?;
     Ok(generator.complete()?)
 }
