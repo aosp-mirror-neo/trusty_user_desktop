@@ -34,6 +34,8 @@ pub enum ServiceError {
     ZcConvert(&'static str),
     #[error("{0}: {1:?}")]
     TipcError(&'static str, tipc::TipcError),
+    #[error("Trusty system api {0} returns an error code: {1}")]
+    TrustySysRcError(&'static str, i64),
 
     // Errors from interacting with keymint.
     #[error("Keymint {cmd} returned an error code: {code}")]

@@ -17,6 +17,8 @@
 //! Cryptographic operations used by the finger guard service.
 
 use crate::error::{ServiceError, ServiceResult};
+use crate::storage::{SensorSessionCounter, SensorStateIndex};
+use fingerguard_api::aidl::HardwareAuthToken::HardwareAuthToken;
 use openssl::bn::BigNumContext;
 use openssl::derive::Deriver;
 use openssl::ec::{EcGroup, EcKey, EcPoint, PointConversionForm};
@@ -67,6 +69,16 @@ pub fn perform_ecdh(
     Ok(pk)
 }
 
+pub enum MessageSender {
+    FINGERGUARD,
+    FPMCU,
+}
+
+pub enum SensorSessionType {
+    ENROLL,
+    AUTH,
+}
+
 /// Generator which can consume bytes and produce an HMAC.
 ///
 /// The HMACs used by finger guard are based on SHA-256 hashes.
@@ -106,4 +118,60 @@ impl HmacGenerator {
         generator.update(buffer)?;
         Ok(generator.complete()?)
     }
+}
+
+/// Helper to compute the HMAC for the enrollment/authentication
+/// session messages from this service or from the sensor.
+pub fn sensor_session_message_hmac(
+    key: &FixedSizeEntropy,
+    nonce: &FixedSizeEntropy,
+    sender: MessageSender,
+    session_type: SensorSessionType,
+    ssi: &SensorStateIndex,
+    session_counter: &SensorSessionCounter,
+) -> ServiceResult<FixedSizeEntropy> {
+    let sender_name: &[u8] = match sender {
+        MessageSender::FINGERGUARD => b"fingerguard",
+        MessageSender::FPMCU => b"fpmcu",
+    };
+    let session_name: &[u8] = match session_type {
+        SensorSessionType::ENROLL => b"enroll",
+        SensorSessionType::AUTH => b"auth",
+    };
+    //
+    // Compute mac as HMAC_SHA256(key, msg) where
+    // msg = nonce || user_id || sender_name || session_name || session_counter
+    //
+    let mut generator = HmacGenerator::new(key)?;
+    generator.update(nonce.as_slice())?;
+    generator.update(&ssi.user_id_be_bytes())?;
+    generator.update(sender_name)?;
+    generator.update(session_name)?;
+    generator.update(&session_counter.as_i64().to_be_bytes())?;
+    Ok(generator.complete()?)
+}
+
+/// Helper to compute the MAC for a given HardwareAuthToken.
+/// The MAC is a 32 bytes HMAC-SHA256 with the auth token signing key over the
+/// following string
+///         version || challenge || user_id || authenticator_id || authenticator_type || timestamp
+///
+/// where ``||'' represents concatenation, the leading version is a single
+/// byte, and all integers are represented as unsigned values, the full width
+/// of the type.  The challenge, userId and authenticatorId values are in
+/// machine order, but authenticatorType and timestamp are in network order
+/// (big-endian). This odd construction is compatible with the hw_auth_token_t
+/// structure.
+pub fn hardware_auth_token_mac(
+    key: &FixedSizeEntropy,
+    hat: &HardwareAuthToken,
+) -> ServiceResult<FixedSizeEntropy> {
+    let mut generator = HmacGenerator::new(key)?;
+    generator.update(&hat.version.to_ne_bytes())?;
+    generator.update(&hat.challenge.to_ne_bytes())?;
+    generator.update(&hat.userId.to_ne_bytes())?;
+    generator.update(&hat.authenticatorId.to_ne_bytes())?;
+    generator.update(&hat.authenticatorType.to_be_bytes())?;
+    generator.update(&hat.timestamp.to_be_bytes())?;
+    Ok(generator.complete()?)
 }
