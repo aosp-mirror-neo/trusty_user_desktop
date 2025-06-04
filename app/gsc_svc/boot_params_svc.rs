@@ -19,6 +19,7 @@ use android_desktop_security_boot_params::aidl::android::desktop::security::boot
 use android_desktop_security_boot_params::aidl::android::desktop::security::boot_params::IBootParams::BnBootParams;
 use binder::{BinderFeatures, Interface, Result as BinderResult, Strong};
 use boot_params::BootParams;
+#[cfg(not(feature = "builtin-bcc"))]
 use vmm_obj::get_vmm_obj;
 
 pub struct Server {
@@ -42,7 +43,16 @@ impl IBootParams for Server {
     }
 }
 
+#[cfg(feature = "builtin-bcc")]
+impl Default for Server {
+    /// Create a boot params struct from constant data.
+    fn default() -> Self {
+        Self { params: BootParams::default() }
+    }
+}
+
 impl Server {
+    #[cfg(not(feature = "builtin-bcc"))]
     fn new(entropy: [u8; 64], session: [u8; 32], auth: [u8; 32], dice: &[u8]) -> Self {
         Self {
             params: BootParams::new_from_dt(entropy, session, auth, dice)
@@ -51,6 +61,12 @@ impl Server {
     }
 }
 
+#[cfg(feature = "builtin-bcc")]
+pub(crate) fn create_boot_params_service() -> Strong<dyn IBootParams> {
+    BnBootParams::new_binder(Server::default(), BinderFeatures::default())
+}
+
+#[cfg(not(feature = "builtin-bcc"))]
 pub(crate) fn create_boot_params_service() -> Strong<dyn IBootParams> {
     let entropy = get_vmm_obj(c"google,early-entropy").expect("Could not get entropy");
     let session = get_vmm_obj(c"google,session-key-seed").expect("Could not get session key seed");

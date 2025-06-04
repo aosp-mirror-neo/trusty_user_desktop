@@ -40,4 +40,8 @@ MODULE_LIBRARY_DEPS += \
 MODULE_RUST_USE_CLIPPY := true
 MODULE_RUST_TESTS := true
 
+ifneq ($(BUILTIN_BCC),)
+MODULE_RUSTFLAGS += --cfg 'feature="builtin-bcc"'
+endif
+
 include make/library.mk

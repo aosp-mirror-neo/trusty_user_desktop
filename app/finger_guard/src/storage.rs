@@ -89,7 +89,7 @@ pub trait SingleFileState: PersistedState {
     }
 }
 
-#[derive(Hash, Eq, PartialEq, Debug)]
+#[derive(Clone, PartialOrd, Ord, Eq, PartialEq, Debug)]
 /// Represents a key to index sensor state.
 /// It is equivalent to a SensorUserPair defined in the service interface.
 /// Within the service, this type should be used instead of the AIDL object.
