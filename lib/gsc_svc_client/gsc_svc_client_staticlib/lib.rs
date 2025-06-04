@@ -24,7 +24,10 @@
 
 use libc::c_int;
 
-use gsc_svc_client::{GscServiceClient, TrustyStorageMac, TrustyStorageMacFileIndex};
+use gsc_svc_client::{
+    GscServiceClient, TrustyStorageFlags, TrustyStorageMac, TrustyStorageMacData,
+    TrustyStorageMacFileIndex,
+};
 use static_assertions::const_assert_eq;
 use zerocopy::TryFromBytes;
 
@@ -47,11 +50,15 @@ const_assert_eq!(
     GSC_SVC_CLIENT_SUPER_BLOCK_MAC_FILE_INDEX_TD
 );
 
-/// Reads a superblock `mac` from the GSC for a specific `index`.
+/// Reads the super block mac `data` from the GSC for a specific `index`.
 ///
 /// Returns `0` on success and `-1` on failure.
 #[no_mangle]
-pub extern "C" fn gsc_svc_client_super_block_mac_read(index: u8, mac: &mut [u8; 16]) -> c_int {
+pub extern "C" fn gsc_svc_client_super_block_mac_read(
+    index: u8,
+    flags: &mut u8,
+    mac: &mut [u8; 16],
+) -> c_int {
     let Ok(index) = TrustyStorageMacFileIndex::try_read_from_bytes(&[index]) else {
         return -1;
     };
@@ -60,19 +67,24 @@ pub extern "C" fn gsc_svc_client_super_block_mac_read(index: u8, mac: &mut [u8; 
         return -1;
     };
 
-    let Ok(m) = client.read_trusty_storage_superblock_mac(index) else {
+    let Ok(data) = client.read_trusty_storage_superblock_mac(index) else {
         return -1;
     };
-    *mac = m.0;
+    *mac = data.mac.0;
+    *flags = data.flags.0;
 
     0
 }
 
-/// Writes a superblock `mac` from the GSC for a specific `index`.
+/// Writes the super block mac `data` to the GSC for a specific `index`.
 ///
 /// Returns `0` on success and `-1` on failure.
 #[no_mangle]
-pub extern "C" fn gsc_svc_client_super_block_mac_write(index: u8, mac: &[u8; 16]) -> c_int {
+pub extern "C" fn gsc_svc_client_super_block_mac_write(
+    index: u8,
+    flags: u8,
+    mac: &[u8; 16],
+) -> c_int {
     let mac = TrustyStorageMac(*mac);
     let Ok(index) = TrustyStorageMacFileIndex::try_read_from_bytes(&[index]) else {
         return -1;
@@ -82,7 +94,31 @@ pub extern "C" fn gsc_svc_client_super_block_mac_write(index: u8, mac: &[u8; 16]
         return -1;
     };
 
-    let Ok(_) = client.write_trusty_storage_superblock_mac(index, mac) else {
+    let data = TrustyStorageMacData { mac, flags: TrustyStorageFlags(flags) };
+    let Ok(_) = client.write_trusty_storage_superblock_mac(index, data) else {
+        return -1;
+    };
+
+    0
+}
+
+/// Delete a super block `mac` from the GSC for a specific `index`.
+///
+/// The seven least significant flags bits will be preserved through a delete
+/// call.
+///
+/// Returns `0` on success and `-1` on failure.
+#[no_mangle]
+pub extern "C" fn gsc_svc_client_super_block_mac_delete(index: u8) -> c_int {
+    let Ok(index) = TrustyStorageMacFileIndex::try_read_from_bytes(&[index]) else {
+        return -1;
+    };
+
+    let Ok(client) = GscServiceClient::new() else {
+        return -1;
+    };
+
+    let Ok(_) = client.delete_trusty_storage_superblock_mac(index) else {
         return -1;
     };
 

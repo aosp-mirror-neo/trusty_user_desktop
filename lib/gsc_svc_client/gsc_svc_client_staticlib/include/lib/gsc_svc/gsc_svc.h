@@ -34,15 +34,25 @@
 #define GSC_SVC_CLIENT_SUPER_BLOCK_MAC_FILE_INDEX_TD 2
 
 /**
- * Reads a superblock `mac` from the GSC for a specific `index`.
+ * Reads the super block mac `data` from the GSC for a specific `index`.
  *
  * Returns `0` on success and `-1` on failure.
  */
-int gsc_svc_client_super_block_mac_read(uint8_t index, uint8_t (*mac)[16]);
+int gsc_svc_client_super_block_mac_read(uint8_t index, uint8_t *flags, uint8_t (*mac)[16]);
 
 /**
- * Writes a superblock `mac` from the GSC for a specific `index`.
+ * Writes the super block mac `data` to the GSC for a specific `index`.
  *
  * Returns `0` on success and `-1` on failure.
  */
-int gsc_svc_client_super_block_mac_write(uint8_t index, const uint8_t (*mac)[16]);
+int gsc_svc_client_super_block_mac_write(uint8_t index, uint8_t flags, const uint8_t (*mac)[16]);
+
+/**
+ * Delete a super block `mac` from the GSC for a specific `index`.
+ *
+ * The seven least significant flags bits will be preserved through a delete
+ * call.
+ *
+ * Returns `0` on success and `-1` on failure.
+ */
+int gsc_svc_client_super_block_mac_delete(uint8_t index);
