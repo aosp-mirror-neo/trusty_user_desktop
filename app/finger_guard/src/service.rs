@@ -241,7 +241,7 @@ impl FingerGuardService {
         // revoke_challenge returns the given challenge when it is valid.
         let challenge =
             FingerGuardService::revoke_challenge(&self, sensor_user_pair, hat.challenge)?;
-        if challenge != EnrollmentChallenge::EMPTY || challenge != hat.challenge {
+        if challenge == EnrollmentChallenge::EMPTY || challenge != hat.challenge {
             return Err(ServiceError::StateUnavailable("enrollment challenge"));
         }
         let auth_token_key = self.get_auth_token_key()?;
