@@ -42,10 +42,30 @@ interface IFingerGuard {
      */
     SessionResponse newSession(in byte[] clientNonce);
     /**
+     * Return a newly generated challange associated with the
+     * (sensor, user) pair.
+     * The challange should be returned in the HAT when prepareEnrollSession
+     * is invoked. The challenge will expire after a minute.
+     * It allows multiple in-flight challenges. Invoking generateChallenge
+     * twice does not invalidate the first challenge. The challenge is invalidated only when:
+     *   1) It expires.
+     *   2) revokeChallenge is invoked.
+     */
+    long generateChallenge(in SensorUserPair sensorUserPair);
+    /**
+     * Revoke and return the challenge associated with the (sensor, user) pair.
+     * If there is no previously generated challange matched the requested one
+     * or the challenge has expired, return 0.
+     */
+    long revokeChallenge(in SensorUserPair sensorUserPair, long challenge);
+    /**
      * Create an enroll session for a given pair of (sensor, user).
      * A nonce and a session counter will be returned, along with the
      * associated MAC. The details of the MAC computation is up to the
      * agreement between FingerGuard and its client.
+     *
+     * The challenge in the provided HAT must match the recorded challenge for
+     * the same (senor, user) pair and must not exceeds the timeout.
      */
     PrepareEnrollSessionResponse prepareEnrollSession(in SensorUserPair sensorUserPair, in HardwareAuthToken hat);
     /**
