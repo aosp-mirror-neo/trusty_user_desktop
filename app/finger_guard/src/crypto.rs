@@ -26,6 +26,7 @@ use openssl::hmac::HmacCtx;
 use openssl::md::Md;
 use openssl::nid::Nid;
 use openssl::pkey::{PKey, Private, Public};
+use openssl::symm::Cipher;
 
 /// Standard size for most chunks of entropy.
 pub const ENTROPY_SIZE: usize = 32;
@@ -69,6 +70,29 @@ pub fn perform_ecdh(
     Ok(pk)
 }
 
+/// Encrypt a message using AES256-GCM with the given Hmac as a key.
+pub fn encrypt_aes256_gcm(
+    key: &Hmac,
+    iv: Option<&[u8]>,
+    aad: &[u8],
+    data: &[u8],
+    tag: &mut [u8],
+) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    openssl::symm::encrypt_aead(Cipher::aes_256_gcm(), key.bytes.as_slice(), iv, aad, data, tag)
+}
+
+/// Decrypt a message using AES256-GCM with the given Hmac as a key.
+#[allow(dead_code)]
+pub fn decrypt_aes256_gcm(
+    key: &Hmac,
+    iv: Option<&[u8]>,
+    aad: &[u8],
+    data: &[u8],
+    tag: &[u8],
+) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    openssl::symm::decrypt_aead(Cipher::aes_256_gcm(), key.bytes.as_slice(), iv, aad, data, tag)
+}
+
 pub enum MessageSender {
     FINGERGUARD,
     FPMCU,
@@ -77,6 +101,37 @@ pub enum MessageSender {
 pub enum SensorSessionType {
     ENROLL,
     AUTH,
+}
+
+/// Size of an HMAC, in bytes.
+pub const HMAC_SIZE: usize = 32; // These are SHA-256 HMACs.
+
+/// Object representing an HMAC.
+///
+/// An HMAC is ultimately just a blob of bytes, but this type restricts the operations that can be
+/// performed on it to give us more control over how it is used.
+#[derive(Debug)]
+pub struct Hmac {
+    bytes: [u8; HMAC_SIZE],
+}
+
+/// Compare an HMAC to a given blob of bytes.
+///
+/// This is done with a constant-time comparison to avoid timing attacks.
+impl PartialEq<&[u8]> for Hmac {
+    fn eq(&self, other: &&[u8]) -> bool {
+        openssl::memcmp::eq(&self.bytes, other)
+    }
+}
+
+/// Allow Hmac to be converted to a Vec<u8> for external export.
+///
+/// This should not be used internally to extract the bytes of the HMAC and perform operations on
+/// them. Instead, any such computations should be added as methods on the Hmac struct.
+impl From<Hmac> for Vec<u8> {
+    fn from(value: Hmac) -> Self {
+        value.bytes.to_vec()
+    }
 }
 
 /// Generator which can consume bytes and produce an HMAC.
@@ -95,16 +150,24 @@ impl HmacGenerator {
         })
     }
 
+    /// Construct a new HMAC generator that will use the given HMAC as the key.
+    pub fn with_hmac_key(key: &Hmac) -> ServiceResult<Self> {
+        Ok(Self {
+            context: HmacCtx::new(&key.bytes, Md::sha256())
+                .map_err(|e| ServiceError::OpenSsl("unable to initialize hmac", e))?,
+        })
+    }
+
     /// Update the HMAC with the given chunk of bytes.
     pub fn update(&mut self, buffer: &[u8]) -> ServiceResult<()> {
         self.context.update(buffer).map_err(|e| ServiceError::OpenSsl("unable to update hmac", e))
     }
 
     /// Complete the generation of the HMAC, returning the final result.
-    pub fn complete(mut self) -> ServiceResult<FixedSizeEntropy> {
-        let mut hmac = FixedSizeEntropy::default();
+    pub fn complete(mut self) -> ServiceResult<Hmac> {
+        let mut hmac = Hmac { bytes: Default::default() };
         self.context
-            .finalize(hmac.as_mut_slice())
+            .finalize(hmac.bytes.as_mut_slice())
             .map_err(|e| ServiceError::OpenSsl("unable to finalize hmac", e))?;
         Ok(hmac)
     }
@@ -113,7 +176,7 @@ impl HmacGenerator {
     ///
     /// This is a useful helper method that simplifies the very common case of
     /// computing an HMAC using a single pre-existing buffer of bytes.
-    pub fn compute(key: &FixedSizeEntropy, buffer: &[u8]) -> ServiceResult<FixedSizeEntropy> {
+    pub fn compute(key: &FixedSizeEntropy, buffer: &[u8]) -> ServiceResult<Hmac> {
         let mut generator = Self::new(key)?;
         generator.update(buffer)?;
         Ok(generator.complete()?)
@@ -123,13 +186,13 @@ impl HmacGenerator {
 /// Helper to compute the HMAC for the enrollment/authentication
 /// session messages from this service or from the sensor.
 pub fn sensor_session_message_hmac(
-    key: &FixedSizeEntropy,
+    key: &Hmac,
     nonce: &FixedSizeEntropy,
     sender: MessageSender,
     session_type: SensorSessionType,
     ssi: &SensorStateIndex,
     session_counter: &SensorSessionCounter,
-) -> ServiceResult<FixedSizeEntropy> {
+) -> ServiceResult<Hmac> {
     let sender_name: &[u8] = match sender {
         MessageSender::FINGERGUARD => b"fingerguard",
         MessageSender::FPMCU => b"fpmcu",
@@ -142,7 +205,7 @@ pub fn sensor_session_message_hmac(
     // Compute mac as HMAC_SHA256(key, msg) where
     // msg = nonce || user_id || sender_name || session_name || session_counter
     //
-    let mut generator = HmacGenerator::new(key)?;
+    let mut generator = HmacGenerator::with_hmac_key(key)?;
     generator.update(nonce.as_slice())?;
     generator.update(&ssi.user_id_be_bytes())?;
     generator.update(sender_name)?;
@@ -165,7 +228,7 @@ pub fn sensor_session_message_hmac(
 pub fn hardware_auth_token_mac(
     key: &FixedSizeEntropy,
     hat: &HardwareAuthToken,
-) -> ServiceResult<FixedSizeEntropy> {
+) -> ServiceResult<Hmac> {
     let mut generator = HmacGenerator::new(key)?;
     generator.update(&hat.version.to_ne_bytes())?;
     generator.update(&hat.challenge.to_ne_bytes())?;

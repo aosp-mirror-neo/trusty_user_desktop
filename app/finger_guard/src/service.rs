@@ -34,7 +34,6 @@ use fingerguard_api::aidl::{
 use log::error;
 use once_cell::sync::OnceCell;
 use openssl::pkey::{PKey, Private};
-use openssl::symm::{encrypt_aead, Cipher};
 use std::default::Default;
 use std::sync::Mutex;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
@@ -70,7 +69,7 @@ enum SensorSession {
 /// Implements the `IFingerGuard` AIDL interface for other Trusty apps to call.
 pub struct FingerGuardService {
     init_params: Mutex<Option<InitParams>>,
-    sk: Mutex<Option<FixedSizeEntropy>>,
+    sk: Mutex<Option<crypto::Hmac>>,
     sensor_session: Mutex<SensorSession>,
     auth_token_key: OnceCell<FixedSizeEntropy>,
 }
@@ -125,7 +124,7 @@ impl FingerGuardService {
         let new_init_params = InitParams { pk, tpm_seed };
         new_init_params.save()?;
         *init_params = Some(new_init_params);
-        Ok(HandshakeResponse { serverPublicKey: server_public_key_bytes, pkMac: mac.to_vec() })
+        Ok(HandshakeResponse { serverPublicKey: server_public_key_bytes, pkMac: mac.into() })
     }
 
     fn new_session(&self, client_nonce: &[u8]) -> ServiceResult<SessionResponse> {
@@ -153,19 +152,17 @@ impl FingerGuardService {
         all_nonces[0..32].copy_from_slice(client_nonce);
         all_nonces[32..64].copy_from_slice(nonce.as_slice());
         let new_sk = crypto::HmacGenerator::compute(&pk, &all_nonces)?;
-        *sk = Some(new_sk);
-        let cipher = Cipher::aes_256_gcm();
         let iv = rng::generate_random_vec::<12>();
         let mut tag = vec![0u8; 16];
-        let wrapped_tpm_seed = encrypt_aead(
-            cipher,
-            new_sk.as_slice(),
+        let wrapped_tpm_seed = crypto::encrypt_aes256_gcm(
+            &new_sk,
             Some(iv.as_slice()),
             b"tpm_seed", // aad = "tpm_seed"
             tpm_seed.as_slice(),
             tag.as_mut_slice(),
         )
         .map_err(|e| ServiceError::OpenSsl("failed to encrypt tpm_seed", e))?;
+        *sk = Some(new_sk);
         Ok(SessionResponse { nonce, wrappedTpmSeed: wrapped_tpm_seed, iv, tag })
     }
 
@@ -196,7 +193,7 @@ impl FingerGuardService {
         //                    once HAT verification is done. This effectively
         //                    denies any retry of MAC probing.
         let mac = crypto::hardware_auth_token_mac(&auth_token_key, hat)?;
-        if !openssl::memcmp::eq(&mac, hat.mac.as_slice()) {
+        if mac != hat.mac.as_slice() {
             return Err(ServiceError::BadMac("hardware auth token"));
         }
 
@@ -224,7 +221,7 @@ impl FingerGuardService {
         Ok(PrepareEnrollSessionResponse {
             sessionCounter: session_counter.as_i64(),
             nonce,
-            mac: hmac.to_vec(),
+            mac: hmac.into(),
         })
     }
 
@@ -264,7 +261,7 @@ impl FingerGuardService {
             // Use a constant-time comparison to avoid timing attacks against
             // the session hmac. This would be difficult to exploit anyway
             // because retries are not possible, but better safe than sorry.
-            if !openssl::memcmp::eq(&hmac, result.mac.as_slice()) {
+            if hmac != result.mac.as_slice() {
                 return Err(ServiceError::BadMac("enrollment result"));
             }
             // Generate and save a new AuthenticatorId.
@@ -316,7 +313,7 @@ impl FingerGuardService {
         Ok(PrepareAuthSessionResponse {
             sessionCounter: session_counter.as_i64(),
             nonce,
-            mac: hmac.to_vec(),
+            mac: hmac.into(),
         })
     }
 
@@ -370,7 +367,7 @@ impl FingerGuardService {
             // Use a constant-time comparison to avoid timing attacks against
             // the session hmac. This would be difficult to exploit anyway
             // because retries are not possible, but better safe than sorry.
-            if !openssl::memcmp::eq(&hmac, result.mac.as_slice()) {
+            if hmac != result.mac.as_slice() {
                 return Err(ServiceError::BadMac("authentication result"));
             }
             // TODO(b/419332065): add a valid mac to HAT.
@@ -483,7 +480,6 @@ mod tests {
     use openssl::derive::Deriver;
     use openssl::ec::{EcGroup, EcKey, EcPoint, PointConversionForm};
     use openssl::pkey::{PKey, Private, Public};
-    use openssl::symm::{decrypt_aead, Cipher};
     test::init!();
 
     #[test]
@@ -521,7 +517,7 @@ mod tests {
 
         // Check the computed MAC matches the one in the response.
         let hmac = crypto::HmacGenerator::compute(&pk, b"tofu").unwrap();
-        assert_eq!(hmac.as_slice(), handshake_response.pkMac.as_slice());
+        assert_eq!(hmac, handshake_response.pkMac.as_slice());
         pk
     }
 
@@ -542,11 +538,9 @@ mod tests {
         let iv = session_response.iv;
         let tag = session_response.tag;
         let encrypted_tpm_seed = session_response.wrappedTpmSeed;
-        let cipher = Cipher::aes_256_gcm();
         let aad = b"tpm_seed";
-        let tpm_seed = decrypt_aead(
-            cipher,
-            sk.as_slice(),
+        let tpm_seed = crypto::decrypt_aes256_gcm(
+            &sk,
             Some(iv.as_slice()),
             aad,
             encrypted_tpm_seed.as_slice(),
@@ -556,9 +550,8 @@ mod tests {
         assert_eq!(tpm_seed.len(), 32);
 
         // Bad AAD leads to a decryption error.
-        assert!(decrypt_aead(
-            cipher,
-            sk.as_slice(),
+        assert!(crypto::decrypt_aes256_gcm(
+            &sk,
             Some(iv.as_slice()),
             b"incorrect_aad",
             encrypted_tpm_seed.as_slice(),
@@ -588,22 +581,22 @@ mod tests {
         hat.mac = Vec::from(crypto::hardware_auth_token_mac(&auth_token_key, &hat).unwrap());
         let session_resp = service.prepareEnrollSession(&sup, &hat).unwrap();
         assert_eq!(session_resp.sessionCounter, 1);
-        let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
+        let mut hmac_gen = crypto::HmacGenerator::with_hmac_key(&sk).unwrap();
         hmac_gen.update(&session_resp.nonce).unwrap();
         hmac_gen.update(&user_id.to_be_bytes()).unwrap();
         hmac_gen.update(b"fingerguardenroll").unwrap();
         hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
         let hmac = hmac_gen.complete().unwrap();
-        assert_eq!(hmac.to_vec(), session_resp.mac);
+        assert_eq!(hmac, session_resp.mac.as_slice());
 
         let old_auth_id = service.getAuthenticatorId(&sup).unwrap();
-        let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
+        let mut hmac_gen = crypto::HmacGenerator::with_hmac_key(&sk).unwrap();
         hmac_gen.update(&session_resp.nonce).unwrap();
         hmac_gen.update(&user_id.to_be_bytes()).unwrap();
         hmac_gen.update(b"fpmcuenroll").unwrap();
         hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
         let hmac = hmac_gen.complete().unwrap();
-        let enrollment_result = EnrollmentResult { enrolled: true, mac: hmac.to_vec() };
+        let enrollment_result = EnrollmentResult { enrolled: true, mac: hmac.into() };
         let _ = service.finishEnrollSession(&sup, &enrollment_result).unwrap();
         // Ensure the authenticator id updates after enrollment.
         let new_auth_id = service.getAuthenticatorId(&sup).unwrap();
@@ -621,21 +614,21 @@ mod tests {
         let challenge = 0xc4a11e49e as i64;
         let session_resp = service.prepareAuthSession(&sup, challenge).unwrap();
         assert_eq!(session_resp.sessionCounter, 3);
-        let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
+        let mut hmac_gen = crypto::HmacGenerator::with_hmac_key(&sk).unwrap();
         hmac_gen.update(&session_resp.nonce).unwrap();
         hmac_gen.update(&user_id.to_be_bytes()).unwrap();
         hmac_gen.update(b"fingerguardauth").unwrap();
         hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
         let hmac = hmac_gen.complete().unwrap();
-        assert_eq!(hmac.to_vec(), session_resp.mac);
+        assert_eq!(hmac, session_resp.mac.as_slice());
 
-        let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
+        let mut hmac_gen = crypto::HmacGenerator::with_hmac_key(&sk).unwrap();
         hmac_gen.update(&session_resp.nonce).unwrap();
         hmac_gen.update(&user_id.to_be_bytes()).unwrap();
         hmac_gen.update(b"fpmcuauth").unwrap();
         hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
         let hmac = hmac_gen.complete().unwrap();
-        let auth_result = AuthenticationResult { authenticated: true, mac: hmac.to_vec() };
+        let auth_result = AuthenticationResult { authenticated: true, mac: hmac.into() };
         let valid_hat = service.finishAuthSession(&sup, &auth_result).unwrap();
         assert_eq!(valid_hat.challenge, challenge);
         assert_eq!(valid_hat.userId, secure_user_id);
