@@ -43,3 +43,18 @@ pub fn generate_random_vec<const N: usize>() -> Vec<u8> {
     rng.fill_bytes(&mut bytes.as_mut_slice());
     bytes
 }
+
+// Generate a random integer of the given type.
+//
+// This is implemented as a macro because there's no generic way to turn a blob of random bytes
+// into a specific type. In fact, even generating a random integer of a specific size is difficult
+// because size_of can't be used on generic types in current Rust.
+macro_rules! generate_random_int {
+    ($int_type:ty) => {{
+        const INT_SIZE: usize = std::mem::size_of::<$int_type>();
+        let bytes = $crate::rng::generate_random_buffer::<INT_SIZE>();
+        let var = <$int_type>::from_ne_bytes(bytes);
+        var
+    }};
+}
+pub(crate) use generate_random_int;
