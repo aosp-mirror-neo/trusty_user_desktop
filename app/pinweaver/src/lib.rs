@@ -27,6 +27,8 @@ use tipc::{Manager, PortCfg};
 mod dispatcher;
 mod service;
 mod storage;
+#[cfg(test)]
+mod tests;
 
 const PORT_COUNT: usize = 2;
 const CONNECTION_COUNT: usize = 4;

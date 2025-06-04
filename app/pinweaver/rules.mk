@@ -34,5 +34,6 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 
 MODULE_RUST_USE_CLIPPY := true
+MODULE_RUST_TESTS := true
 
 include make/library.mk
