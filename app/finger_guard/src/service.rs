@@ -190,7 +190,7 @@ impl FingerGuardService {
             ServiceError::LockAcquire { name: "enrollment_challenges", mode: "write" }
         })?;
         let ssi = SensorStateIndex::from(sensor_user_pair);
-        let challenge = i64::from_be_bytes(rng::generate_random_buffer::<8>());
+        let challenge = rng::generate_random_int!(i64);
         let valid_until = clock::now()? + Duration::from_secs(60);
         let ec = EnrollmentChallenge { ssi, challenge };
         enrollment_challenges.insert(ec, valid_until);
@@ -318,9 +318,7 @@ impl FingerGuardService {
                 return Err(ServiceError::BadMac("enrollment result"));
             }
             // Generate and save a new AuthenticatorId.
-            let buffer = rng::generate_random_buffer::<8>();
-            let authenticator_id = AuthenticatorId::read_from_bytes(&buffer)
-                .map_err(|_| ServiceError::ZcConvert("failed to parse authenticator id"))?;
+            let authenticator_id = AuthenticatorId::generate_random();
             let file_name = sensor_state_index.authenticator_id_file_name();
             authenticator_id.save_to(&file_name)?;
         }
@@ -447,9 +445,7 @@ impl FingerGuardService {
         &self,
         sensor_user_pair: &SensorUserPair,
     ) -> ServiceResult<AuthenticatorId> {
-        let buffer = rng::generate_random_buffer::<8>();
-        let authenticator_id = AuthenticatorId::read_from_bytes(&buffer)
-            .map_err(|_| ServiceError::ZcConvert("failed to parse authenticator id"))?;
+        let authenticator_id = AuthenticatorId::generate_random();
         let index = SensorStateIndex::from(sensor_user_pair);
         let file_name = index.authenticator_id_file_name();
         authenticator_id.save_to(&file_name)?;

@@ -17,6 +17,7 @@
 //! Types and utilities for data which is stored persistently on the device.
 
 use crate::error::ServiceError;
+use crate::rng;
 use fingerguard_api::aidl::SensorUserPair::SensorUserPair;
 use storage::{OpenMode, Port, Session};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
@@ -128,6 +129,11 @@ impl SensorStateIndex {
 pub struct AuthenticatorId(i64);
 
 impl AuthenticatorId {
+    /// Generate a new random authenticator id.
+    pub fn generate_random() -> Self {
+        Self(rng::generate_random_int!(i64))
+    }
+
     /// Convert the id to an i64.
     ///
     /// This should only be used to return the id across an AIDL interface. For
