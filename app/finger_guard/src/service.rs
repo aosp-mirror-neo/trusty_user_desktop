@@ -167,10 +167,10 @@ impl FingerGuardService {
             return Err(ServiceError::StateAlreadyExists("sk"));
         }
         let nonce = rng::generate_random_vec::<32>();
-        let mut all_nonces = [0u8; 64];
-        all_nonces[0..32].copy_from_slice(client_nonce);
-        all_nonces[32..64].copy_from_slice(nonce.as_slice());
-        let new_sk = crypto::HmacGenerator::compute(&pk, &all_nonces)?;
+        let mut hmac_generator = crypto::HmacGenerator::new(&pk)?;
+        hmac_generator.update(client_nonce)?;
+        hmac_generator.update(nonce.as_slice())?;
+        let new_sk = hmac_generator.complete()?;
         let iv = rng::generate_random_vec::<12>();
         let mut tag = vec![0u8; 16];
         let wrapped_tpm_seed = crypto::encrypt_aes256_gcm(
@@ -580,7 +580,7 @@ mod tests {
 
         // Check the computed MAC matches the one in the response.
         let hmac = crypto::HmacGenerator::compute(&pk, b"tofu").unwrap();
-        assert_eq!(hmac, handshake_response.pkMac.as_slice());
+        assert!(hmac == handshake_response.pkMac.as_slice());
         pk
     }
 
@@ -651,7 +651,7 @@ mod tests {
         hmac_gen.update(b"fingerguardenroll").unwrap();
         hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
         let hmac = hmac_gen.complete().unwrap();
-        assert_eq!(hmac, session_resp.mac.as_slice());
+        assert!(hmac == session_resp.mac.as_slice());
 
         let old_auth_id = service.getAuthenticatorId(&sup).unwrap();
         let mut hmac_gen = crypto::HmacGenerator::with_hmac_key(&sk).unwrap();
@@ -686,7 +686,7 @@ mod tests {
         hmac_gen.update(b"fingerguardauth").unwrap();
         hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
         let hmac = hmac_gen.complete().unwrap();
-        assert_eq!(hmac, session_resp.mac.as_slice());
+        assert!(hmac == session_resp.mac.as_slice());
 
         let mut hmac_gen = crypto::HmacGenerator::with_hmac_key(&sk).unwrap();
         hmac_gen.update(&session_resp.nonce).unwrap();
