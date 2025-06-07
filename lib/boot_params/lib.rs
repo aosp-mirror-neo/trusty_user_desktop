@@ -15,6 +15,9 @@ use crate::dice::DiceHandover;
 use crate::gsc::GscBootParams;
 use crate::pub_key::SubjectPublicKey;
 
+#[cfg(feature = "builtin-bcc")]
+use kmr_wire::read_to_value;
+
 #[derive(Debug)]
 pub enum Error {
     NotAvailable,

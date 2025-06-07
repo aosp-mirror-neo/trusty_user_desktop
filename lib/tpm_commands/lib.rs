@@ -390,6 +390,23 @@ pub mod trusty_storage_superblock_mac {
     #[repr(C)]
     pub struct TrustyStorageMac(pub [u8; 16]);
 
+    /// Trusty storage application flags.
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        Default,
+        Eq,
+        FromBytes,
+        IntoBytes,
+        Immutable,
+        KnownLayout,
+        PartialEq,
+        Unaligned,
+    )]
+    #[repr(C)]
+    pub struct TrustyStorageFlags(pub u8);
+
     /// Supported storage mac commands.
     #[derive(Clone, Copy, Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
     #[repr(u8)]
@@ -398,6 +415,8 @@ pub mod trusty_storage_superblock_mac {
         Read = 0,
         /// Write operation.
         Write = 1,
+        /// Delete operation.
+        Delete = 2,
     }
 
     /// Used by the Trusty secure storage application to store the MAC of the
@@ -411,6 +430,28 @@ pub mod trusty_storage_superblock_mac {
         TamperDetect = 2,
     }
 
+    /// Trusty storage application data.
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        Default,
+        Eq,
+        FromBytes,
+        IntoBytes,
+        Immutable,
+        KnownLayout,
+        PartialEq,
+        Unaligned,
+    )]
+    #[repr(C)]
+    pub struct TrustyStorageMacData {
+        /// MAC data currently stored.
+        pub mac: TrustyStorageMac,
+        /// Super block flags.
+        pub flags: TrustyStorageFlags,
+    }
+
     /// Requests superblock mac reads/writes from the GSC.
     #[derive(Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
     #[repr(C)]
@@ -420,18 +461,31 @@ pub mod trusty_storage_superblock_mac {
         /// File identifier.
         pub index: TrustyStorageMacFileIndex,
         /// MAC data to write.
-        pub mac: TrustyStorageMac,
+        pub data: TrustyStorageMacData,
     }
 
     impl Request {
         /// Create a new read request.
         pub fn new_read(index: TrustyStorageMacFileIndex) -> Self {
-            Self { command: TrustyStorageMacCommand::Read, index, mac: TrustyStorageMac::default() }
+            Self {
+                command: TrustyStorageMacCommand::Read,
+                index,
+                data: TrustyStorageMacData::default(),
+            }
         }
 
         /// Create a new write request.
-        pub fn new_write(index: TrustyStorageMacFileIndex, mac: TrustyStorageMac) -> Self {
-            Self { command: TrustyStorageMacCommand::Write, index, mac }
+        pub fn new_write(index: TrustyStorageMacFileIndex, data: TrustyStorageMacData) -> Self {
+            Self { command: TrustyStorageMacCommand::Write, index, data }
+        }
+
+        /// Create a new delete request.
+        pub fn new_delete(index: TrustyStorageMacFileIndex) -> Self {
+            Self {
+                command: TrustyStorageMacCommand::Delete,
+                index,
+                data: TrustyStorageMacData::default(),
+            }
         }
     }
 
@@ -446,8 +500,8 @@ pub mod trusty_storage_superblock_mac {
     #[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
     #[repr(C)]
     pub struct Response {
-        /// Data currently stored.
-        pub mac: TrustyStorageMac,
+        /// MAC data currently stored.
+        pub data: TrustyStorageMacData,
     }
 }
 
@@ -553,18 +607,45 @@ mod tests {
 
     #[test]
     fn test_trusty_storage_superblock_mac_serialize() {
-        use trusty_storage_superblock_mac::{Request, TrustyStorageMacFileIndex};
+        use trusty_storage_superblock_mac::{
+            Request, TrustyStorageFlags, TrustyStorageMac, TrustyStorageMacData,
+            TrustyStorageMacFileIndex,
+        };
         let index = TrustyStorageMacFileIndex::TamperDetectPersist;
         let request = TpmRequestMessage::<Request>::new(Request::new_read(index));
         let expected_bytes = vec![
             0x80, 0x01, // header.tag
-            0x00, 0x00, 0x00, 0x1E, // header.length
+            0x00, 0x00, 0x00, 0x1F, // header.length
             0x20, 0x00, 0x00, 0x00, // header.ordinal
             0x00, 0x4D, // header.subcmd
             0x00, // request.command
             0x01, // request.index
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, // request.mac
+            0x00, 0x00, // request.data.mac
+            0x00, // request.data.flags
+        ];
+
+        assert_eq!(expected_bytes, request.as_bytes());
+
+        let index = TrustyStorageMacFileIndex::TamperDetect;
+        let data = TrustyStorageMacData {
+            mac: TrustyStorageMac([
+                0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0xff,
+            ]),
+            flags: TrustyStorageFlags(0x81),
+        };
+        let request = TpmRequestMessage::<Request>::new(Request::new_write(index, data));
+        let expected_bytes = vec![
+            0x80, 0x01, // header.tag
+            0x00, 0x00, 0x00, 0x1F, // header.length
+            0x20, 0x00, 0x00, 0x00, // header.ordinal
+            0x00, 0x4D, // header.subcmd
+            0x01, // request.command
+            0x02, // request.index
+            0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0xff, // request.data.mac
+            0x81, // request.data.flags
         ];
 
         assert_eq!(expected_bytes, request.as_bytes());
@@ -572,25 +653,33 @@ mod tests {
 
     #[test]
     fn test_trusty_storage_superblock_mac_deserialize() {
-        use trusty_storage_superblock_mac::{Response, TrustyStorageMac};
+        use trusty_storage_superblock_mac::{
+            Response, TrustyStorageFlags, TrustyStorageMac, TrustyStorageMacData,
+        };
         let bytes = vec![
             0x80, 0x01, // header.tag
-            0x00, 0x00, 0x00, 0x1C, // header.length
+            0x00, 0x00, 0x00, 0x1D, // header.length
             0xDE, 0xAD, 0xBE, 0xEF, // header.error_code
             0x00, 0x4D, // header.subcmd
             0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
-            0x02, 0x02, // request.mac
+            0x02, 0x02, // response.data.mac
+            0x81, // response.data.flags
         ];
 
         let expected_response = TpmResponseMessage {
             header: TpmResponseHeader {
                 tag: U16::new(0x8001),
-                length: U32::new(0x0000001C),
+                length: U32::new(0x0000001D),
                 error_code: U32::new(0xDEADBEEF),
                 command_code: U16::new(0x004D),
             },
 
-            response: Response { mac: TrustyStorageMac([2u8; 16]) },
+            response: Response {
+                data: TrustyStorageMacData {
+                    mac: TrustyStorageMac([2u8; 16]),
+                    flags: TrustyStorageFlags(0x81),
+                },
+            },
         };
 
         let tpm_response = TpmResponseMessage::<Response>::ref_from_bytes(&bytes).unwrap();
