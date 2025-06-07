@@ -110,7 +110,6 @@ pub const HMAC_SIZE: usize = 32; // These are SHA-256 HMACs.
 ///
 /// An HMAC is ultimately just a blob of bytes, but this type restricts the operations that can be
 /// performed on it to give us more control over how it is used.
-#[derive(Debug)]
 pub struct Hmac {
     bytes: [u8; HMAC_SIZE],
 }
