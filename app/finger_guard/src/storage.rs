@@ -16,7 +16,8 @@
 
 //! Types and utilities for data which is stored persistently on the device.
 
-use crate::error::ServiceError;
+use crate::crypto::{HmacGenerator, HmacSignable};
+use crate::error::{ServiceError, ServiceResult};
 use crate::hat::{HatAuthenticatorId, HatUserId};
 use crate::rng;
 use fingerguard_api::aidl::SensorUserPair::SensorUserPair;
@@ -43,7 +44,7 @@ fn read_all_bytes(file_name: &str) -> Result<Vec<u8>, storage::Error> {
 ///
 /// This trait does not guarantee thread safety against read write races.
 pub trait PersistedState: FromBytes + IntoBytes + Immutable {
-    fn load_from(file_name: &str) -> Result<Self, ServiceError>
+    fn load_from(file_name: &str) -> ServiceResult<Self>
     where
         Self: Sized,
     {
@@ -53,7 +54,7 @@ pub trait PersistedState: FromBytes + IntoBytes + Immutable {
             .map_err(|_| ServiceError::ZcConvert("failed to deserialize file content"))
     }
 
-    fn save_to(&self, file_name: &str) -> Result<(), ServiceError> {
+    fn save_to(&self, file_name: &str) -> ServiceResult<()> {
         let mut session = Session::new(Port::TamperDetect, true)
             .map_err(|e| ServiceError::TrustyStorage("failed to create storage session", e))?;
         let mut secure_file = session
@@ -77,13 +78,13 @@ pub trait PersistedState: FromBytes + IntoBytes + Immutable {
 /// This trait does not guarantee thread safety against read write races.
 pub trait SingleFileState: PersistedState {
     const FILE_NAME: &str;
-    fn load() -> Result<Self, ServiceError>
+    fn load() -> ServiceResult<Self>
     where
         Self: Sized,
     {
         Self::load_from(Self::FILE_NAME)
     }
-    fn save(&self) -> Result<(), ServiceError>
+    fn save(&self) -> ServiceResult<()>
     where
         Self: PersistedState,
     {
@@ -110,10 +111,6 @@ impl From<&SensorUserPair> for SensorStateIndex {
 }
 
 impl SensorStateIndex {
-    /// Big endian representation of user_id.
-    pub fn user_id_be_bytes(&self) -> [u8; 4] {
-        self.user_id.to_be_bytes()
-    }
     /// The file name for the authenticator id with this index.
     pub fn authenticator_id_file_name(&self) -> String {
         format!("s{}.u{}.authenticator_id", self.sensor_id, self.user_id)
@@ -121,6 +118,13 @@ impl SensorStateIndex {
     /// The file name for the secure user id with this index.
     pub fn secure_user_id_file_name(&self) -> String {
         format!("s{}.u{}.secure_user_id", self.sensor_id, self.user_id)
+    }
+}
+
+impl HmacSignable for SensorStateIndex {
+    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
+        // Only the user id is incorporated into messages.
+        generator.update(&self.user_id.to_be_bytes())
     }
 }
 
@@ -185,6 +189,12 @@ impl SensorSessionCounter {
     /// storage the (de)serialization traits should be used.
     pub fn as_i64(&self) -> i64 {
         self.0 as i64
+    }
+}
+
+impl HmacSignable for SensorSessionCounter {
+    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
+        generator.update(&self.0.to_be_bytes())
     }
 }
 
