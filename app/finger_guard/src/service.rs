@@ -17,6 +17,7 @@
 use crate::clock::{self, Instant};
 use crate::crypto::{self, FixedSizeEntropy, ENTROPY_SIZE};
 use crate::error::{ServiceError, ServiceResult};
+use crate::hat::{make_signed_hat, AuthenticatorType, EMPTY_HAT};
 use crate::keymint;
 use crate::rng;
 use crate::storage::{
@@ -241,7 +242,7 @@ impl FingerGuardService {
         // revoke_challenge returns the given challenge when it is valid.
         let challenge =
             FingerGuardService::revoke_challenge(&self, sensor_user_pair, hat.challenge)?;
-        if challenge != EnrollmentChallenge::EMPTY || challenge != hat.challenge {
+        if challenge == EnrollmentChallenge::EMPTY || challenge != hat.challenge {
             return Err(ServiceError::StateUnavailable("enrollment challenge"));
         }
         let auth_token_key = self.get_auth_token_key()?;
@@ -391,20 +392,6 @@ impl FingerGuardService {
         let session_counter = SensorSessionCounter::load().unwrap_or_default();
         // Close the session.
         *sensor_session = SensorSession::NONE;
-        // Build the outgoing HAT.
-        let aid_file_name = sensor_state_index.authenticator_id_file_name();
-        let sid_file_name = sensor_state_index.secure_user_id_file_name();
-        let authenticator_id = AuthenticatorId::load_from(&aid_file_name)?;
-        let secure_user_id = SecureUserId::load_from(&sid_file_name)?;
-        let hat = HardwareAuthToken {
-            version: 0,
-            challenge: challenge,
-            userId: secure_user_id.as_i64(),
-            authenticatorId: authenticator_id.as_i64(),
-            authenticatorType: 2, // Fingerprint
-            timestamp: clock::elapsed_real_time_milli()?,
-            mac: vec![],
-        };
         // If enrollment succeeds, compute and compare the mac.
         if result.authenticated {
             let hmac = crypto::sensor_session_message_hmac(
@@ -421,10 +408,25 @@ impl FingerGuardService {
             if hmac != result.mac.as_slice() {
                 return Err(ServiceError::BadMac("authentication result"));
             }
-            // TODO(b/419332065): add a valid mac to HAT.
+            // Produce a valid HAT signed by the auth token key.
+            let auth_token_key = self.get_auth_token_key()?;
+            let aid_file_name = sensor_state_index.authenticator_id_file_name();
+            let sid_file_name = sensor_state_index.secure_user_id_file_name();
+            let authenticator_id = AuthenticatorId::load_from(&aid_file_name)?;
+            let secure_user_id = SecureUserId::load_from(&sid_file_name)?;
+            let hat = make_signed_hat(
+                &auth_token_key,
+                &challenge,
+                &secure_user_id,
+                &authenticator_id,
+                &AuthenticatorType::FINGERPRINT,
+                &clock::now()?,
+            )?;
+            Ok(hat)
             // TODO(b/401303592): Clear sensor lockout state.
+        } else {
+            Ok(EMPTY_HAT)
         }
-        Ok(hat)
     }
 
     fn read_authenticator_id(
@@ -700,7 +702,10 @@ mod tests {
         assert_eq!(valid_hat.userId, secure_user_id);
         assert_eq!(valid_hat.authenticatorId, new_auth_id);
         assert_ne!(valid_hat.timestamp, 0);
-        // TODO(b/419332065): Check mac.
+        assert!(
+            crypto::hardware_auth_token_mac(&auth_token_key, &valid_hat).unwrap()
+                == valid_hat.mac.as_slice()
+        );
 
         // ---- End Authentication Test ----
     }

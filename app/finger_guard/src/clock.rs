@@ -16,16 +16,20 @@
 
 //! Trusty system clock util functions.
 use crate::error::{ServiceError, ServiceResult};
+use crate::hat::HatTimestamp;
 use std::ops::Add;
 use std::time::Duration;
 
-/// Newtype for the time elaspsed in nanoseconds.
+/// For the time elaspsed in nanoseconds.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Instant(i64);
+pub struct Instant {
+    nanos: i64,
+}
 
-impl Instant {
-    pub fn to_nanos(&self) -> i64 {
-        self.0
+// Timestamp in HardwareAuthToken is in milliseconds.
+impl HatTimestamp for Instant {
+    fn value(&self) -> i64 {
+        self.nanos / 1000 / 1000
     }
 }
 
@@ -43,13 +47,13 @@ impl Add<Duration> for Instant {
     fn add(self, other: Duration) -> Instant {
         let other_nanos =
             i64::try_from(other.as_nanos()).expect("overflow with duration conversion");
-        Self(self.0.checked_add(other_nanos).expect("overflow when adding duration to instant"))
+        Self {
+            nanos: self
+                .nanos
+                .checked_add(other_nanos)
+                .expect("overflow when adding duration to instant"),
+        }
     }
-}
-
-pub fn elapsed_real_time_milli() -> ServiceResult<i64> {
-    let instant = now()?;
-    Ok(instant.to_nanos() / (1000 * 1000))
 }
 
 /// Returns nanoseconds since boot, including time spent in sleep.
@@ -60,6 +64,6 @@ pub fn now() -> ServiceResult<Instant> {
     if rc < 0 {
         Err(ServiceError::TrustySysRcError("gettime", rc))
     } else {
-        Ok(Instant(time_ns))
+        Ok(Instant { nanos: time_ns })
     }
 }

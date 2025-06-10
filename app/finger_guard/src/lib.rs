@@ -17,6 +17,7 @@
 mod clock;
 mod crypto;
 mod error;
+mod hat;
 mod keymint;
 mod rng;
 mod service;

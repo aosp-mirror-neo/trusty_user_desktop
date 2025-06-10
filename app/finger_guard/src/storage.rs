@@ -17,6 +17,7 @@
 //! Types and utilities for data which is stored persistently on the device.
 
 use crate::error::ServiceError;
+use crate::hat::{HatAuthenticatorId, HatUserId};
 use crate::rng;
 use fingerguard_api::aidl::SensorUserPair::SensorUserPair;
 use storage::{OpenMode, Port, Session};
@@ -143,6 +144,12 @@ impl AuthenticatorId {
     }
 }
 
+impl HatAuthenticatorId for AuthenticatorId {
+    fn value(&self) -> i64 {
+        self.0 as i64
+    }
+}
+
 impl PersistedState for AuthenticatorId {}
 
 #[derive(Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
@@ -156,9 +163,8 @@ impl From<i64> for SecureUserId {
     }
 }
 
-impl SecureUserId {
-    /// Convert the id to an i64.
-    pub fn as_i64(&self) -> i64 {
+impl HatUserId for SecureUserId {
+    fn value(&self) -> i64 {
         self.0 as i64
     }
 }
