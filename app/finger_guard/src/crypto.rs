@@ -93,14 +93,34 @@ pub fn decrypt_aes256_gcm(
     openssl::symm::decrypt_aead(Cipher::aes_256_gcm(), key.bytes.as_slice(), iv, aad, data, tag)
 }
 
+/// The sender of a message.
 pub enum MessageSender {
     FINGERGUARD,
     FPMCU,
 }
+impl HmacSignable for MessageSender {
+    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
+        let name: &[u8] = match self {
+            MessageSender::FINGERGUARD => b"fingerguard",
+            MessageSender::FPMCU => b"fpmcu",
+        };
+        generator.update(name)
+    }
+}
 
+/// The operation this session is performing.
 pub enum SensorSessionType {
     ENROLL,
     AUTH,
+}
+impl HmacSignable for SensorSessionType {
+    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
+        let name: &[u8] = match self {
+            SensorSessionType::ENROLL => b"enroll",
+            SensorSessionType::AUTH => b"auth",
+        };
+        generator.update(name)
+    }
 }
 
 /// Size of an HMAC, in bytes.
@@ -140,6 +160,11 @@ pub struct HmacGenerator {
     context: HmacCtx,
 }
 
+/// Trait which types can implement to support being used as part of a signed message.
+pub trait HmacSignable {
+    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()>;
+}
+
 impl HmacGenerator {
     /// Construct a new HMAC generator that will use the given key.
     pub fn new(key: &FixedSizeEntropy) -> ServiceResult<Self> {
@@ -160,6 +185,11 @@ impl HmacGenerator {
     /// Update the HMAC with the given chunk of bytes.
     pub fn update(&mut self, buffer: &[u8]) -> ServiceResult<()> {
         self.context.update(buffer).map_err(|e| ServiceError::OpenSsl("unable to update hmac", e))
+    }
+
+    /// Update the HMAC with the given signable object.
+    pub fn update_with(&mut self, signable: &impl HmacSignable) -> ServiceResult<()> {
+        signable.update(self)
     }
 
     /// Complete the generation of the HMAC, returning the final result.
@@ -192,24 +222,16 @@ pub fn sensor_session_message_hmac(
     ssi: &SensorStateIndex,
     session_counter: &SensorSessionCounter,
 ) -> ServiceResult<Hmac> {
-    let sender_name: &[u8] = match sender {
-        MessageSender::FINGERGUARD => b"fingerguard",
-        MessageSender::FPMCU => b"fpmcu",
-    };
-    let session_name: &[u8] = match session_type {
-        SensorSessionType::ENROLL => b"enroll",
-        SensorSessionType::AUTH => b"auth",
-    };
     //
     // Compute mac as HMAC_SHA256(key, msg) where
     // msg = nonce || user_id || sender_name || session_name || session_counter
     //
     let mut generator = HmacGenerator::with_hmac_key(key)?;
     generator.update(nonce.as_slice())?;
-    generator.update(&ssi.user_id_be_bytes())?;
-    generator.update(sender_name)?;
-    generator.update(session_name)?;
-    generator.update(&session_counter.as_i64().to_be_bytes())?;
+    generator.update_with(ssi)?;
+    generator.update_with(&sender)?;
+    generator.update_with(&session_type)?;
+    generator.update_with(session_counter)?;
     Ok(generator.complete()?)
 }
 
