@@ -17,6 +17,7 @@
 //! Cryptographic operations used by the finger guard service.
 
 use crate::error::{ServiceError, ServiceResult};
+use crate::rng;
 use crate::storage::{SensorSessionCounter, SensorStateIndex};
 use fingerguard_api::aidl::HardwareAuthToken::HardwareAuthToken;
 use openssl::bn::BigNumContext;
@@ -27,11 +28,99 @@ use openssl::md::Md;
 use openssl::nid::Nid;
 use openssl::pkey::{PKey, Private, Public};
 use openssl::symm::Cipher;
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-/// Standard size for most chunks of entropy.
-pub const ENTROPY_SIZE: usize = 32;
-/// Standard fixed-size block of entropy, generally a key.
-pub type FixedSizeEntropy = [u8; ENTROPY_SIZE];
+/// Create a type to represent a fixed-size chunk of binary data.
+///
+/// These types are used to represent various secure blobs of data such as keys and nonces and
+/// hashes. The reason for using these stronger types is to avoid accidental misuse of the raw
+/// bytes, for example by forcing the use of constant-time comparison.
+///
+/// The generated type will have the following properties:
+///   - A const SIZE member, the size of the blob in bytes
+///   - Support for (safe constant-time) equality comparisons with the same type
+///
+/// In order to be useful for export to external APIs and for serialization to storage the
+/// generated type will also support the following:
+///   - Conversion to Vec<u8> and [u8; SIZE] for export to external APIs
+///   - Conversion Into and From bytes using zerocopy
+/// However, these types should not be used by internal code to extract the raw bytes for direct
+/// use. Any operations that need to use the bytes should instead be defined on the generated type
+/// directly.
+macro_rules! blob_newtype {
+    ($name:ident, $size:literal) => {
+        #[derive(FromBytes, IntoBytes, Immutable)]
+        pub struct $name {
+            bytes: [u8; $size],
+        }
+        impl PartialEq<&[u8]> for $name {
+            fn eq(&self, other: &&[u8]) -> bool {
+                openssl::memcmp::eq(&self.bytes, other)
+            }
+        }
+        impl From<$name> for Vec<u8> {
+            fn from(value: $name) -> Self {
+                value.bytes.to_vec()
+            }
+        }
+        impl From<$name> for [u8; $name::SIZE] {
+            fn from(value: $name) -> Self {
+                value.bytes
+            }
+        }
+        impl From<&$name> for Vec<u8> {
+            fn from(value: &$name) -> Self {
+                value.bytes.to_vec()
+            }
+        }
+        impl From<&$name> for [u8; $name::SIZE] {
+            fn from(value: &$name) -> Self {
+                value.bytes
+            }
+        }
+        impl $name {
+            const SIZE: usize = $size;
+        }
+    };
+}
+
+// Define a type for a generic key.
+blob_newtype!(Key, 32);
+
+// Define a new type for nonces.
+blob_newtype!(Nonce, 32);
+impl Nonce {
+    /// Securely generate a new nonce.
+    pub fn generate() -> Self {
+        Self { bytes: rng::generate_random_buffer::<{ Self::SIZE }>() }
+    }
+    /// Import a nonce that was supplied as a blob of bytes. Can fail if the size is incorrect.
+    pub fn import(value: &[u8]) -> ServiceResult<Self> {
+        Ok(Self {
+            bytes: value.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
+                name: "nonce",
+                expected: Nonce::SIZE,
+                actual: value.len(),
+            })?,
+        })
+    }
+}
+impl HmacSignable for Nonce {
+    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
+        generator.update(&self.bytes)
+    }
+}
+
+// Define a new type for a secret. Note that while most of the blobs (e.g. nonces, keys) are
+// secrets, those ones have additional semantic intent: nonces should only be used once, keys
+// can be used to encrypt/decrypt data, and so on.
+blob_newtype!(Secret, 32);
+impl Secret {
+    /// Securely generate a new secret.
+    pub fn generate() -> Self {
+        Self { bytes: rng::generate_random_buffer::<{ Self::SIZE }>() }
+    }
+}
 
 /// The type of EC used by finger_guard.
 pub const NIST_P256_CURVE_NAME: Nid = Nid::X9_62_PRIME256V1;
@@ -58,16 +147,29 @@ pub fn ec_public_key_serialization(
 pub fn perform_ecdh(
     server_private_key: &PKey<Private>,
     client_public_key_bytes: &[u8],
-) -> Result<Vec<u8>, openssl::error::ErrorStack> {
-    let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
-    let mut ctx = BigNumContext::new()?;
-    let client_public_point = EcPoint::from_bytes(&group, &client_public_key_bytes, &mut ctx)?;
-    let client_public_key: PKey<Public> =
-        EcKey::from_public_key(&group, &client_public_point)?.try_into()?;
-    let mut pk_deriver = Deriver::new(&server_private_key)?;
-    pk_deriver.set_peer(&client_public_key)?;
-    let pk = pk_deriver.derive_to_vec()?;
-    Ok(pk)
+) -> ServiceResult<Key> {
+    // Perform all of the crypto operations to produce the new key.
+    let pk = (|| {
+        let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
+        let mut ctx = BigNumContext::new()?;
+        let client_public_point = EcPoint::from_bytes(&group, &client_public_key_bytes, &mut ctx)?;
+        let client_public_key: PKey<Public> =
+            EcKey::from_public_key(&group, &client_public_point)?.try_into()?;
+        let mut pk_deriver = Deriver::new(&server_private_key)?;
+        pk_deriver.set_peer(&client_public_key)?;
+        let pk = pk_deriver.derive_to_vec()?;
+        Ok(pk)
+    })()
+    .map_err(|e| ServiceError::OpenSsl("failed to derive pk", e))?;
+    // Convert the resulting key object into a Key instance.
+    let len = pk.len();
+    Ok(Key {
+        bytes: pk.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
+            name: "pk",
+            expected: Key::SIZE,
+            actual: len,
+        })?,
+    })
 }
 
 /// Encrypt a message using AES256-GCM with the given Hmac as a key.
@@ -75,10 +177,17 @@ pub fn encrypt_aes256_gcm(
     key: &Hmac,
     iv: Option<&[u8]>,
     aad: &[u8],
-    data: &[u8],
+    data: &Secret,
     tag: &mut [u8],
 ) -> Result<Vec<u8>, openssl::error::ErrorStack> {
-    openssl::symm::encrypt_aead(Cipher::aes_256_gcm(), key.bytes.as_slice(), iv, aad, data, tag)
+    openssl::symm::encrypt_aead(
+        Cipher::aes_256_gcm(),
+        key.bytes.as_slice(),
+        iv,
+        aad,
+        &data.bytes,
+        tag,
+    )
 }
 
 /// Decrypt a message using AES256-GCM with the given Hmac as a key.
@@ -89,8 +198,24 @@ pub fn decrypt_aes256_gcm(
     aad: &[u8],
     data: &[u8],
     tag: &[u8],
-) -> Result<Vec<u8>, openssl::error::ErrorStack> {
-    openssl::symm::decrypt_aead(Cipher::aes_256_gcm(), key.bytes.as_slice(), iv, aad, data, tag)
+) -> ServiceResult<Secret> {
+    let secret = openssl::symm::decrypt_aead(
+        Cipher::aes_256_gcm(),
+        key.bytes.as_slice(),
+        iv,
+        aad,
+        data,
+        tag,
+    )
+    .map_err(|e| ServiceError::OpenSsl("decryption operation failed", e))?;
+    let len = secret.len();
+    Ok(Secret {
+        bytes: secret.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
+            name: "secret",
+            expected: Secret::SIZE,
+            actual: len,
+        })?,
+    })
 }
 
 /// The sender of a message.
@@ -123,33 +248,12 @@ impl HmacSignable for SensorSessionType {
     }
 }
 
-/// Size of an HMAC, in bytes.
-pub const HMAC_SIZE: usize = 32; // These are SHA-256 HMACs.
-
-/// Object representing an HMAC.
-///
-/// An HMAC is ultimately just a blob of bytes, but this type restricts the operations that can be
-/// performed on it to give us more control over how it is used.
-pub struct Hmac {
-    bytes: [u8; HMAC_SIZE],
-}
-
-/// Compare an HMAC to a given blob of bytes.
-///
-/// This is done with a constant-time comparison to avoid timing attacks.
-impl PartialEq<&[u8]> for Hmac {
-    fn eq(&self, other: &&[u8]) -> bool {
-        openssl::memcmp::eq(&self.bytes, other)
-    }
-}
-
-/// Allow Hmac to be converted to a Vec<u8> for external export.
-///
-/// This should not be used internally to extract the bytes of the HMAC and perform operations on
-/// them. Instead, any such computations should be added as methods on the Hmac struct.
-impl From<Hmac> for Vec<u8> {
+// Define a type for a the SHA-256 HMACs we use.
+blob_newtype!(Hmac, 32);
+// HMACs can also be used as keys, so we support Hmac->Key conversion.
+impl From<Hmac> for Key {
     fn from(value: Hmac) -> Self {
-        value.bytes.to_vec()
+        Self { bytes: value.bytes }
     }
 }
 
@@ -167,15 +271,7 @@ pub trait HmacSignable {
 
 impl HmacGenerator {
     /// Construct a new HMAC generator that will use the given key.
-    pub fn new(key: &FixedSizeEntropy) -> ServiceResult<Self> {
-        Ok(Self {
-            context: HmacCtx::new(key, Md::sha256())
-                .map_err(|e| ServiceError::OpenSsl("unable to initialize hmac", e))?,
-        })
-    }
-
-    /// Construct a new HMAC generator that will use the given HMAC as the key.
-    pub fn with_hmac_key(key: &Hmac) -> ServiceResult<Self> {
+    pub fn new(key: &Key) -> ServiceResult<Self> {
         Ok(Self {
             context: HmacCtx::new(&key.bytes, Md::sha256())
                 .map_err(|e| ServiceError::OpenSsl("unable to initialize hmac", e))?,
@@ -205,7 +301,7 @@ impl HmacGenerator {
     ///
     /// This is a useful helper method that simplifies the very common case of
     /// computing an HMAC using a single pre-existing buffer of bytes.
-    pub fn compute(key: &FixedSizeEntropy, buffer: &[u8]) -> ServiceResult<Hmac> {
+    pub fn compute(key: &Key, buffer: &[u8]) -> ServiceResult<Hmac> {
         let mut generator = Self::new(key)?;
         generator.update(buffer)?;
         Ok(generator.complete()?)
@@ -215,8 +311,8 @@ impl HmacGenerator {
 /// Helper to compute the HMAC for the enrollment/authentication
 /// session messages from this service or from the sensor.
 pub fn sensor_session_message_hmac(
-    key: &Hmac,
-    nonce: &FixedSizeEntropy,
+    key: &Key,
+    nonce: &Nonce,
     sender: MessageSender,
     session_type: SensorSessionType,
     ssi: &SensorStateIndex,
@@ -226,8 +322,8 @@ pub fn sensor_session_message_hmac(
     // Compute mac as HMAC_SHA256(key, msg) where
     // msg = nonce || user_id || sender_name || session_name || session_counter
     //
-    let mut generator = HmacGenerator::with_hmac_key(key)?;
-    generator.update(nonce.as_slice())?;
+    let mut generator = HmacGenerator::new(key)?;
+    generator.update_with(nonce)?;
     generator.update_with(ssi)?;
     generator.update_with(&sender)?;
     generator.update_with(&session_type)?;
@@ -246,10 +342,7 @@ pub fn sensor_session_message_hmac(
 /// machine order, but authenticatorType and timestamp are in network order
 /// (big-endian). This odd construction is compatible with the hw_auth_token_t
 /// structure.
-pub fn hardware_auth_token_mac(
-    key: &FixedSizeEntropy,
-    hat: &HardwareAuthToken,
-) -> ServiceResult<Hmac> {
+pub fn hardware_auth_token_mac(key: &Key, hat: &HardwareAuthToken) -> ServiceResult<Hmac> {
     let mut generator = HmacGenerator::new(key)?;
     generator.update(&hat.version.to_ne_bytes())?;
     generator.update(&hat.challenge.to_ne_bytes())?;

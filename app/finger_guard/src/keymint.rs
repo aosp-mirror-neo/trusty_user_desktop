@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::crypto;
 use crate::error::{ServiceError, ServiceResult};
 use kmr_common::wire::legacy::{self, TrustyKeymasterSecureOperation};
 use std::ffi::CStr;
@@ -74,7 +75,7 @@ fn raw_get_auth_token_key_response() -> tipc::Result<Vec<u8>> {
 #[repr(C)]
 struct AuthTokenKeyMessage {
     _raw_cmd: u32,
-    auth_token_key: [u8; 32],
+    auth_token_key: crypto::Key,
 }
 
 #[derive(FromBytes)]
@@ -86,7 +87,7 @@ struct ErrorMessage {
 
 // Parse the raw response of GetAuthTokenKey and returns the 32-byte auth token
 // key if any.
-pub fn get_auth_token_key() -> ServiceResult<[u8; 32]> {
+pub fn get_auth_token_key() -> ServiceResult<crypto::Key> {
     let raw_response = raw_get_auth_token_key_response()
         .map_err(|e| ServiceError::TipcError("Keymint connection failed", e))?;
 
