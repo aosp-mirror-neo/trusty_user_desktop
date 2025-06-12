@@ -19,7 +19,6 @@
 use crate::error::{ServiceError, ServiceResult};
 use crate::rng;
 use crate::storage::{SensorSessionCounter, SensorStateIndex};
-use fingerguard_api::aidl::HardwareAuthToken::HardwareAuthToken;
 use openssl::bn::BigNumContext;
 use openssl::derive::Deriver;
 use openssl::ec::{EcGroup, EcKey, EcPoint, PointConversionForm};
@@ -306,6 +305,16 @@ impl HmacGenerator {
         generator.update(buffer)?;
         Ok(generator.complete()?)
     }
+
+    /// Compute an HMAC using the given key and signable object.
+    ///
+    /// This is a useful helper method that simplifies the very common case of
+    /// computing an HMAC using a single pre-existing object.
+    pub fn compute_with(key: &Key, signable: &impl HmacSignable) -> ServiceResult<Hmac> {
+        let mut generator = Self::new(key)?;
+        generator.update_with(signable)?;
+        Ok(generator.complete()?)
+    }
 }
 
 /// Helper to compute the HMAC for the enrollment/authentication
@@ -328,27 +337,5 @@ pub fn sensor_session_message_hmac(
     generator.update_with(&sender)?;
     generator.update_with(&session_type)?;
     generator.update_with(session_counter)?;
-    Ok(generator.complete()?)
-}
-
-/// Helper to compute the MAC for a given HardwareAuthToken.
-/// The MAC is a 32 bytes HMAC-SHA256 with the auth token signing key over the
-/// following string
-///         version || challenge || user_id || authenticator_id || authenticator_type || timestamp
-///
-/// where ``||'' represents concatenation, the leading version is a single
-/// byte, and all integers are represented as unsigned values, the full width
-/// of the type.  The challenge, userId and authenticatorId values are in
-/// machine order, but authenticatorType and timestamp are in network order
-/// (big-endian). This odd construction is compatible with the hw_auth_token_t
-/// structure.
-pub fn hardware_auth_token_mac(key: &Key, hat: &HardwareAuthToken) -> ServiceResult<Hmac> {
-    let mut generator = HmacGenerator::new(key)?;
-    generator.update(&hat.version.to_ne_bytes())?;
-    generator.update(&hat.challenge.to_ne_bytes())?;
-    generator.update(&hat.userId.to_ne_bytes())?;
-    generator.update(&hat.authenticatorId.to_ne_bytes())?;
-    generator.update(&hat.authenticatorType.to_be_bytes())?;
-    generator.update(&hat.timestamp.to_be_bytes())?;
     Ok(generator.complete()?)
 }
