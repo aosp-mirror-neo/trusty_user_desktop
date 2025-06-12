@@ -16,7 +16,7 @@
 
 //! Common functions and data structures dealing with HardwareAuthToken
 
-use crate::crypto::{self, FixedSizeEntropy};
+use crate::crypto;
 use crate::error::ServiceResult;
 use fingerguard_api::aidl::HardwareAuthToken::HardwareAuthToken;
 
@@ -47,7 +47,7 @@ impl HatChallenge for i64 {
 }
 
 pub fn make_signed_hat(
-    key: &FixedSizeEntropy,
+    key: &crypto::Key,
     challenge: &impl HatChallenge,
     user_id: &impl HatUserId,
     authenticator_id: &impl HatAuthenticatorId,
