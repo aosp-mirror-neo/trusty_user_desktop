@@ -461,12 +461,23 @@ pub trait Pinweaver {
     /// An abstraction of the Error type returned by Pinweaver RPCs.
     type Error;
 
+    /// Erase the existing pinweaver tree and create a new one with the specified parameters.
+    fn reset_tree(&self, tree_params: TreeParams) -> Result<(), Self::Error>;
+
     /// Get current pinweaver timestamp from GSC.
     fn sys_info(&self) -> Result<Timestamp, Self::Error>;
 }
 
 impl<I: TpmInterface> Pinweaver for I {
     type Error = I::Error;
+
+    fn reset_tree(&self, tree_params: TreeParams) -> Result<(), Self::Error> {
+        let mut req = request::Request::<request::ResetTree>::new_zeroed();
+        req.data = request::ResetTree { tree_params };
+        req.init(()).expect("bad parameters");
+        let _resp: response::Response<response::ResetTree> = self.transmit(req)?;
+        Ok(())
+    }
 
     fn sys_info(&self) -> Result<Timestamp, Self::Error> {
         let mut req = request::Request::<request::SysInfo>::new_zeroed();
