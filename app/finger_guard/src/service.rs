@@ -235,7 +235,7 @@ impl FingerGuardService {
             return Err(ServiceError::StateUnavailable("enrollment challenge"));
         }
         let auth_token_key = self.get_auth_token_key()?;
-        let mac = crypto::hardware_auth_token_mac(&auth_token_key, hat)?;
+        let mac = crypto::HmacGenerator::compute_with(&auth_token_key, hat)?;
         if mac != hat.mac.as_slice() {
             return Err(ServiceError::BadMac("hardware auth token"));
         }
@@ -635,7 +635,7 @@ mod tests {
             timestamp: 0,
             mac: vec![],
         };
-        hat.mac = Vec::from(crypto::hardware_auth_token_mac(&auth_token_key, &hat).unwrap());
+        hat.mac = Vec::from(crypto::HmacGenerator::compute_with(&auth_token_key, &hat).unwrap());
         let session_resp = service.prepareEnrollSession(&sup, &hat).unwrap();
         assert_eq!(session_resp.sessionCounter, 1);
         let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
@@ -661,7 +661,7 @@ mod tests {
 
         // Test enrollment session cancellation.
         hat.challenge = service.generateChallenge(&sup).unwrap();
-        hat.mac = Vec::from(crypto::hardware_auth_token_mac(&auth_token_key, &hat).unwrap());
+        hat.mac = Vec::from(crypto::HmacGenerator::compute_with(&auth_token_key, &hat).unwrap());
         let session_resp = service.prepareEnrollSession(&sup, &hat).unwrap();
         assert_eq!(session_resp.sessionCounter, 2);
         // Use a empty mac to signal the session cancellation.
@@ -694,7 +694,7 @@ mod tests {
         assert_eq!(valid_hat.authenticatorId, new_auth_id);
         assert_ne!(valid_hat.timestamp, 0);
         assert!(
-            crypto::hardware_auth_token_mac(&auth_token_key, &valid_hat).unwrap()
+            crypto::HmacGenerator::compute_with(&auth_token_key, &valid_hat).unwrap()
                 == valid_hat.mac.as_slice()
         );
 
