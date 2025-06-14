@@ -15,9 +15,20 @@
  */
 //! Unit tests.
 
+use gsc_svc_client::GscServiceClient;
+use log::info;
+use tpm_commands::pinweaver::Pinweaver;
+
 test::init!();
 
 #[test]
 fn pinweaver_test() {
-    // This is a placeholder to make sure the test builds and runs successfully.
+    let gsc = GscServiceClient::default();
+
+    // TODO(TBD) Replace with:
+    //   assert_matches!(gsc.sys_info(), Ok()))
+    // when assert_matches stablizes.
+    let result = gsc.sys_info();
+    info!("pinweaver current time: {:?}", result);
+    assert!(matches!(result, Ok(_)));
 }

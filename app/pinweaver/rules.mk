@@ -30,6 +30,8 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/desktop/interface/pinweaver \
 	trusty/user/desktop/interface/pinweaver/storage \
+	trusty/user/desktop/lib/gsc_svc_client \
+	trusty/user/desktop/lib/tpm_commands \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 

@@ -18,7 +18,7 @@ use android_system_desktop_security_gsc::aidl::android::system::desktop::securit
 use binder::Strong;
 use rpcbinder::RpcSession;
 use std::ffi::CStr;
-use tpm_commands::{TpmResponseHeader, TpmvRequest};
+use tpm_commands::{TpmInterface, TpmResponseHeader, TpmvRequest};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub use tpm_commands::trusty_storage_superblock_mac::{
@@ -95,6 +95,10 @@ impl GscServiceClient {
 
         Ok(())
     }
+}
+
+impl TpmInterface for GscServiceClient {
+    type Error = GscServiceClientError;
 
     /// Helper function to transmit a tpmv request and return a deserialized
     /// response type.

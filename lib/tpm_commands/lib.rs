@@ -87,6 +87,18 @@ impl UpdateStatus {
     pub const DevIdMismatch: Self = UpdateStatus(U32::new(14));
 }
 
+/// Abstract the interface to the TPM/GSC so submodules can implement RPCs.
+pub trait TpmInterface {
+    /// An abstraction of the Error type returned by TPM RPCs.
+    type Error;
+
+    /// Transmit a TPM request message and get back a TPM response message.
+    fn transmit<Req: TpmvRequest, Rsp: FromBytes + KnownLayout + Immutable>(
+        &self,
+        request: Req,
+    ) -> Result<Rsp, Self::Error>;
+}
+
 /// Defines the constants required by each type of TPM vendor request.
 ///
 /// All TPMV requests are required to implement this trait.

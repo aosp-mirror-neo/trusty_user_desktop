@@ -254,7 +254,8 @@ pub enum MessageType {
 #[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
 #[repr(C)]
 pub struct ResetTree {
-    tree_params: TreeParams,
+    /// Parameters for the Merkle tree.
+    pub tree_params: TreeParams,
 }
 
 impl RequestData for ResetTree {
