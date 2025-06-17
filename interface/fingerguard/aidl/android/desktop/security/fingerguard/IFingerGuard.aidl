@@ -19,6 +19,7 @@ package android.desktop.security.fingerguard;
 import android.desktop.security.fingerguard.AuthenticationResult;
 import android.desktop.security.fingerguard.EnrollmentResult;
 import android.desktop.security.fingerguard.HandshakeResponse;
+import android.desktop.security.fingerguard.LockoutStatus;
 import android.desktop.security.fingerguard.PrepareAuthSessionResponse;
 import android.desktop.security.fingerguard.PrepareEnrollSessionResponse;
 import android.desktop.security.fingerguard.SensorUserPair;
@@ -96,4 +97,12 @@ interface IFingerGuard {
      * (sensor, user) pair.
      */
     long newAuthenticatorId(in SensorUserPair sensorUserPair);
+    /*
+     * Returns the lockout info associated with the (sensor, user) pair.
+     */
+    LockoutStatus getLockoutStatus(in SensorUserPair sensorUserPair);
+    /*
+     * Resets the lockout state associated with the (sensor, user) pair.
+     */
+    void resetLockout(in SensorUserPair sensorUserPair, in HardwareAuthToken hat);
 }

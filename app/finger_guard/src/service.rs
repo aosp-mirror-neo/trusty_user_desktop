@@ -28,7 +28,8 @@ use binder::Interface;
 use fingerguard_api::aidl::{
     AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
     HandshakeResponse::HandshakeResponse, HardwareAuthToken::HardwareAuthToken,
-    IFingerGuard::IFingerGuard, PrepareAuthSessionResponse::PrepareAuthSessionResponse,
+    IFingerGuard::IFingerGuard, LockoutStatus::LockoutStatus,
+    PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SensorUserPair::SensorUserPair,
     SessionResponse::SessionResponse,
 };
@@ -529,6 +530,21 @@ impl IFingerGuard for FingerGuardService {
             .map(|id| id.as_i64())
             .inspect_err(|e| error!("newAuthenticatorId failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+    }
+    // TODO(b/401303592): implement
+    fn getLockoutStatus(
+        &self,
+        _sensor_user_pair: &SensorUserPair,
+    ) -> binder::Result<LockoutStatus> {
+        Err(binder::StatusCode::FAILED_TRANSACTION.into())
+    }
+    // TODO(b/401303592): implement
+    fn resetLockout(
+        &self,
+        _sensor_user_pair: &SensorUserPair,
+        _hat: &HardwareAuthToken,
+    ) -> binder::Result<()> {
+        Err(binder::StatusCode::FAILED_TRANSACTION.into())
     }
 }
 
