@@ -106,6 +106,9 @@ serde_enums! {
 
         /// Database access returned an error.
         Db = 3,
+
+        /// 'No replace' operation would replace.
+        WouldReplace = 4,
     }
 
     /// The suboperation-specific data for a start-operation response.

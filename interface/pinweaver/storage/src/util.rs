@@ -160,6 +160,23 @@ impl<'de, const N: u32> serde::Deserialize<'de> for SerdeVec<crate::TreeHash, N>
     }
 }
 
+impl<T, const N: u32> SerdeVec<T, N> {
+    /// Converts a Vec<> to a SerdeVec. Note this will panic if the Vec<> is too large.
+    pub fn from_vec(values: Vec<T>) -> Self {
+        SerdeVec { len: values.len().try_into().expect("too many path hashes"), values }
+    }
+}
+
+impl<F, T: From<F>, I: Iterator<Item = F>, const N: u32> From<I> for SerdeVec<T, N>
+where
+    std::vec::Vec<T>: std::iter::FromIterator<T>,
+{
+    fn from(values: I) -> Self {
+        let converted: Vec<T> = values.map(T::from).collect();
+        Self::from_vec(converted)
+    }
+}
+
 /// An `Option` alternative that is compatible with tipc serialization.
 #[derive(Debug)]
 #[repr(u8)]
@@ -176,6 +193,16 @@ impl<T: Clone> Clone for SerdeOption<T> {
         match self {
             Self::None => Self::None,
             Self::Some(t) => Self::Some(t.clone()),
+        }
+    }
+}
+
+impl<T> SerdeOption<T> {
+    /// Get an Option to a reference of the contained value.
+    pub const fn as_ref(&self) -> Option<&T> {
+        match self {
+            Self::None => None,
+            Self::Some(v) => Some(v),
         }
     }
 }
