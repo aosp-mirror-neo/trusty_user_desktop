@@ -1,0 +1,6 @@
+{
+    "app_name": "weaver_app",
+    "uuid": "2b26f01c-5f26-48a1-8e4f-e1b9b7e1d99f",
+    "min_heap": 16384,
+    "min_stack": 16384
+}
