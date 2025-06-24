@@ -18,7 +18,7 @@
 
 use crate::crypto::{HmacGenerator, HmacSignable};
 use crate::error::{ServiceError, ServiceResult};
-use crate::hat::{HatAuthenticatorId, HatUserId};
+use crate::hat::{ExportToHat, SignedHat};
 use crate::rng;
 use fingerguard_api::aidl::SensorUserPair::SensorUserPair;
 use storage::{OpenMode, Port, Session};
@@ -148,9 +148,9 @@ impl AuthenticatorId {
     }
 }
 
-impl HatAuthenticatorId for AuthenticatorId {
-    fn value(&self) -> i64 {
-        self.0 as i64
+impl ExportToHat for AuthenticatorId {
+    fn export(&self, out: &mut SignedHat) {
+        out.authenticatorId = self.0 as i64;
     }
 }
 
@@ -167,9 +167,9 @@ impl From<i64> for SecureUserId {
     }
 }
 
-impl HatUserId for SecureUserId {
-    fn value(&self) -> i64 {
-        self.0 as i64
+impl ExportToHat for SecureUserId {
+    fn export(&self, out: &mut SignedHat) {
+        out.userId = self.0 as i64;
     }
 }
 

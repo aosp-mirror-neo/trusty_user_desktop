@@ -17,7 +17,7 @@
 use crate::clock::{self, Instant};
 use crate::crypto;
 use crate::error::{ServiceError, ServiceResult};
-use crate::hat::{make_signed_hat, AuthenticatorType, EMPTY_HAT};
+use crate::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
 use crate::keymint;
 use crate::rng;
 use crate::storage::{
@@ -413,14 +413,14 @@ impl FingerGuardService {
             let sid_file_name = sensor_state_index.secure_user_id_file_name();
             let authenticator_id = AuthenticatorId::load_from(&aid_file_name)?;
             let secure_user_id = SecureUserId::load_from(&sid_file_name)?;
-            let hat = make_signed_hat(
-                &auth_token_key,
-                &challenge,
-                &secure_user_id,
-                &authenticator_id,
-                &AuthenticatorType::FINGERPRINT,
-                &clock::now()?,
-            )?;
+            let hat = UnsignedHat::new(
+                challenge,
+                secure_user_id,
+                authenticator_id,
+                AuthenticatorType::FINGERPRINT,
+                clock::now()?,
+            );
+            let hat = hat.sign(&auth_token_key)?;
             Ok(hat)
             // TODO(b/401303592): Clear sensor lockout state.
         } else {

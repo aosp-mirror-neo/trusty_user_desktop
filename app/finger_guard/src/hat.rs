@@ -16,55 +16,54 @@
 
 //! Common functions and data structures dealing with HardwareAuthToken
 
+use crate::clock::Instant;
 use crate::crypto::{self, HmacGenerator, HmacSignable};
 use crate::error::ServiceResult;
+use crate::storage::{AuthenticatorId, SecureUserId};
 use fingerguard_api::aidl::HardwareAuthToken::HardwareAuthToken;
 
-pub trait HatChallenge {
-    fn value(&self) -> i64;
+/// Represents an unsigned hardware auth token.
+pub struct UnsignedHat {
+    version: i8,
+    challenge: i64,
+    user_id: SecureUserId,
+    authenticator_id: AuthenticatorId,
+    authenticator_type: AuthenticatorType,
+    timestamp: Instant,
 }
 
-pub trait HatUserId {
-    fn value(&self) -> i64;
-}
+/// Represents a signed hardware auth token.
+pub type SignedHat = fingerguard_api::aidl::HardwareAuthToken::HardwareAuthToken;
 
-pub trait HatAuthenticatorId {
-    fn value(&self) -> i64;
-}
+impl UnsignedHat {
+    /// Construct a new hardware auth token with the given parameters and timestamp.
+    pub fn new(
+        challenge: i64,
+        user_id: SecureUserId,
+        authenticator_id: AuthenticatorId,
+        authenticator_type: AuthenticatorType,
+        timestamp: Instant,
+    ) -> Self {
+        Self { version: 0, challenge, user_id, authenticator_id, authenticator_type, timestamp }
+    }
 
-pub trait HatAuthenticatorType {
-    fn value(&self) -> i32;
-}
-
-pub trait HatTimestamp {
-    fn value(&self) -> i64;
-}
-
-impl HatChallenge for i64 {
-    fn value(&self) -> i64 {
-        *self
+    /// Attempt to convert the unsigned token into a signed one, using the given key.
+    pub fn sign(&self, key: &crypto::Key) -> ServiceResult<HardwareAuthToken> {
+        let mut hat = HardwareAuthToken::default();
+        hat.version = self.version;
+        hat.challenge = self.challenge;
+        self.user_id.export(&mut hat);
+        self.authenticator_id.export(&mut hat);
+        self.authenticator_type.export(&mut hat);
+        self.timestamp.export(&mut hat);
+        hat.mac = HmacGenerator::compute_with(key, &hat)?.into();
+        Ok(hat)
     }
 }
 
-pub fn make_signed_hat(
-    key: &crypto::Key,
-    challenge: &impl HatChallenge,
-    user_id: &impl HatUserId,
-    authenticator_id: &impl HatAuthenticatorId,
-    authenticator_type: &impl HatAuthenticatorType,
-    timestamp: &impl HatTimestamp,
-) -> ServiceResult<HardwareAuthToken> {
-    let mut hat = HardwareAuthToken {
-        version: 0,
-        challenge: challenge.value(),
-        userId: user_id.value(),
-        authenticatorId: authenticator_id.value(),
-        authenticatorType: authenticator_type.value(),
-        timestamp: timestamp.value(),
-        mac: vec![],
-    };
-    hat.mac = HmacGenerator::compute_with(key, &hat)?.into();
-    Ok(hat)
+/// Trait that is implemented by the constituent parts of a token for export+signing.
+pub trait ExportToHat {
+    fn export(&self, out: &mut SignedHat);
 }
 
 pub const EMPTY_HAT: HardwareAuthToken = HardwareAuthToken {
@@ -88,9 +87,9 @@ impl AuthenticatorType {
     pub const FINGERPRINT: Self = Self(2);
 }
 
-impl HatAuthenticatorType for AuthenticatorType {
-    fn value(&self) -> i32 {
-        self.0 as i32
+impl ExportToHat for AuthenticatorType {
+    fn export(&self, out: &mut HardwareAuthToken) {
+        out.authenticatorType = self.0 as i32;
     }
 }
 
