@@ -16,7 +16,7 @@
 
 //! Trusty system clock util functions.
 use crate::error::{ServiceError, ServiceResult};
-use crate::hat::HatTimestamp;
+use crate::hat::{ExportToHat, SignedHat};
 use std::ops::Add;
 use std::time::Duration;
 
@@ -26,10 +26,10 @@ pub struct Instant {
     nanos: i64,
 }
 
-// Timestamp in HardwareAuthToken is in milliseconds.
-impl HatTimestamp for Instant {
-    fn value(&self) -> i64 {
-        self.nanos / 1000 / 1000
+impl ExportToHat for Instant {
+    fn export(&self, out: &mut SignedHat) {
+        // The exported timestamp is in milliseconds.
+        out.timestamp = self.nanos / 1000 / 1000;
     }
 }
 
