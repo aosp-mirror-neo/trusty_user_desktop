@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::aidl;
 use crate::clock::{self, Instant};
 use crate::crypto;
 use crate::error::{ServiceError, ServiceResult};
@@ -137,7 +138,7 @@ impl FingerGuardService {
         let new_init_params = InitParams { pk, tpm_seed };
         new_init_params.save()?;
         *init_params = Some(new_init_params);
-        Ok(HandshakeResponse { serverPublicKey: server_public_key_bytes, pkMac: mac.into() })
+        Ok(aidl::make_handshake_response(server_public_key_bytes, &mac))
     }
 
     fn new_session(&self, client_nonce: &[u8]) -> ServiceResult<SessionResponse> {
@@ -173,7 +174,7 @@ impl FingerGuardService {
         )
         .map_err(|e| ServiceError::OpenSsl("failed to encrypt tpm_seed", e))?;
         *sk = Some(new_sk.into());
-        Ok(SessionResponse { nonce: nonce.into(), wrappedTpmSeed: wrapped_tpm_seed, iv, tag })
+        Ok(aidl::make_session_response(&nonce, wrapped_tpm_seed, iv, tag))
     }
 
     fn generate_challenge(&self, sensor_user_pair: &SensorUserPair) -> ServiceResult<i64> {
@@ -261,11 +262,7 @@ impl FingerGuardService {
             &sensor_state_index,
             &session_counter,
         )?;
-        let response = PrepareEnrollSessionResponse {
-            sessionCounter: session_counter.as_i64(),
-            nonce: (&nonce).into(),
-            mac: hmac.into(),
-        };
+        let response = aidl::make_prepare_enroll_session_response(&session_counter, &nonce, &hmac);
         *sensor_session = SensorSession::ENROLL { nonce };
         Ok(response)
     }
@@ -356,11 +353,7 @@ impl FingerGuardService {
             &sensor_state_index,
             &session_counter,
         )?;
-        let response = PrepareAuthSessionResponse {
-            sessionCounter: session_counter.as_i64(),
-            nonce: (&nonce).into(),
-            mac: hmac.into(),
-        };
+        let response = aidl::make_prepare_auth_session_response(&session_counter, &nonce, &hmac);
         *sensor_session = SensorSession::AUTH { nonce, challenge };
         Ok(response)
     }

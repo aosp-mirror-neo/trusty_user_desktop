@@ -14,6 +14,7 @@
 * limitations under the License.
 */
 
+mod aidl;
 mod clock;
 mod crypto;
 mod error;
