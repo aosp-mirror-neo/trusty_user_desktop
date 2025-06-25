@@ -2,6 +2,7 @@ aidl_interface {
     name: "android.desktop.security.fingerguard",
     owner: "google",
     unstable: true,
+    vendor_available: true,
     srcs: [
         "android/desktop/security/fingerguard/AuthenticationResult.aidl",
         "android/desktop/security/fingerguard/EnrollmentResult.aidl",
