@@ -151,7 +151,7 @@ pub struct Path(pub [u8; 8]);
 pub type LeafContents = SerdeVec<u8, LEAF_SIZE>;
 
 /// Parameters for a PinWeaver hash tree.
-#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Clone, Copy, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct TreeParams {
@@ -163,7 +163,7 @@ pub struct TreeParams {
     pub bits_per_level: u8,
 }
 
-#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Clone, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
 /// A SHA-256 digest.
@@ -174,7 +174,7 @@ pub type TreeHashes = SerdeVec<TreeHash, MAX_AUX_HASHES>;
 
 /// When PinWeaver needs to store a high-entropy secret that is larger than
 /// 32 bytes, the leaf's secret is an AES key used with these parameters.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct LargeSecretInfo {
     /// The IV for the ciphertext/key. Must not be reused.
@@ -189,7 +189,7 @@ pub struct LargeSecretInfo {
 }
 
 /// An AES-256 Initialization Vector.
-#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Clone, Copy, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
 pub struct LargeSecretIv(
@@ -199,7 +199,7 @@ pub struct LargeSecretIv(
 /// The GCM [authentication tag] ensuring integrity of large-secret data.
 ///
 /// [authentication tag]: https://en.wikipedia.org/wiki/Authenticated_encryption
-#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Clone, Copy, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
 pub struct LargeSecretAuthTag(pub U32);
