@@ -137,6 +137,20 @@ pub struct ResponseHeader {
     pub root: Hash,
 }
 
+/// Intermediate type when parsing responses since the data may be empty on error.
+#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
+pub struct UnparsedResponse(pub [u8]);
+
+impl ResponseData for UnparsedResponse {
+    type RequestData = request::UnparsedRequest;
+
+    /// Checks the validity of the message-type-specific data.
+    fn check_consistency(&self, _tree_params: &TreeParams) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
 /// The response data from resetting a tree.
 ///
 /// No extra data comes with the response.

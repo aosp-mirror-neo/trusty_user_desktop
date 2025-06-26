@@ -18,6 +18,7 @@ use crate::dispatcher::PinWeaverDispatcher;
 use crate::service::PinWeaverService;
 use crate::storage::{StorageClient, StorageClientService};
 use binder::BinderFeatures;
+use gsc_svc_client::GscServiceClient;
 use pinweaver_api::aidl::IPinWeaver::BnPinWeaver;
 use rpcbinder::RpcServer;
 use std::rc::Rc;
@@ -36,15 +37,17 @@ const CONNECTION_COUNT: usize = 4;
 struct ProdDeps;
 impl service::PinWeaverServiceDeps for ProdDeps {
     type Storage = StorageClient;
+    type Gsc = GscServiceClient;
 }
 
 pub fn init_and_start_loop() -> tipc::Result<()> {
     trusty_log::init();
     let storage = Arc::new(StorageClient::default());
     let storage_service = StorageClientService::new(storage.clone());
+    let gsc = Arc::new(GscServiceClient::default());
 
     let service = BnPinWeaver::new_binder(
-        PinWeaverService::<ProdDeps>::new(storage),
+        PinWeaverService::<ProdDeps>::new(storage, gsc),
         BinderFeatures::default(),
     );
     let rpc_server = RpcServer::new_per_session(move |_uuid| Some(service.as_binder()));

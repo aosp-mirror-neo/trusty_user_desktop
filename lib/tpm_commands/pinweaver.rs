@@ -8,6 +8,7 @@
 
 use crate::{TpmInterface, TpmRequestMessage, TpmResponseMessage, TpmvRequestBuild};
 use paste::paste;
+use std::fmt::Debug;
 use zerocopy::{
     FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned, LE, U16, U32,
     U64,
@@ -355,6 +356,12 @@ pub struct DelayScheduleEntry {
     pub time_diff: TimeDiff,
 }
 
+impl Default for DelayScheduleEntry {
+    fn default() -> Self {
+        DelayScheduleEntry::new_zeroed()
+    }
+}
+
 /// The number of delay schedule entries allowed for a PinWeaver leaf.
 pub const DELAY_SCHEDULE_ENTRIES: usize = 16;
 
@@ -417,15 +424,28 @@ pub const MAX_PCR_CRITERIA_COUNT: usize = 2;
 pub type ValidPcrCriteria = [ValidPcrValue; MAX_PCR_CRITERIA_COUNT];
 
 /// The type of PinWeaver leaf. As of writing, only `Normal` is supported by this version.
-#[derive(Clone, Copy, Debug, FromZeros, IntoBytes, Immutable, KnownLayout, Unaligned)]
-#[repr(u8)]
-pub enum LeafType {
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct LeafType(pub u8);
+
+impl LeafType {
     /// A normal leaf.
-    Normal = 0,
+    pub const NORMAL: Self = LeafType(0);
 
     /// A biometrics leaf.
-    Biometrics = 1,
+    pub const BIOMETRICS: Self = LeafType(1);
 }
+
+impl Default for LeafType {
+    fn default() -> Self {
+        LeafType::NORMAL
+    }
+}
+
+/// A field used by leaves of type LeafType::BIOMETRIC.
+#[derive(Clone, Copy, Debug, Default, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct AuthChannel(pub u8);
 
 /// Represents a set of PCR values hashed into a single digest.
 ///
@@ -439,6 +459,13 @@ pub struct ValidPcrValue {
 
     /// The hash digest of the PCR values contained in the bitmask.
     pub digest: Hash,
+}
+
+impl Default for ValidPcrValue {
+    fn default() -> Self {
+        // No criteria needs to be satisfied.
+        ValidPcrValue::new_zeroed()
+    }
 }
 
 /// Represents a notion of time for PinWeaver.
@@ -456,33 +483,140 @@ pub struct Timestamp {
     pub timer_value: U64<LE>,
 }
 
+/// Wrapper around errors when using Pinweaver on the GSC.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// An error that comes from the underlying transport scheme like TIPC.
+    #[error("transport error: {0:?}")]
+    Transport(Box<dyn Debug + 'static>),
+    /// The deserialization of a response failed.
+    #[error("failed to deserialize")]
+    Deserialize,
+    /// Some of the math operations overflowed with the given parameters.
+    #[error("overflow while constructiong request")]
+    RequestOverflow,
+    /// The response isn't consistent.
+    #[error("response consistency check failed: {0:?}")]
+    Response(#[from] response::Error),
+}
+
+type PinWeaverResult<T> = Result<T, Error>;
+
 /// Abstract the TPM/GSC Pinweaver interface.
 pub trait Pinweaver {
     /// An abstraction of the Error type returned by Pinweaver RPCs.
-    type Error;
+    type TransportError: Debug;
+
+    /// Insert a leaf into the merkle tree.
+    fn insert_leaf<'a>(
+        &self,
+        tree_params: TreeParams,
+        header: request::InsertLeafHeader,
+        path_hashes: &[Hash],
+        resp_buffer: &'a mut Vec<u8>,
+    ) -> PinWeaverResult<(Hash, &'a UnimportedLeafData)>;
+
+    /// Remove a leaf from the merkle tree.
+    fn remove_leaf(
+        &self,
+        tree_params: TreeParams,
+        header: request::RemoveLeafHeader,
+        path_hashes: &[Hash],
+    ) -> PinWeaverResult<Hash>;
 
     /// Erase the existing pinweaver tree and create a new one with the specified parameters.
-    fn reset_tree(&self, tree_params: TreeParams) -> Result<(), Self::Error>;
+    fn reset_tree(&self, tree_params: TreeParams) -> PinWeaverResult<Hash>;
 
     /// Get current pinweaver timestamp from GSC.
-    fn sys_info(&self) -> Result<Timestamp, Self::Error>;
+    fn sys_info(&self) -> PinWeaverResult<Timestamp>;
 }
 
-impl<I: TpmInterface> Pinweaver for I {
-    type Error = I::Error;
+fn transport_error<D: Debug + 'static>(err: D) -> Error {
+    Error::Transport(Box::<D>::new(err))
+}
 
-    fn reset_tree(&self, tree_params: TreeParams) -> Result<(), Self::Error> {
-        let mut req = request::Request::<request::ResetTree>::new_zeroed();
-        req.data = request::ResetTree { tree_params };
-        req.init(()).expect("bad parameters");
-        let _resp: response::Response<response::ResetTree> = self.transmit(req)?;
-        Ok(())
+impl<I: TpmInterface> Pinweaver for I
+where
+    I::Error: Debug + 'static,
+{
+    type TransportError = I::Error;
+
+    fn insert_leaf<'a>(
+        &self,
+        tree_params: TreeParams,
+        header: request::InsertLeafHeader,
+        path_hashes: &[Hash],
+        resp_buffer: &'a mut Vec<u8>,
+    ) -> PinWeaverResult<(Hash, &'a UnimportedLeafData)> {
+        let mut req_buffer = Vec::<u8>::new();
+        let req = TpmRequestMessage::<request::Request<request::InsertLeaf>>::new_in_vec(
+            &mut req_buffer,
+            tree_params,
+        )
+        .map_err(|_| Error::RequestOverflow)?;
+
+        let data = &mut req.request.data;
+        *data.header_mut() = header;
+        if data.path_hashes.len() != path_hashes.len() {
+            return Err(Error::RequestOverflow);
+        }
+        data.path_hashes.copy_from_slice(path_hashes);
+
+        let resp: &mut response::Response<response::UnparsedResponse> =
+            self.transmit_into(req, resp_buffer).map_err(transport_error)?;
+        resp.check_consistency(&tree_params)?;
+        let header = resp.header();
+        let data =
+            UnimportedLeafData::ref_from_bytes(&resp.data.0).map_err(|_| Error::Deserialize)?;
+        data.check_consistency(None).map_err(|_| Error::Deserialize)?;
+        Ok((header.root, data))
     }
 
-    fn sys_info(&self) -> Result<Timestamp, Self::Error> {
+    fn remove_leaf(
+        &self,
+        tree_params: TreeParams,
+        header: request::RemoveLeafHeader,
+        path_hashes: &[Hash],
+    ) -> PinWeaverResult<Hash> {
+        let mut req_buffer = Vec::<u8>::new();
+        let req = TpmRequestMessage::<request::Request<request::RemoveLeaf>>::new_in_vec(
+            &mut req_buffer,
+            tree_params,
+        )
+        .map_err(|_| Error::RequestOverflow)?;
+
+        let data = &mut req.request.data;
+        *data.header_mut() = header;
+        if data.path_hashes.len() != path_hashes.len() {
+            return Err(Error::RequestOverflow);
+        }
+        data.path_hashes.copy_from_slice(path_hashes);
+
+        let mut resp_buffer = Vec::<u8>::new();
+        let resp: &mut response::Response<response::RemoveLeaf> =
+            self.transmit_into(req, &mut resp_buffer).map_err(transport_error)?;
+        resp.check_consistency(&tree_params)?;
+        let header = resp.header();
+        Ok(header.root)
+    }
+
+    fn reset_tree(&self, tree_params: TreeParams) -> PinWeaverResult<Hash> {
+        let mut req = request::Request::<request::ResetTree>::new_zeroed();
+        req.data = request::ResetTree { tree_params };
+        req.init(()).map_err(|_| Error::RequestOverflow)?;
+        let resp: response::Response<response::ResetTree> =
+            self.transmit(req).map_err(transport_error)?;
+        resp.check_consistency(&tree_params)?;
+        let header = resp.header();
+        Ok(header.root)
+    }
+
+    fn sys_info(&self) -> PinWeaverResult<Timestamp> {
         let mut req = request::Request::<request::SysInfo>::new_zeroed();
-        req.init(()).expect("bad parameters");
-        let resp: response::Response<response::SysInfo> = self.transmit(req)?;
+        req.init(()).map_err(|_| Error::RequestOverflow)?;
+        let resp: response::Response<response::SysInfo> =
+            self.transmit(req).map_err(transport_error)?;
+        resp.check_consistency(&TreeParams { height: 0, bits_per_level: 0 })?;
         Ok(resp.data.current_timestamp)
     }
 }

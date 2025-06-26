@@ -16,11 +16,14 @@
 //! v1 storage response
 
 use super::{LargeSecretInfo, LeafContents, LeafId, Path, TreeHash, TreeHashes, TreeParams, U32};
-use crate::util::{serde_enums, serde_fields, serde_zerocopy, SerdeOption};
+use crate::{
+    request::StartOpRequest,
+    util::{serde_enums, serde_fields, serde_zerocopy, SerdeOption},
+};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 /// The response when getting the status of PinWeaver.
-#[derive(Clone, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Clone, Debug)]
 #[repr(C)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct GetStatusResponse {
@@ -29,6 +32,9 @@ pub struct GetStatusResponse {
 
     /// The current root hash for the tree.
     pub root_hash: TreeHash,
+
+    /// The current pending operation.
+    pub pending_op: SerdeOption<StartOpRequest>,
 }
 
 /// The response when resetting the PinWeaver tree on disk.
@@ -115,6 +121,9 @@ serde_enums! {
 
         /// A pending operation needs to be completed for consistency.
         OperationPending = 6,
+
+        /// The specified leaf does not exist.
+        DoesNotExist = 7,
     }
 
     /// The suboperation-specific data for a start-operation response.
@@ -232,6 +241,7 @@ pub struct RemoveHashes {
 }
 
 serde_fields! {
+    GetStatusResponse { tree_params, root_hash, pending_op },
     StartOpResponse { path, tree_hashes, op_data },
     CommitOpResponse { path, root_hash, op_data },
     StartInsertResponseData { replacing_path },
@@ -240,9 +250,4 @@ serde_fields! {
     RemoveHashes { leaf_hmac, tree_hashes },
 }
 
-serde_zerocopy!(
-    ContinueRemoveBulkResponseHeader,
-    GetStatusResponse,
-    ResetTreeResponse,
-    StartRemoveResponseData,
-);
+serde_zerocopy!(ContinueRemoveBulkResponseHeader, ResetTreeResponse, StartRemoveResponseData,);

@@ -58,6 +58,7 @@ interface IPinWeaver {
      * @param id                 Chosen by the client to identify this leaf
      * @param lowEntropySecret   The new low entropy secret to protect this leaf
      * @param highEntropySecret  The new high entropy secret to protect
+     * @param resetSecret        The secret used to reset attempt counters
      * @param delaySchedule      The rate limiting configuration for authentication
      * @param allowExisting      Whether to replace an existing leaf with the same id or fail
      *
@@ -67,7 +68,8 @@ interface IPinWeaver {
      */
     void insert(
         in LeafId id, in byte[] lowEntropySecret, in byte[] highEntropySecret,
-        in DelayScheduleEntry[] delaySchedule, in InsertMode allowExisting);
+        in byte[] resetSecret, in DelayScheduleEntry[] delaySchedule,
+        in InsertMode allowExisting);
 
     /**
      * Authenticates the low entropy secret for this leaf, returning the high entropy secret.

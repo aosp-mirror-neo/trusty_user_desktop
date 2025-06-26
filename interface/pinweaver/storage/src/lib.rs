@@ -52,6 +52,9 @@ pub const LEAF_SIZE: u32 = 389;
 /// as it can't be sent in a single datagram over vsock.
 pub const MAX_LARGE_SECRET_SIZE: u32 = 1024;
 
+/// Replacement operators need a temporary leaf_id since it is a unique field.
+pub const RESERVED_LEAF_ID: LeafId = zerocopy::transmute!(i64::MIN);
+
 /// The interface to communicate with the storage daemon.
 pub trait StorageInterface {
     /// The error while executing a storage request.
@@ -168,6 +171,9 @@ pub struct TreeParams {
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
 /// A SHA-256 digest.
 pub struct TreeHash(#[cfg_attr(feature = "serde", serde(with = "util::hex_serde"))] pub [u8; 32]);
+
+/// Tree hash for empty leaves.
+pub const EMPTY_TREE_HASH: TreeHash = TreeHash([0; 32]);
 
 impl Deref for TreeHash {
     type Target = [u8; 32];
