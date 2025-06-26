@@ -16,9 +16,14 @@
 
 //! Cryptographic operations used by the finger guard service.
 
+use crate::aidl::ExportToAidl;
 use crate::error::{ServiceError, ServiceResult};
 use crate::rng;
 use crate::storage::{SensorSessionCounter, SensorStateIndex};
+use fingerguard_api::aidl::{
+    HandshakeResponse::HandshakeResponse, PrepareAuthSessionResponse::PrepareAuthSessionResponse,
+    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
+};
 use openssl::bn::BigNumContext;
 use openssl::derive::Deriver;
 use openssl::ec::{EcGroup, EcKey, EcPoint, PointConversionForm};
@@ -41,7 +46,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 ///
 /// In order to be useful for export to external APIs and for serialization to storage the
 /// generated type will also support the following:
-///   - Conversion to Vec<u8> and [u8; SIZE] for export to external APIs
+///   - Conversion to Vec<u8> for export to external APIs
 ///   - Conversion Into and From bytes using zerocopy
 /// However, these types should not be used by internal code to extract the raw bytes for direct
 /// use. Any operations that need to use the bytes should instead be defined on the generated type
@@ -62,22 +67,13 @@ macro_rules! blob_newtype {
                 value.bytes.to_vec()
             }
         }
-        impl From<$name> for [u8; $name::SIZE] {
-            fn from(value: $name) -> Self {
-                value.bytes
-            }
-        }
         impl From<&$name> for Vec<u8> {
             fn from(value: &$name) -> Self {
                 value.bytes.to_vec()
             }
         }
-        impl From<&$name> for [u8; $name::SIZE] {
-            fn from(value: &$name) -> Self {
-                value.bytes
-            }
-        }
         impl $name {
+            #[allow(dead_code)] // This is not necessarily used on every type.
             const SIZE: usize = $size;
         }
     };
@@ -102,6 +98,21 @@ impl Nonce {
                 actual: value.len(),
             })?,
         })
+    }
+}
+impl ExportToAidl<SessionResponse> for Nonce {
+    fn export(&self, out: &mut SessionResponse) {
+        out.nonce = self.bytes.to_vec();
+    }
+}
+impl ExportToAidl<PrepareAuthSessionResponse> for Nonce {
+    fn export(&self, out: &mut PrepareAuthSessionResponse) {
+        out.nonce = self.bytes;
+    }
+}
+impl ExportToAidl<PrepareEnrollSessionResponse> for Nonce {
+    fn export(&self, out: &mut PrepareEnrollSessionResponse) {
+        out.nonce = self.bytes;
     }
 }
 impl HmacSignable for Nonce {
@@ -253,6 +264,21 @@ blob_newtype!(Hmac, 32);
 impl From<Hmac> for Key {
     fn from(value: Hmac) -> Self {
         Self { bytes: value.bytes }
+    }
+}
+impl ExportToAidl<HandshakeResponse> for Hmac {
+    fn export(&self, out: &mut HandshakeResponse) {
+        out.pkMac = self.bytes.to_vec();
+    }
+}
+impl ExportToAidl<PrepareAuthSessionResponse> for Hmac {
+    fn export(&self, out: &mut PrepareAuthSessionResponse) {
+        out.mac = self.bytes.to_vec();
+    }
+}
+impl ExportToAidl<PrepareEnrollSessionResponse> for Hmac {
+    fn export(&self, out: &mut PrepareEnrollSessionResponse) {
+        out.mac = self.bytes.to_vec();
     }
 }
 

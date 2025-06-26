@@ -15,8 +15,10 @@
  */
 
 //! Trusty system clock util functions.
+
+use crate::aidl::ExportToAidl;
 use crate::error::{ServiceError, ServiceResult};
-use crate::hat::{ExportToHat, SignedHat};
+use crate::hat::SignedHat;
 use std::ops::Add;
 use std::time::Duration;
 
@@ -26,7 +28,7 @@ pub struct Instant {
     nanos: i64,
 }
 
-impl ExportToHat for Instant {
+impl ExportToAidl<SignedHat> for Instant {
     fn export(&self, out: &mut SignedHat) {
         // The exported timestamp is in milliseconds.
         out.timestamp = self.nanos / 1000 / 1000;
