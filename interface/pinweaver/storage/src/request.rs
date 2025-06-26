@@ -21,6 +21,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 serde_enums! {
     /// A request to the storage daemon.
+    #[derive(Clone)]
     pub enum StorageRequest {
         /// Gets the status of on-disk PinWeaver data and tree info.
         GetStatus = 0,
@@ -44,6 +45,7 @@ serde_enums! {
     ///
     /// This responds with the necessary tree hashes to perform the
     /// operation. If necessary, this also tracks that it's begun.
+    #[derive(Clone)]
     pub enum StartOpRequest {
         /// Insert a leaf into PinWeaver.
         Insert(InsertOpRequest) = 0,
@@ -61,6 +63,7 @@ serde_enums! {
 
     /// Whether to allow an insert with the same leaf ID as in the
     /// [`InsertOpRequest`].
+    #[derive(Clone)]
     pub enum InsertMode {
         /// Reject the insertion if a leaf with this ID exists.
         NewOnly = 0,
@@ -76,7 +79,7 @@ serde_enums! {
 /// from these parameters and no on-chip secrets.
 ///
 /// The response root hash should equal the value returned by the GSC.
-#[derive(Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
+#[derive(Clone, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 
@@ -87,7 +90,7 @@ pub struct ResetTreeRequest {
 
 /// Request to insert a leaf into PinWeaver.
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct InsertOpRequest {
     /// The leaf this operation targets.
     pub leaf_id: LeafId,
@@ -104,7 +107,7 @@ pub struct InsertOpRequest {
 /// The new tree hashes are also calculated by the storage daemon
 /// and committed to disk.
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CommitOpRequest {
     /// The original start request.
     ///

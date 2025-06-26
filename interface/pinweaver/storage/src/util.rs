@@ -51,6 +51,12 @@ pub struct SerdeVec<T, const MAX_LEN: u32> {
     values: Vec<T>,
 }
 
+impl<T: Clone, const MAX_LEN: u32> Clone for SerdeVec<T, MAX_LEN> {
+    fn clone(&self) -> Self {
+        Self { len: self.len, values: self.values.clone() }
+    }
+}
+
 impl<T, const MAX_LEN: u32> Deref for SerdeVec<T, MAX_LEN> {
     type Target = [T];
 
@@ -163,6 +169,15 @@ pub enum SerdeOption<T> {
 
     /// Equivalent to [`Option::Some`].
     Some(T) = 1,
+}
+
+impl<T: Clone> Clone for SerdeOption<T> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::Some(t) => Self::Some(t.clone()),
+        }
+    }
 }
 
 impl<T> From<SerdeOption<T>> for Option<T> {
