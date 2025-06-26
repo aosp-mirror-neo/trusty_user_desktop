@@ -512,13 +512,13 @@ impl IFingerGuard for FingerGuardService {
     }
     fn getAuthenticatorId(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
         FingerGuardService::read_authenticator_id(&self, sensor_user_pair)
-            .map(|id| id.as_i64())
+            .map(|id| id.into())
             .inspect_err(|e| error!("getAuthenticatorId failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }
     fn newAuthenticatorId(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
         FingerGuardService::generate_authenticator_id(&self, sensor_user_pair)
-            .map(|id| id.as_i64())
+            .map(|id| id.into())
             .inspect_err(|e| error!("newAuthenticatorId failed: {e:?}"))
             .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
     }

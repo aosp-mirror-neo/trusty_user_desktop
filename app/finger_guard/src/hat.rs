@@ -57,7 +57,7 @@ impl UnsignedHat {
         self.authenticator_id.export(&mut hat);
         self.authenticator_type.export(&mut hat);
         self.timestamp.export(&mut hat);
-        hat.mac = HmacGenerator::compute_with(key, &hat)?.into();
+        HmacGenerator::compute_with(key, &hat)?.export(&mut hat);
         Ok(hat)
     }
 }

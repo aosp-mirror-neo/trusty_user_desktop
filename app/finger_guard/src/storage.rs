@@ -142,19 +142,16 @@ impl AuthenticatorId {
     pub fn generate_random() -> Self {
         Self(rng::generate_random_int!(i64))
     }
-
-    /// Convert the id to an i64.
-    ///
-    /// This should only be used to return the id across an AIDL interface. For
-    /// storage the (de)serialization traits should be used.
-    pub fn as_i64(&self) -> i64 {
-        self.0
-    }
 }
 
+impl From<AuthenticatorId> for i64 {
+    fn from(value: AuthenticatorId) -> Self {
+        value.0
+    }
+}
 impl ExportToAidl<SignedHat> for AuthenticatorId {
     fn export(&self, out: &mut SignedHat) {
-        out.authenticatorId = self.0 as i64;
+        out.authenticatorId = self.0;
     }
 }
 

@@ -18,6 +18,7 @@
 
 use crate::aidl::ExportToAidl;
 use crate::error::{ServiceError, ServiceResult};
+use crate::hat::SignedHat;
 use crate::rng;
 use crate::storage::{SensorSessionCounter, SensorStateIndex};
 use fingerguard_api::aidl::{
@@ -44,13 +45,10 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 ///   - A const SIZE member, the size of the blob in bytes
 ///   - Support for (safe constant-time) equality comparisons with the same type
 ///
-/// In order to be useful for export to external APIs and for serialization to storage the
-/// generated type will also support the following:
-///   - Conversion to Vec<u8> for export to external APIs
-///   - Conversion Into and From bytes using zerocopy
-/// However, these types should not be used by internal code to extract the raw bytes for direct
-/// use. Any operations that need to use the bytes should instead be defined on the generated type
-/// directly.
+/// In order to be useful for serialization to storage the generated type will also support the
+/// From and Into bytes traits from zerocopy. However, these traits should not be used directly
+/// by internal code to extract the raw bytes. Any operations that need to use the bytes should
+/// instead be defined on the generated type directly.
 macro_rules! blob_newtype {
     ($name:ident, $size:literal) => {
         #[derive(FromBytes, IntoBytes, Immutable)]
@@ -60,16 +58,6 @@ macro_rules! blob_newtype {
         impl PartialEq<&[u8]> for $name {
             fn eq(&self, other: &&[u8]) -> bool {
                 openssl::memcmp::eq(&self.bytes, other)
-            }
-        }
-        impl From<$name> for Vec<u8> {
-            fn from(value: $name) -> Self {
-                value.bytes.to_vec()
-            }
-        }
-        impl From<&$name> for Vec<u8> {
-            fn from(value: &$name) -> Self {
-                value.bytes.to_vec()
             }
         }
         impl $name {
@@ -201,7 +189,7 @@ pub fn encrypt_aes256_gcm(
 }
 
 /// Decrypt a message using AES256-GCM with the given Hmac as a key.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn decrypt_aes256_gcm(
     key: &Hmac,
     iv: Option<&[u8]>,
@@ -266,6 +254,11 @@ impl From<Hmac> for Key {
         Self { bytes: value.bytes }
     }
 }
+impl ExportToAidl<SignedHat> for Hmac {
+    fn export(&self, out: &mut SignedHat) {
+        out.mac = self.bytes.to_vec();
+    }
+}
 impl ExportToAidl<HandshakeResponse> for Hmac {
     fn export(&self, out: &mut HandshakeResponse) {
         out.pkMac = self.bytes.to_vec();
@@ -279,6 +272,14 @@ impl ExportToAidl<PrepareAuthSessionResponse> for Hmac {
 impl ExportToAidl<PrepareEnrollSessionResponse> for Hmac {
     fn export(&self, out: &mut PrepareEnrollSessionResponse) {
         out.mac = self.bytes.to_vec();
+    }
+}
+// Allow HMACs to be converted into bytes in tests, to allow them to be used to construct realistic
+// input request messages.
+#[cfg(test)]
+impl From<Hmac> for Vec<u8> {
+    fn from(value: Hmac) -> Self {
+        value.bytes.to_vec()
     }
 }
 
