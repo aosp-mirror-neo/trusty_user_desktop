@@ -16,6 +16,7 @@
 
 //! Common functions and data structures dealing with HardwareAuthToken
 
+use crate::aidl::ExportToAidl;
 use crate::clock::Instant;
 use crate::crypto::{self, HmacGenerator, HmacSignable};
 use crate::error::ServiceResult;
@@ -56,14 +57,9 @@ impl UnsignedHat {
         self.authenticator_id.export(&mut hat);
         self.authenticator_type.export(&mut hat);
         self.timestamp.export(&mut hat);
-        hat.mac = HmacGenerator::compute_with(key, &hat)?.into();
+        HmacGenerator::compute_with(key, &hat)?.export(&mut hat);
         Ok(hat)
     }
-}
-
-/// Trait that is implemented by the constituent parts of a token for export+signing.
-pub trait ExportToHat {
-    fn export(&self, out: &mut SignedHat);
 }
 
 pub const EMPTY_HAT: HardwareAuthToken = HardwareAuthToken {
@@ -87,8 +83,8 @@ impl AuthenticatorType {
     pub const FINGERPRINT: Self = Self(2);
 }
 
-impl ExportToHat for AuthenticatorType {
-    fn export(&self, out: &mut HardwareAuthToken) {
+impl ExportToAidl<SignedHat> for AuthenticatorType {
+    fn export(&self, out: &mut SignedHat) {
         out.authenticatorType = self.0 as i32;
     }
 }

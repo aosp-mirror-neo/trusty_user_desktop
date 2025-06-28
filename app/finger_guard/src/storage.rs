@@ -16,11 +16,15 @@
 
 //! Types and utilities for data which is stored persistently on the device.
 
+use crate::aidl::ExportToAidl;
 use crate::crypto::{HmacGenerator, HmacSignable};
 use crate::error::{ServiceError, ServiceResult};
-use crate::hat::{ExportToHat, SignedHat};
+use crate::hat::SignedHat;
 use crate::rng;
-use fingerguard_api::aidl::SensorUserPair::SensorUserPair;
+use fingerguard_api::aidl::{
+    PrepareAuthSessionResponse::PrepareAuthSessionResponse,
+    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SensorUserPair::SensorUserPair,
+};
 use storage::{OpenMode, Port, Session};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -138,19 +142,16 @@ impl AuthenticatorId {
     pub fn generate_random() -> Self {
         Self(rng::generate_random_int!(i64))
     }
-
-    /// Convert the id to an i64.
-    ///
-    /// This should only be used to return the id across an AIDL interface. For
-    /// storage the (de)serialization traits should be used.
-    pub fn as_i64(&self) -> i64 {
-        self.0
-    }
 }
 
-impl ExportToHat for AuthenticatorId {
+impl From<AuthenticatorId> for i64 {
+    fn from(value: AuthenticatorId) -> Self {
+        value.0
+    }
+}
+impl ExportToAidl<SignedHat> for AuthenticatorId {
     fn export(&self, out: &mut SignedHat) {
-        out.authenticatorId = self.0 as i64;
+        out.authenticatorId = self.0;
     }
 }
 
@@ -167,7 +168,7 @@ impl From<i64> for SecureUserId {
     }
 }
 
-impl ExportToHat for SecureUserId {
+impl ExportToAidl<SignedHat> for SecureUserId {
     fn export(&self, out: &mut SignedHat) {
         out.userId = self.0 as i64;
     }
@@ -183,18 +184,21 @@ impl SensorSessionCounter {
     pub fn increment(&self) -> Self {
         Self(self.0 + 1)
     }
-    /// Convert the id to an i64.
-    ///
-    /// This should only be used to return the counter across an AIDL interface. For
-    /// storage the (de)serialization traits should be used.
-    pub fn as_i64(&self) -> i64 {
-        self.0 as i64
-    }
 }
 
 impl HmacSignable for SensorSessionCounter {
     fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
         generator.update(&self.0.to_be_bytes())
+    }
+}
+impl ExportToAidl<PrepareAuthSessionResponse> for SensorSessionCounter {
+    fn export(&self, out: &mut PrepareAuthSessionResponse) {
+        out.sessionCounter = self.0 as i64;
+    }
+}
+impl ExportToAidl<PrepareEnrollSessionResponse> for SensorSessionCounter {
+    fn export(&self, out: &mut PrepareEnrollSessionResponse) {
+        out.sessionCounter = self.0 as i64;
     }
 }
 
