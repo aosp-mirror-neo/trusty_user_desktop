@@ -566,7 +566,7 @@ mod tests {
         let client_private_key: EcKey<Private> = EcKey::generate(&group).unwrap();
         let client_public_key_bytes = client_private_key
             .public_key()
-            .to_bytes(&group, PointConversionForm::COMPRESSED, &mut ctx)
+            .to_bytes(&group, PointConversionForm::UNCOMPRESSED, &mut ctx)
             .unwrap();
         let client_private_key: PKey<Private> = client_private_key.try_into().unwrap();
 

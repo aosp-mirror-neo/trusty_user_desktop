@@ -137,7 +137,7 @@ pub fn ec_public_key_serialization(
     let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
     let mut ctx = BigNumContext::new()?;
     let server_public_key_bytes =
-        private_key.public_key().to_bytes(&group, PointConversionForm::COMPRESSED, &mut ctx)?;
+        private_key.public_key().to_bytes(&group, PointConversionForm::UNCOMPRESSED, &mut ctx)?;
     Ok(server_public_key_bytes)
 }
 
