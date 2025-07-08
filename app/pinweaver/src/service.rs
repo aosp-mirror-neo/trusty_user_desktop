@@ -11,16 +11,17 @@ use pinweaver_storage_api::{
     response::{
         CommitOpResponse, CommitOpResponseData, GetStatusResponse, ResponseError,
         StartInsertResponseData, StartOpResponse, StartOpResponseData, StartRemoveResponseData,
-        StorageResponse,
+        StartTryAuthResponseData, StorageResponse,
     },
     util::{SerdeOption, SerdeVec},
     LargeSecretInfo, LeafId as StorageLeafId, Path, StorageInterface, TreeHash, TreeHashes,
     TreeParams, EMPTY_TREE_HASH, RESERVED_LEAF_ID,
 };
-use std::{ffi::CStr, sync::Arc};
+use std::{ffi::CStr, ops::Deref, sync::Arc};
 use tipc::TipcError;
 use tpm_commands::pinweaver::{
-    request::{InsertLeafHeader, RemoveLeafHeader},
+    request::{InsertLeafHeader, RemoveLeafHeader, TryAuthHeader},
+    response::ResultCode,
     DelaySchedule, DelayScheduleEntry as GscDelayScheduleEntry, Hash, Pinweaver, Secret, TimeDiff,
     TreeParams as GscTreeParams, ValidPcrCriteria, DELAY_SCHEDULE_ENTRIES,
 };
@@ -121,7 +122,8 @@ pub mod binder_error {
 
     use binder::{ExceptionCode, Status};
     use pinweaver_api::aidl::IPinWeaver::{
-        ERROR_GSC, ERROR_LEAF_EXISTS, ERROR_LEAF_NOT_FOUND, ERROR_PINWEAVER,
+        ERROR_GSC, ERROR_LEAF_EXISTS, ERROR_LEAF_NOT_FOUND, ERROR_LOWENT_AUTH_FAILED,
+        ERROR_PINWEAVER,
     };
 
     pub fn gsc() -> Status {
@@ -142,6 +144,13 @@ pub mod binder_error {
 
     pub fn leaf_not_found() -> Status {
         Status::new_service_specific_error(ERROR_LEAF_NOT_FOUND, Some(c"leaf not found"))
+    }
+
+    pub fn low_entropy_auth_failed() -> Status {
+        Status::new_service_specific_error(
+            ERROR_LOWENT_AUTH_FAILED,
+            Some(c"low entropy auth failed"),
+        )
     }
 
     pub fn from_tipc(_err: TipcError) -> Status {
@@ -453,11 +462,99 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
 
     fn tryAuthenticate(
         &self,
-        _id: &LeafId,
-        _low_entropy_secret: &[u8],
+        api_leaf_id: &LeafId,
+        api_low_entropy_secret: &[u8],
     ) -> binder::Result<TryAuthResponse> {
-        // TODO: b/359374997 - Implement.
-        Err(binder_error::unsupported_operation())
+        // Convert parameters from IPinweaver to storage and GSC types.
+        let leaf_id = api_to_storage::leaf_id(api_leaf_id);
+        let low_entropy_secret = api_to_gsc::secret(api_low_entropy_secret)?;
+
+        // Start try auth
+        let start_request = StartOpRequest::TryAuth(leaf_id);
+        let ret = self.first_request_helper(&StorageRequest::StartOp(start_request.clone()))?;
+        // Extract returned values and convert from Storage to GSC.
+        let (tree_hashes, leaf_contents, large_key_info) = match ret {
+            StorageResponse::StartOp(StartOpResponse {
+                tree_hashes,
+                op_data:
+                    StartOpResponseData::TryAuth(StartTryAuthResponseData {
+                        leaf_contents,
+                        large_key_info,
+                    }),
+                ..
+            }) => (tree_hashes, leaf_contents, large_key_info),
+            StorageResponse::Error(ResponseError::DoesNotExist) => {
+                return Err(binder_error::leaf_not_found());
+            }
+            _ => {
+                error!("start_try_auth: unexpected response: {:?}", ret);
+                return Err(binder_error::pinweaver(c"unexpected response"));
+            }
+        };
+        let path_hashes: Vec<Hash> = storage_to_gsc::path_hashes(tree_hashes);
+        if large_key_info.is_some() {
+            // TODO(351892914) implement large secret support.
+            return Err(binder_error::unsupported_operation());
+        }
+
+        // GSC try auth
+        let mut resp_buffer = Vec::<u8>::new();
+        let (gsc_root, result_code, try_auth) = self
+            .gsc
+            .try_auth(
+                GscTreeParams {
+                    bits_per_level: DEFAULT_TREE_BITS_PER_LEVEL,
+                    height: DEFAULT_TREE_HEIGHT,
+                },
+                TryAuthHeader { low_entropy_secret },
+                leaf_contents.deref(),
+                path_hashes.as_slice(),
+                &mut resp_buffer,
+            )
+            .map_err(|err| {
+                error!("gsc try auth failed: {:?}", err);
+                binder_error::gsc()
+            })?;
+        if matches!(result_code, ResultCode::RateLimitReached) {
+            return Ok(TryAuthResponse::SecondsToWait(
+                try_auth.head.seconds_to_wait.to_secs().try_into().unwrap_or(i32::MAX),
+            ));
+        }
+        let new_leaf_hmac = gsc_to_storage::hmac(&try_auth.unimported_leaf_data.hmac);
+
+        // Commit try auth
+        let resp = self
+            .storage
+            .request(&StorageRequest::CommitOp(CommitOpRequest {
+                start_request,
+                new_leaf_hmac,
+                new_leaf_contents: SerdeVec::from_vec(
+                    try_auth.unimported_leaf_data.as_bytes().to_vec(),
+                ),
+            }))
+            .map_err(binder_error::from_tipc)?;
+        let root_hash = if let StorageResponse::CommitOp(CommitOpResponse { root_hash, .. }) = resp
+        {
+            root_hash
+        } else {
+            error!("commit_insert: unexpected response: {:?}", &resp);
+            return Err(binder_error::pinweaver(c"unexpected response"));
+        };
+        if root_hash.0 != gsc_root.0 {
+            error!("root and storage out of sync");
+            return Err(binder_error::pinweaver(c"root and storage out of sync"));
+        }
+
+        match result_code {
+            ResultCode::Success => {
+                Ok(TryAuthResponse::HighEntropySecret(try_auth.head.high_entropy_secret.0.to_vec()))
+            }
+            ResultCode::LowentAuthFailed => Err(binder_error::low_entropy_auth_failed()),
+            _ => {
+                error!("unexpected result code: {:?}", result_code);
+                Err(binder_error::pinweaver(c"unexpected result code"))
+            }
+        }
     }
 
     fn tryAuthenticateThenReplace(

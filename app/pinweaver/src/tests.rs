@@ -18,8 +18,23 @@
 use crate::service::binder_error;
 use binder::Strong;
 use pinweaver_api::{
-    connect_pinweaver, DelayScheduleEntry, IPinWeaver, InsertMode, LeafId, LeafSet,
+    connect_pinweaver, DelayScheduleEntry, IPinWeaver, InsertMode, LeafId, LeafSet, TryAuthResponse,
 };
+
+/// TODO drop this when it is stabilized in std.
+macro_rules! assert_matches {
+    ($first:expr, $($second:pat_param)|+ $(if $third:expr)?) => {
+        let a = $first;
+        if !matches!(&a, $($second)|+ $(if $third)?) {
+            panic!(
+                "'{}' does not match '{}'; Got '{:?}'",
+                stringify!($first),
+                stringify!($($second)|+ $(if $third)?),
+                a
+            );
+        }
+    };
+}
 
 test::init!();
 
@@ -30,7 +45,7 @@ fn pinweaver_smoke_test() {
     const DEFAULT_HIGH_ENTROPY_SECRET: [u8; 32] = [6u8; 32];
     const DEFAULT_RESET_SECRET: [u8; 32] = [7u8; 32];
     const DEFAULT_DELAY_SCHEDULE: [DelayScheduleEntry; 1] =
-        [DelayScheduleEntry { attemptCount: 15, delaySecs: 30 }];
+        [DelayScheduleEntry { attemptCount: 1, delaySecs: 999 }];
 
     // Start from a known state.
     let pinweaver: Strong<dyn IPinWeaver> =
@@ -78,6 +93,24 @@ fn pinweaver_smoke_test() {
         Err(binder_error::leaf_exists())
     );
     log::info!("After third insert()");
+
+    // Try Auth that succeeds.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
+        Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_HIGH_ENTROPY_SECRET
+    );
+
+    // Try Auth that fails.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &[0u8; 32]),
+        Err(s) if s == &binder_error::low_entropy_auth_failed()
+    );
+
+    // Try Auth during back-off.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
+        Ok(TryAuthResponse::SecondsToWait(s)) if *s > 0
+    );
 
     // Remove that succeeds.
     pinweaver.remove(&DEFAULT_LEAF_ID).expect("remove() failed");

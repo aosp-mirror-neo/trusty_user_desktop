@@ -6,7 +6,10 @@
 
 #![allow(dead_code)] // Many private fields exist to be serialized and deserialized from bytes.
 
-use crate::{TpmInterface, TpmRequestMessage, TpmResponseMessage, TpmvRequestBuild};
+use crate::{
+    pinweaver::{request::UnimportedLeafDataBuildParams, response::ResponseData},
+    TpmInterface, TpmRequestMessage, TpmResponseMessage, TpmvRequestBuild,
+};
 use paste::paste;
 use std::fmt::Debug;
 use zerocopy::{
@@ -190,7 +193,9 @@ pub struct UnimportedLeafData {
     ///     pub_data: [u8; header.pub_len],
     ///     cipher_text: [u8; header.sec_len],
     ///     // For requests only (size expected external to this struct):
-    ///     path_hashes: [Hash; path_auxiliary_hash_count(bits_per_level, height)],
+    ///     path_hashes: [
+    ///       Hash; path_auxiliary_hash_count(bits_per_level, height) * sizeof::<Hash>()
+    ///     ],
     /// }
     /// ```
     pub data: [u8],
@@ -243,6 +248,16 @@ pub enum UnimportedLeafDataSizeError {
         num_hashes_expected: usize,
     },
 
+    /// Wrong dynamic size when building an UnimportedLeafData with path hashes from one without.
+    #[error("destination has wrong size")]
+    WrongDataLen {
+        /// The number of bytes allocated.
+        data_got: usize,
+
+        /// The number of bytes in the leaf data + path hashes.
+        data_expected: usize,
+    },
+
     /// Invalid tree parameters.
     #[error("tried to check consistency with invalid tree params {0:?}")]
     InvalidTreeParams(TreeParams),
@@ -266,6 +281,27 @@ impl UnimportedLeafData {
         self.data
             .get_mut(hashes_offset..)
             .and_then(|hashes_bytes| <[Hash]>::mut_from_bytes(hashes_bytes).ok())
+    }
+
+    /// Copy the provided UnimportedLeafData without path hashes and path hashes into self.
+    pub fn build_from(
+        &mut self,
+        other: &UnimportedLeafData,
+        path_hashes: &[u8],
+    ) -> Result<(), UnimportedLeafDataSizeError> {
+        let data_got = other.data.len() + path_hashes.len();
+        if self.data.len() != data_got {
+            return Err(UnimportedLeafDataSizeError::WrongDataLen {
+                data_got,
+                data_expected: self.data.len(),
+            });
+        }
+        self.header = other.header;
+        self.hmac = other.hmac;
+        self.iv = other.iv;
+        self.data[0..other.data.len()].copy_from_slice(&other.data);
+        self.data[other.data.len()..].copy_from_slice(path_hashes);
+        Ok(())
     }
 
     /// Checks the consistency of the unimported leaf data header against its dynamic size.
@@ -516,6 +552,16 @@ pub trait Pinweaver {
         resp_buffer: &'a mut Vec<u8>,
     ) -> PinWeaverResult<(Hash, &'a UnimportedLeafData)>;
 
+    /// Try to authenticate a low entropy secret.
+    fn try_auth<'a>(
+        &self,
+        tree_params: TreeParams,
+        header: request::TryAuthHeader,
+        leaf_data: &[u8],
+        path_hashes: &[Hash],
+        resp_buffer: &'a mut Vec<u8>,
+    ) -> PinWeaverResult<(Hash, response::ResultCode, &'a response::TryAuth)>;
+
     /// Remove a leaf from the merkle tree.
     fn remove_leaf(
         &self,
@@ -570,6 +616,44 @@ where
             UnimportedLeafData::ref_from_bytes(&resp.data.0).map_err(|_| Error::Deserialize)?;
         data.check_consistency(None).map_err(|_| Error::Deserialize)?;
         Ok((header.root, data))
+    }
+
+    fn try_auth<'a>(
+        &self,
+        tree_params: TreeParams,
+        header: request::TryAuthHeader,
+        leaf_data: &[u8],
+        path_hashes: &[Hash],
+        resp_buffer: &'a mut Vec<u8>,
+    ) -> PinWeaverResult<(Hash, response::ResultCode, &'a response::TryAuth)> {
+        let leaf_data =
+            UnimportedLeafData::ref_from_bytes(leaf_data).map_err(|_| Error::Deserialize)?;
+
+        let mut req_buffer = Vec::<u8>::new();
+        let req = TpmRequestMessage::<request::Request<request::TryAuth>>::new_in_vec(
+            &mut req_buffer,
+            UnimportedLeafDataBuildParams::new(leaf_data.header(), tree_params),
+        )
+        .map_err(|_| Error::RequestOverflow)?;
+
+        let data = &mut req.request.data;
+        *data.head_mut() = header;
+        data.unimported_leaf_data
+            .build_from(leaf_data, path_hashes.as_bytes())
+            .map_err(|_| Error::RequestOverflow)?;
+
+        let resp: &mut response::Response<response::UnparsedResponse> =
+            self.transmit_into(req, resp_buffer).map_err(transport_error)?;
+        resp.check_consistency(&tree_params)?;
+        let root: Hash = resp.header().root;
+        let code = resp.header().result_code;
+        let try_auth =
+            response::TryAuth::ref_from_bytes(&resp.data.0).map_err(|_| Error::Deserialize)?;
+        // An empty unimported leaf is returned for ResultCode::RateLimitReached.
+        if code != response::ResultCode::RateLimitReached {
+            try_auth.check_consistency(&tree_params)?;
+        }
+        Ok((root, code, try_auth))
     }
 
     fn remove_leaf(

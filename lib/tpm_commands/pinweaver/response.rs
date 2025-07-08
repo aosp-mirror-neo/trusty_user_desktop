@@ -68,7 +68,10 @@ impl<R: ?Sized + ResponseData> Response<R> {
         }
         if !matches!(
             self.header.result_code,
-            ResultCode::Success | ResultCode::SuccessWithIncrement
+            ResultCode::Success
+                | ResultCode::SuccessWithIncrement
+                | ResultCode::LowentAuthFailed
+                | ResultCode::RateLimitReached
         ) {
             return Err(Error::ResultCode(self.header.result_code));
         }
@@ -80,7 +83,11 @@ impl<R: ?Sized + ResponseData> Response<R> {
                 received: received_data_size,
             });
         }
-        self.data.check_consistency(tree_params)
+        // An empty unimported leaf is returned for ResultCode::RateLimitReached.
+        if self.header.result_code != ResultCode::RateLimitReached {
+            self.data.check_consistency(tree_params)?
+        }
+        Ok(())
     }
 }
 
@@ -191,6 +198,8 @@ pub type TryAuth = WithUnimportedLeafData<TryAuthHeader>;
 ///
 /// The unimported leaf is used for the `LowentAuthfailed` and `Success` return codes.
 // TODO: b/359374997 - confirm that unimported leaf data validation still works for other errors.
+#[derive(Clone, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
 pub struct TryAuthHeader {
     /// Used for the `RateLimitReached` return code only.
     pub seconds_to_wait: TimeDiff,

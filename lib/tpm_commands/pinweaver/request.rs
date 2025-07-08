@@ -185,19 +185,31 @@ pub struct UnimportedLeafDataBuildParams {
     pub tree_params: TreeParams,
 }
 
-impl<Header: RequestPart> RequestData for WithUnimportedLeafData<Header>
-where
-    Header::ResponseData: response::ResponseData<RequestData = Self>,
-{
+impl UnimportedLeafDataBuildParams {
+    /// Create an UnimportedLeafDataBuildParams from the provided parameters.
+    pub fn new(leaf_header: &LeafHeader, tree_params: TreeParams) -> Self {
+        UnimportedLeafDataBuildParams {
+            leaf_version: *leaf_header.leaf_version(),
+            pub_len: leaf_header.pub_len.get(),
+            sec_len: leaf_header.sec_len.get(),
+            tree_params,
+        }
+    }
+}
+
+impl RequestData for TryAuth {
     type BuildParams = UnimportedLeafDataBuildParams;
-    type ResponseData = Header::ResponseData;
-    const MESSAGE_TYPE: MessageType = Header::MESSAGE_TYPE;
+    type ResponseData = response::TryAuth;
+    const MESSAGE_TYPE: MessageType = MessageType::TryAuth;
 
     fn expected_size(params: &UnimportedLeafDataBuildParams) -> Result<u32, Overflow> {
         let TreeParams { bits_per_level, height } = params.tree_params;
         let path_hashes = path_auxiliary_hash_count(bits_per_level, height)?;
         let static_len = const {
-            size_of::<Header>() + size_of::<LeafHeader>() + size_of::<Hash>() + size_of::<Iv>()
+            size_of::<TryAuthHeader>()
+                + size_of::<LeafHeader>()
+                + size_of::<Hash>()
+                + size_of::<Iv>()
         };
         let pub_sec_len = usize::from(params.pub_len) + usize::from(params.sec_len);
         let path_hashes_size = path_hashes.checked_mul(size_of::<Hash>()).ok_or(Overflow)?;
