@@ -194,9 +194,6 @@ pub struct StartRemoveResponseData {
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Debug)]
 pub struct StartTryAuthResponseData {
-    /// The size of the high-entropy secret stored by the client in bytes.
-    pub secret_size: u32,
-
     /// The encrypted leaf contents stored on disk.
     pub leaf_contents: LeafContents,
 
@@ -245,7 +242,7 @@ serde_fields! {
     StartOpResponse { path, tree_hashes, op_data },
     CommitOpResponse { path, root_hash, op_data },
     StartInsertResponseData { replacing_path },
-    StartTryAuthResponseData { secret_size, leaf_contents, large_key_info },
+    StartTryAuthResponseData { leaf_contents, large_key_info },
     ContinueRemoveBulkResponse { header, hashes },
     RemoveHashes { leaf_hmac, tree_hashes },
 }
