@@ -551,65 +551,72 @@ mod tests {
     use openssl::bn::BigNumContext;
     use openssl::ec::{EcGroup, EcKey, PointConversionForm};
     use openssl::pkey::{PKey, Private};
+    use test::{assert, assert_eq, assert_ne, assert_ok};
+
     test::init!();
 
     #[test]
     fn connect_server() {
-        let _ = fingerguard_api::connect_finger_guard().unwrap();
+        let _ = assert_ok!(fingerguard_api::connect_finger_guard());
     }
 
     // Establish a shared PK with the fingerguard server.
-    fn init_service() -> crypto::Key {
-        // Prepare the client key pair.
-        let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME).unwrap();
-        let mut ctx = BigNumContext::new().unwrap();
-        let client_private_key: EcKey<Private> = EcKey::generate(&group).unwrap();
-        let client_public_key_bytes = client_private_key
-            .public_key()
-            .to_bytes(&group, PointConversionForm::UNCOMPRESSED, &mut ctx)
-            .unwrap();
-        let client_private_key: PKey<Private> = client_private_key.try_into().unwrap();
+    fn init_service() -> Result<crypto::Key, ()> {
+        let mut result = Err(());
+        (|| {
+            // Prepare the client key pair.
+            let group = assert_ok!(EcGroup::from_curve_name(NIST_P256_CURVE_NAME));
+            let mut ctx = assert_ok!(BigNumContext::new());
+            let client_private_key: EcKey<Private> = assert_ok!(EcKey::generate(&group));
+            let client_public_key_bytes = assert_ok!(client_private_key.public_key().to_bytes(
+                &group,
+                PointConversionForm::UNCOMPRESSED,
+                &mut ctx
+            ));
+            let client_private_key: PKey<Private> = assert_ok!(client_private_key.try_into());
 
-        // ECDH with the server.
-        let service = fingerguard_api::connect_finger_guard().unwrap();
-        let handshake_response = service.initHandshake(client_public_key_bytes.as_slice()).unwrap();
-        let server_public_key_bytes = handshake_response.serverPublicKey;
+            // ECDH with the server.
+            let service = assert_ok!(fingerguard_api::connect_finger_guard());
+            let handshake_response =
+                assert_ok!(service.initHandshake(client_public_key_bytes.as_slice()));
+            let server_public_key_bytes = handshake_response.serverPublicKey;
 
-        // Derive PK from the client side.
-        let pk = crypto::perform_ecdh(&client_private_key, &server_public_key_bytes).unwrap();
-
-        // Check the computed MAC matches the one in the response.
-        let hmac = crypto::HmacGenerator::compute(&pk, b"tofu").unwrap();
-        assert!(hmac == handshake_response.pkMac.as_slice());
-        pk
+            // Derive PK from the client side.
+            let pk =
+                assert_ok!(crypto::perform_ecdh(&client_private_key, &server_public_key_bytes));
+            // Check the computed MAC matches the one in the response.
+            let hmac = assert_ok!(crypto::HmacGenerator::compute(&pk, b"tofu"));
+            assert!(hmac == handshake_response.pkMac.as_slice());
+            result = Ok(pk);
+        })();
+        result
     }
 
     #[test]
     fn everything_with_a_shared_session() {
-        let auth_token_key = keymint::get_auth_token_key().unwrap();
-        let pk = init_service();
+        let auth_token_key = assert_ok!(keymint::get_auth_token_key());
+        let pk = assert_ok!(init_service());
         let client_nonce = rng::generate_random_vec::<32>();
 
         // Start a new session with the server.
-        let service = fingerguard_api::connect_finger_guard().unwrap();
-        let session_response = service.newSession(client_nonce.as_slice()).unwrap();
+        let service = assert_ok!(fingerguard_api::connect_finger_guard());
+        let session_response = assert_ok!(service.newSession(client_nonce.as_slice()));
         let server_nonce = session_response.nonce;
         let all_nonce = vec![client_nonce, server_nonce].concat();
-        let sk = crypto::HmacGenerator::compute(&pk, &all_nonce).unwrap();
+        let sk = assert_ok!(crypto::HmacGenerator::compute(&pk, &all_nonce));
 
         // Decrypt the wrapped tpm seed.
         let iv = session_response.iv;
         let tag = session_response.tag;
         let encrypted_tpm_seed = session_response.wrappedTpmSeed;
         let aad = b"tpm_seed";
-        crypto::decrypt_aes256_gcm(
+        assert_ok!(crypto::decrypt_aes256_gcm(
             &sk,
             Some(iv.as_slice()),
             aad,
             encrypted_tpm_seed.as_slice(),
             tag.as_slice(),
-        )
-        .unwrap();
+        ));
 
         // Bad AAD leads to a decryption error.
         assert!(crypto::decrypt_aes256_gcm(
@@ -644,60 +651,60 @@ mod tests {
             timestamp: 0,
             mac: vec![],
         };
-        hat.mac = Vec::from(crypto::HmacGenerator::compute_with(&auth_token_key, &hat).unwrap());
-        let session_resp = service.prepareEnrollSession(&sup, &hat).unwrap();
+        hat.mac = Vec::from(assert_ok!(crypto::HmacGenerator::compute_with(&auth_token_key, &hat)));
+        let session_resp = assert_ok!(service.prepareEnrollSession(&sup, &hat));
         assert_eq!(session_resp.sessionCounter, 1);
-        let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
-        hmac_gen.update(&session_resp.nonce).unwrap();
-        hmac_gen.update(&user_id.to_be_bytes()).unwrap();
-        hmac_gen.update(b"fingerguardenroll").unwrap();
-        hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
-        let hmac = hmac_gen.complete().unwrap();
+        let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
+        assert_ok!(hmac_gen.update(&session_resp.nonce));
+        assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
+        assert_ok!(hmac_gen.update(b"fingerguardenroll"));
+        assert_ok!(hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()));
+        let hmac = assert_ok!(hmac_gen.complete());
         assert!(hmac == session_resp.mac.as_slice());
 
-        let old_auth_id = service.getAuthenticatorId(&sup).unwrap();
-        let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
-        hmac_gen.update(&session_resp.nonce).unwrap();
-        hmac_gen.update(&user_id.to_be_bytes()).unwrap();
-        hmac_gen.update(b"fpmcuenroll").unwrap();
-        hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
-        let hmac = hmac_gen.complete().unwrap();
+        let old_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
+        let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
+        assert_ok!(hmac_gen.update(&session_resp.nonce));
+        assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
+        assert_ok!(hmac_gen.update(b"fpmcuenroll"));
+        assert_ok!(hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()));
+        let hmac = assert_ok!(hmac_gen.complete());
         let enrollment_result = EnrollmentResult { enrolled: true, mac: hmac.into() };
-        let _ = service.finishEnrollSession(&sup, &enrollment_result).unwrap();
+        let _ = assert_ok!(service.finishEnrollSession(&sup, &enrollment_result));
         // Ensure the authenticator id updates after enrollment.
-        let new_auth_id = service.getAuthenticatorId(&sup).unwrap();
+        let new_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
         assert_ne!(new_auth_id, old_auth_id);
 
         // Test enrollment session cancellation.
-        hat.challenge = service.generateChallenge(&sup).unwrap();
-        hat.mac = Vec::from(crypto::HmacGenerator::compute_with(&auth_token_key, &hat).unwrap());
-        let session_resp = service.prepareEnrollSession(&sup, &hat).unwrap();
+        hat.challenge = assert_ok!(service.generateChallenge(&sup));
+        hat.mac = Vec::from(assert_ok!(crypto::HmacGenerator::compute_with(&auth_token_key, &hat)));
+        let session_resp = assert_ok!(service.prepareEnrollSession(&sup, &hat));
         assert_eq!(session_resp.sessionCounter, 2);
         // Use a empty mac to signal the session cancellation.
         let cancel_result = EnrollmentResult { enrolled: false, mac: vec![] };
-        let _ = service.finishEnrollSession(&sup, &cancel_result).unwrap();
+        let _ = assert_ok!(service.finishEnrollSession(&sup, &cancel_result));
         // ---- End Enrollment Test ----
 
         // ---- Start Authentication Test ----
         let challenge = 0xc4a11e49e as i64;
-        let session_resp = service.prepareAuthSession(&sup, challenge).unwrap();
+        let session_resp = assert_ok!(service.prepareAuthSession(&sup, challenge));
         assert_eq!(session_resp.sessionCounter, 3);
-        let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
-        hmac_gen.update(&session_resp.nonce).unwrap();
-        hmac_gen.update(&user_id.to_be_bytes()).unwrap();
-        hmac_gen.update(b"fingerguardauth").unwrap();
-        hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
-        let hmac = hmac_gen.complete().unwrap();
+        let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
+        assert_ok!(hmac_gen.update(&session_resp.nonce));
+        assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
+        assert_ok!(hmac_gen.update(b"fingerguardauth"));
+        assert_ok!(hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()));
+        let hmac = assert_ok!(hmac_gen.complete());
         assert!(hmac == session_resp.mac.as_slice());
 
-        let mut hmac_gen = crypto::HmacGenerator::new(&sk).unwrap();
-        hmac_gen.update(&session_resp.nonce).unwrap();
-        hmac_gen.update(&user_id.to_be_bytes()).unwrap();
-        hmac_gen.update(b"fpmcuauth").unwrap();
-        hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()).unwrap();
-        let hmac = hmac_gen.complete().unwrap();
+        let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
+        assert_ok!(hmac_gen.update(&session_resp.nonce));
+        assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
+        assert_ok!(hmac_gen.update(b"fpmcuauth"));
+        assert_ok!(hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()));
+        let hmac = assert_ok!(hmac_gen.complete());
         let auth_result = AuthenticationResult { authenticated: true, mac: hmac.into() };
-        let valid_hat = service.finishAuthSession(&sup, &auth_result).unwrap();
+        let valid_hat = assert_ok!(service.finishAuthSession(&sup, &auth_result));
         assert_eq!(valid_hat.challenge, challenge);
         assert_eq!(valid_hat.userId, secure_user_id);
         assert_eq!(valid_hat.authenticatorId, new_auth_id);
@@ -712,42 +719,42 @@ mod tests {
 
     #[test]
     fn get_authenticator_id() {
-        let service = fingerguard_api::connect_finger_guard().unwrap();
+        let service = assert_ok!(fingerguard_api::connect_finger_guard());
         let sup = SensorUserPair { sensorId: 0, userId: 0 };
         assert_eq!(service.getAuthenticatorId(&sup), Ok(0));
     }
 
     #[test]
     fn new_authenticator_id() {
-        let service = fingerguard_api::connect_finger_guard().unwrap();
+        let service = assert_ok!(fingerguard_api::connect_finger_guard());
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
-        let new_id = service.newAuthenticatorId(&sup).unwrap();
+        let new_id = assert_ok!(service.newAuthenticatorId(&sup));
         assert_ne!(new_id, 0_i64);
     }
 
     #[test]
     fn new_and_get_authenticator_id() {
-        let service = fingerguard_api::connect_finger_guard().unwrap();
+        let service = assert_ok!(fingerguard_api::connect_finger_guard());
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
-        let new_id = service.newAuthenticatorId(&sup).unwrap();
-        let got_id = service.getAuthenticatorId(&sup).unwrap();
+        let new_id = assert_ok!(service.newAuthenticatorId(&sup));
+        let got_id = assert_ok!(service.getAuthenticatorId(&sup));
         assert_eq!(new_id, got_id);
     }
 
     #[test]
     fn generate_and_revoke_challenge() {
-        let service = fingerguard_api::connect_finger_guard().unwrap();
+        let service = assert_ok!(fingerguard_api::connect_finger_guard());
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         // Generate multiple challenges and revoke them individually.
-        let c1 = service.generateChallenge(&sup).unwrap();
+        let c1 = assert_ok!(service.generateChallenge(&sup));
         assert_ne!(c1, 0_i64);
-        let c2 = service.generateChallenge(&sup).unwrap();
+        let c2 = assert_ok!(service.generateChallenge(&sup));
         assert_ne!(c2, 0_i64);
         assert_ne!(c1, c2);
         // Revoke once, return the same challenge.
-        let revoked_c1 = service.revokeChallenge(&sup, c1).unwrap();
+        let revoked_c1 = assert_ok!(service.revokeChallenge(&sup, c1));
         assert_eq!(c1, revoked_c1);
-        let revoked_c2 = service.revokeChallenge(&sup, c2).unwrap();
+        let revoked_c2 = assert_ok!(service.revokeChallenge(&sup, c2));
         assert_eq!(c2, revoked_c2);
         // Revoke the 1st challenge twice, return zero.
         assert_eq!(service.revokeChallenge(&sup, c1), Ok(0));
@@ -755,7 +762,7 @@ mod tests {
 
     #[test]
     fn revoke_invalid_challenge() {
-        let service = fingerguard_api::connect_finger_guard().unwrap();
+        let service = assert_ok!(fingerguard_api::connect_finger_guard());
         let sup = SensorUserPair { sensorId: 2, userId: 2 };
         let invalid_challenge = 1234_i64;
         assert_eq!(service.revokeChallenge(&sup, invalid_challenge), Ok(0));
