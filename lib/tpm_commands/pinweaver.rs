@@ -528,7 +528,7 @@ pub trait Pinweaver {
     fn reset_tree(&self, tree_params: TreeParams) -> PinWeaverResult<Hash>;
 
     /// Get current pinweaver timestamp from GSC.
-    fn sys_info(&self) -> PinWeaverResult<Timestamp>;
+    fn sys_info(&self) -> PinWeaverResult<(Hash, Timestamp)>;
 }
 
 fn transport_error<D: Debug + 'static>(err: D) -> Error {
@@ -611,12 +611,12 @@ where
         Ok(header.root)
     }
 
-    fn sys_info(&self) -> PinWeaverResult<Timestamp> {
+    fn sys_info(&self) -> PinWeaverResult<(Hash, Timestamp)> {
         let mut req = request::Request::<request::SysInfo>::new_zeroed();
         req.init(()).map_err(|_| Error::RequestOverflow)?;
         let resp: response::Response<response::SysInfo> =
             self.transmit(req).map_err(transport_error)?;
         resp.check_consistency(&TreeParams { height: 0, bits_per_level: 0 })?;
-        Ok(resp.data.current_timestamp)
+        Ok((resp.header().root, resp.data.current_timestamp))
     }
 }
