@@ -19,7 +19,10 @@
 //! This protocol is not version-controlled: it must change in lockstep with `libpinweaver_storage`.
 
 use crate::util::{serde_fields, serde_zerocopy, SerdeVec};
-use std::{fmt::Debug, ops::Deref};
+use std::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub mod request;
@@ -98,6 +101,20 @@ impl U32 {
     /// Gets the underlying `u32` value.
     pub fn get(&self) -> u32 {
         self.0.get()
+    }
+}
+
+impl Deref for U32 {
+    type Target = zerocopy::byteorder::U32<zerocopy::byteorder::LE>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for U32 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

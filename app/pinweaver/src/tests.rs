@@ -43,6 +43,7 @@ fn pinweaver_smoke_test() {
     const DEFAULT_LEAF_ID: LeafId = LeafId { leafSet: LeafSet::WEAVER, id: 77i32 };
     const DEFAULT_LOW_ENTROPY_SECRET: [u8; 32] = [5u8; 32];
     const DEFAULT_HIGH_ENTROPY_SECRET: [u8; 32] = [6u8; 32];
+    const DEFAULT_LARGE_SECRET: [u8; 33] = [6u8; 33];
     const DEFAULT_RESET_SECRET: [u8; 32] = [7u8; 32];
     const DEFAULT_DELAY_SCHEDULE: [DelayScheduleEntry; 1] =
         [DelayScheduleEntry { attemptCount: 1, delaySecs: 999 }];
@@ -117,4 +118,20 @@ fn pinweaver_smoke_test() {
 
     // Remove that failes with DoesNotExist.
     assert_eq!(pinweaver.remove(&DEFAULT_LEAF_ID), Err(binder_error::leaf_not_found()));
+
+    // Check that large secrets work.
+    pinweaver
+        .insert(
+            &DEFAULT_LEAF_ID,
+            &DEFAULT_LOW_ENTROPY_SECRET,
+            &DEFAULT_LARGE_SECRET,
+            &DEFAULT_RESET_SECRET,
+            &DEFAULT_DELAY_SCHEDULE,
+            InsertMode::NEW_ONLY,
+        )
+        .expect("insert() failed");
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
+        Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_LARGE_SECRET
+    );
 }

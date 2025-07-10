@@ -27,6 +27,7 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,libc) \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,zerocopy) \
+	trusty/user/base/lib/openssl-rust \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/desktop/interface/pinweaver \

@@ -1,5 +1,9 @@
 use binder::Interface;
 use log::error;
+use openssl::{
+    rand::rand_bytes,
+    symm::{decrypt_aead, encrypt_aead, Cipher},
+};
 use pinweaver_api::{
     leafid_value, DelayScheduleEntry, IPinWeaver, InsertMode, LeafId, LeafSet, TryAuthResponse,
 };
@@ -14,10 +18,14 @@ use pinweaver_storage_api::{
         StartTryAuthResponseData, StorageResponse,
     },
     util::{SerdeOption, SerdeVec},
-    LargeSecretInfo, LeafId as StorageLeafId, Path, StorageInterface, TreeHash, TreeHashes,
-    TreeParams, EMPTY_TREE_HASH, RESERVED_LEAF_ID,
+    LargeSecretAuthTag, LargeSecretInfo, LargeSecretIv, LeafId as StorageLeafId, Path,
+    StorageInterface, TreeHash, TreeHashes, TreeParams, EMPTY_TREE_HASH, RESERVED_LEAF_ID,
 };
-use std::{ffi::CStr, ops::Deref, sync::Arc};
+use std::{
+    ffi::CStr,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 use tipc::TipcError;
 use tpm_commands::pinweaver::{
     request::{InsertLeafHeader, RemoveLeafHeader, TryAuthHeader},
@@ -178,6 +186,67 @@ pub struct PinWeaverService<Deps: PinWeaverServiceDeps> {
 impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
     pub fn new(storage: Arc<Deps::Storage>, gsc: Arc<Deps::Gsc>) -> Self {
         Self { storage, gsc }
+    }
+
+    fn handle_secret_size(
+        &self,
+        leaf_id: StorageLeafId,
+        secret: &[u8],
+    ) -> binder::Result<(Secret, SerdeOption<LargeSecretInfo>)> {
+        if let Ok(ret) = secret.try_into().map(|s| (Secret(s), SerdeOption::None)) {
+            return Ok(ret);
+        }
+
+        let mut key = Secret([0u8; 32]);
+        rand_bytes(&mut key.0).map_err(|err| {
+            error!("failed to generate key: {:?}", err);
+            binder_error::pinweaver(c"failed to generate key")
+        })?;
+
+        let mut iv = LargeSecretIv([0u8; 12]);
+        rand_bytes(&mut iv.0).map_err(|err| {
+            error!("failed to generate iv: {:?}", err);
+            binder_error::pinweaver(c"failed to generate iv")
+        })?;
+
+        // Use the leaf_id as additional auth data to prevent the secret
+        // from being moved between leaf_id's
+        let mut auth_tag = LargeSecretAuthTag(0.into());
+        let secret_ciphertext = SerdeVec::from_vec(
+            encrypt_aead(
+                Cipher::aes_256_gcm(),
+                &key.0,
+                Some(&iv.0),
+                leaf_id.as_bytes(),
+                secret,
+                auth_tag.0.deref_mut().as_mut(),
+            )
+            .map_err(|err| {
+                error!("failed to encrypt large secret: {:?}", err);
+                binder_error::pinweaver(c"failed to generate key")
+            })?,
+        );
+        Ok((key, SerdeOption::Some(LargeSecretInfo { iv, auth_tag, secret_ciphertext })))
+    }
+
+    fn decrypt_large_secret(
+        &self,
+        leaf_id: StorageLeafId,
+        secret: &[u8],
+        large_secret_info: &LargeSecretInfo,
+    ) -> binder::Result<Vec<u8>> {
+        decrypt_aead(
+            Cipher::aes_256_gcm(),
+            secret,
+            Some(&large_secret_info.iv.0),
+            leaf_id.as_bytes(),
+            large_secret_info.secret_ciphertext.deref(),
+            large_secret_info.auth_tag.0.as_bytes(),
+        )
+        .map_err(|err| {
+            error!("failed to encrypt large secret: {:?}", err);
+            binder_error::pinweaver(c"failed to generate key")
+        })
     }
 
     fn reset_tree(&self) -> binder::Result<()> {
@@ -347,18 +416,15 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         // Convert parameters from IPinweaver to storage and GSC types.
         let leaf_id = api_to_storage::leaf_id(api_leaf_id);
         let low_entropy_secret = api_to_gsc::secret(api_low_entropy_secret)?;
-        let high_entropy_secret = api_to_gsc::secret(api_high_entropy_secret)?;
+        let (high_entropy_secret, large_key_info) =
+            self.handle_secret_size(leaf_id, api_high_entropy_secret)?;
         let reset_secret = api_to_gsc::secret(api_reset_secret)?;
         let delay_schedule = api_to_gsc::delay_schedule(api_delay_schedule)?;
         let insert_mode = api_to_storage::insertmode(api_insert_mode)?;
-        // TODO: b/359374997 - Handle large secrets.
 
         // Start the operation with Storage to find an empty leaf and whether a replacement will occur.
-        let start_request = StartOpRequest::Insert(InsertOpRequest {
-            leaf_id,
-            mode: insert_mode,
-            large_key_info: SerdeOption::<LargeSecretInfo>::None,
-        });
+        let start_request =
+            StartOpRequest::Insert(InsertOpRequest { leaf_id, mode: insert_mode, large_key_info });
         let ret = self.first_request_helper(&StorageRequest::StartOp(start_request.clone()))?;
         // Extract returned values and convert from Storage to GSC.
         let (path, tree_hashes, replacing_path) = match ret {
@@ -492,10 +558,6 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
             }
         };
         let path_hashes: Vec<Hash> = storage_to_gsc::path_hashes(tree_hashes);
-        if large_key_info.is_some() {
-            // TODO(351892914) implement large secret support.
-            return Err(binder_error::unsupported_operation());
-        }
 
         // GSC try auth
         let mut resp_buffer = Vec::<u8>::new();
@@ -546,15 +608,24 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         }
 
         match result_code {
-            ResultCode::Success => {
-                Ok(TryAuthResponse::HighEntropySecret(try_auth.head.high_entropy_secret.0.to_vec()))
-            }
-            ResultCode::LowentAuthFailed => Err(binder_error::low_entropy_auth_failed()),
+            ResultCode::Success => {}
+            ResultCode::LowentAuthFailed => return Err(binder_error::low_entropy_auth_failed()),
             _ => {
                 error!("unexpected result code: {:?}", result_code);
-                Err(binder_error::pinweaver(c"unexpected result code"))
+                return Err(binder_error::pinweaver(c"unexpected result code"));
             }
         }
+
+        let high_entropy_secret = if let SerdeOption::Some(large_secret_info) = large_key_info {
+            self.decrypt_large_secret(
+                leaf_id,
+                &try_auth.head.high_entropy_secret.0,
+                &large_secret_info,
+            )?
+        } else {
+            try_auth.head.high_entropy_secret.0.to_vec()
+        };
+        Ok(TryAuthResponse::HighEntropySecret(high_entropy_secret))
     }
 
     fn tryAuthenticateThenReplace(
