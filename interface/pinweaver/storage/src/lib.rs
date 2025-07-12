@@ -169,6 +169,12 @@ pub struct TreeParams {
 /// A SHA-256 digest.
 pub struct TreeHash(#[cfg_attr(feature = "serde", serde(with = "util::hex_serde"))] pub [u8; 32]);
 
+impl From<[u8; 32]> for TreeHash {
+    fn from(value: [u8; 32]) -> Self {
+        TreeHash(value)
+    }
+}
+
 /// A set of auxiliary hashes for a tree.
 pub type TreeHashes = SerdeVec<TreeHash, MAX_AUX_HASHES>;
 
@@ -221,9 +227,14 @@ impl From<i64> for LeafId {
     }
 }
 
-#[cfg(feature = "rusqlite")]
-impl rusqlite::ToSql for LeafId {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        i64::from(*self).to_sql()
+impl From<Path> for u64 {
+    fn from(path: Path) -> u64 {
+        zerocopy::transmute!(path)
+    }
+}
+
+impl From<u64> for Path {
+    fn from(path: u64) -> Path {
+        zerocopy::transmute!(path)
     }
 }
