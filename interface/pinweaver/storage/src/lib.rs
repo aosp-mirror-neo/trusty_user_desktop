@@ -56,7 +56,8 @@ pub const LEAF_SIZE: u32 = 389;
 pub const MAX_LARGE_SECRET_SIZE: u32 = 1024;
 
 /// Replacement operators need a temporary leaf_id since it is a unique field.
-pub const RESERVED_LEAF_ID: LeafId = zerocopy::transmute!(i64::MIN);
+pub const RESERVED_LEAF_ID: LeafId =
+    LeafId { leaf_set: LeafSet(U32::new(u32::MAX)), inner_id: U32::new(u32::MAX) };
 
 /// The interface to communicate with the storage daemon.
 pub trait StorageInterface {
@@ -94,7 +95,7 @@ pub use response::StorageResponse;
 pub struct U32(zerocopy::byteorder::U32<zerocopy::byteorder::LE>);
 impl U32 {
     /// Constructs an unaligned `u32`.
-    pub fn new(val: u32) -> Self {
+    pub const fn new(val: u32) -> Self {
         Self(zerocopy::byteorder::U32::new(val))
     }
 
@@ -248,13 +249,15 @@ serde_zerocopy!(LargeSecretAuthTag, LargeSecretIv, LeafId, LeafSet, Path, TreeHa
 
 impl From<LeafId> for i64 {
     fn from(id: LeafId) -> i64 {
-        zerocopy::transmute!(id)
+        ((id.leaf_set.0.get() as i64) << 32) | (id.inner_id.get() as i64)
     }
 }
 
 impl From<i64> for LeafId {
     fn from(id: i64) -> LeafId {
-        zerocopy::transmute!(id)
+        let inner_id = U32::new((id & 0x00000000ffffffff) as u32);
+        let leaf_set = LeafSet(U32::new((u64::from_ne_bytes(id.to_ne_bytes()) >> 32) as u32));
+        LeafId { leaf_set, inner_id }
     }
 }
 
