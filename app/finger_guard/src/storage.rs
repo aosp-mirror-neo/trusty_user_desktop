@@ -21,10 +21,7 @@ use crate::crypto::{HmacGenerator, HmacSignable};
 use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
 use crate::rng;
-use fingerguard_api::aidl::{
-    PrepareAuthSessionResponse::PrepareAuthSessionResponse,
-    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SensorUserPair::SensorUserPair,
-};
+use fingerguard_api::aidl::SensorUserPair::SensorUserPair;
 use storage::{OpenMode, Port, Session};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -175,34 +172,3 @@ impl ExportToAidl<SignedHat> for SecureUserId {
 }
 
 impl PersistedState for SecureUserId {}
-
-#[derive(Default, FromBytes, IntoBytes, Immutable)]
-#[repr(C)]
-/// Newtype that encapsulates the sensor session counter.
-pub struct SensorSessionCounter(u64);
-impl SensorSessionCounter {
-    pub fn increment(&self) -> Self {
-        Self(self.0 + 1)
-    }
-}
-
-impl HmacSignable for SensorSessionCounter {
-    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
-        generator.update(&self.0.to_be_bytes())
-    }
-}
-impl ExportToAidl<PrepareAuthSessionResponse> for SensorSessionCounter {
-    fn export(&self, out: &mut PrepareAuthSessionResponse) {
-        out.sessionCounter = self.0 as i64;
-    }
-}
-impl ExportToAidl<PrepareEnrollSessionResponse> for SensorSessionCounter {
-    fn export(&self, out: &mut PrepareEnrollSessionResponse) {
-        out.sessionCounter = self.0 as i64;
-    }
-}
-
-impl PersistedState for SensorSessionCounter {}
-impl SingleFileState for SensorSessionCounter {
-    const FILE_NAME: &str = "fingerguard_sensor_session_counter";
-}

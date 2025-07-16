@@ -16,24 +16,7 @@
 
 package android.desktop.security.fingerguard;
 
-/**
- * EnrollmentResult represents an attested enrollment result.
- */
 parcelable EnrollmentResult {
     boolean enrolled;
-    /**
-     * The MAC attests the enrollment result.
-     * If enrolled = true:
-     * The MAC is a 32 bytes HMAC-SHA256, signed with the session key
-     * over the following string:
-     *         nonce || user_id || sensor_name || "enroll" || session_counter
-     * where ``||'' represents concatenation; nonce, user_id,
-     * and session_counter are obtained from a previous PrepareEnrollSession
-     * request and response; sensor_name is the name of the sensor stack,
-     * e.g. "fpmcu".
-     *
-     * If enrolled = false: the MAC is empty.
-     */
-    byte[] mac;
 }
 

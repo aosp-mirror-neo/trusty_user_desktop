@@ -22,14 +22,13 @@ use crate::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
 use crate::keymint;
 use crate::rng;
 use crate::storage::{
-    AuthenticatorId, PersistedState, SecureUserId, SensorSessionCounter, SensorStateIndex,
-    SingleFileState,
+    AuthenticatorId, PersistedState, SecureUserId, SensorStateIndex, SingleFileState,
 };
 use binder::Interface;
 use fingerguard_api::aidl::{
     AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
-    HandshakeResponse::HandshakeResponse, HardwareAuthToken::HardwareAuthToken,
-    IFingerGuard::IFingerGuard, LockoutStatus::LockoutStatus,
+    FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
+    HardwareAuthToken::HardwareAuthToken, IFingerGuard::IFingerGuard, LockoutStatus::LockoutStatus,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SensorUserPair::SensorUserPair,
     SessionResponse::SessionResponse,
@@ -77,11 +76,9 @@ impl EnrollmentChallenge {
 /// Represents the global state of the ongoing sensor session.
 enum SensorSession {
     #[default]
-    NONE,
-    ENROLL {
-        nonce: crypto::Nonce,
-    },
-    AUTH {
+    Idle,
+    Enroll,
+    Auth {
         nonce: crypto::Nonce,
         challenge: i64,
     },
@@ -214,6 +211,7 @@ impl FingerGuardService {
         &self,
         sensor_user_pair: &SensorUserPair,
         hat: &HardwareAuthToken,
+        nonce: &[u8],
     ) -> ServiceResult<PrepareEnrollSessionResponse> {
         let sk = self
             .sk
@@ -226,7 +224,7 @@ impl FingerGuardService {
             .sensor_session
             .try_lock()
             .map_err(|_| ServiceError::LockAcquire { name: "sensor_session", mode: "write" })?;
-        if !matches!(*sensor_session, SensorSession::NONE) {
+        if !matches!(*sensor_session, SensorSession::Idle) {
             return Err(ServiceError::StateAlreadyExists("ongoing sensor session"));
         }
 
@@ -236,34 +234,28 @@ impl FingerGuardService {
         if challenge == EnrollmentChallenge::EMPTY || challenge != hat.challenge {
             return Err(ServiceError::StateUnavailable("enrollment challenge"));
         }
+        // Validate |hat|.
         let auth_token_key = self.get_auth_token_key()?;
         let mac = crypto::HmacGenerator::compute_with(&auth_token_key, hat)?;
         if mac != hat.mac.as_slice() {
             return Err(ServiceError::BadMac("hardware auth token"));
         }
-
-        // Start a new enroll session.
-        let stored_counter = SensorSessionCounter::load().unwrap_or_default();
-        let session_counter = stored_counter.increment();
-        session_counter.save()?;
-
-        let nonce = crypto::Nonce::generate();
-        let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
-
         // Save the secure user id from the HAT.
+        let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
         let sid_file = sensor_state_index.secure_user_id_file_name();
         let secure_user_id = SecureUserId::from(hat.userId);
         secure_user_id.save_to(&sid_file)?;
+        // Start a new enroll session.
+        let nonce = crypto::Nonce::import(nonce)?;
         let hmac = crypto::sensor_session_message_hmac(
             &sk,
             &nonce,
-            crypto::MessageSender::FINGERGUARD,
-            crypto::SensorSessionType::ENROLL,
+            crypto::MessageSender::FingerGuard,
+            crypto::SensorSessionType::Enroll,
             &sensor_state_index,
-            &session_counter,
         )?;
-        let response = aidl::make_prepare_enroll_session_response(&session_counter, &nonce, &hmac);
-        *sensor_session = SensorSession::ENROLL { nonce };
+        let response = aidl::make_prepare_enroll_session_response(&hmac);
+        *sensor_session = SensorSession::Enroll;
         Ok(response)
     }
 
@@ -271,7 +263,8 @@ impl FingerGuardService {
         &self,
         sensor_user_pair: &SensorUserPair,
         result: &EnrollmentResult,
-    ) -> ServiceResult<()> {
+        nonce: &[u8],
+    ) -> ServiceResult<FinishEnrollSessionResponse> {
         let sk = self
             .sk
             .try_lock()
@@ -283,44 +276,39 @@ impl FingerGuardService {
             .sensor_session
             .try_lock()
             .map_err(|_| ServiceError::LockAcquire { name: "sensor_session", mode: "write" })?;
-        if !matches!(*sensor_session, SensorSession::ENROLL { .. }) {
+        if !matches!(*sensor_session, SensorSession::Enroll) {
             return Err(ServiceError::StateUnavailable("ongoing enroll session"));
         };
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
-        let session_counter = SensorSessionCounter::load().unwrap_or_default();
         // Close the session.
-        let session = mem::take(&mut *sensor_session);
-        let SensorSession::ENROLL { ref nonce } = session else {
-            return Err(ServiceError::StateUnavailable("no ongoing auth session"));
-        };
-        // If enrollment succeeds, compute and compare the mac.
+        let _ = mem::take(&mut *sensor_session);
+        // If the enrollment succeeds, compute a sensor message mac with |sensor_challenge|.
+        // Otherwise, return an empty response.
         if result.enrolled {
+            let nonce = crypto::Nonce::import(nonce)?;
             let hmac = crypto::sensor_session_message_hmac(
                 &sk,
                 &nonce,
-                crypto::MessageSender::FPMCU,
-                crypto::SensorSessionType::ENROLL,
+                crypto::MessageSender::FingerGuard,
+                crypto::SensorSessionType::EnrollFinish,
                 &sensor_state_index,
-                &session_counter,
             )?;
-            // Use a constant-time comparison to avoid timing attacks against
-            // the session hmac. This would be difficult to exploit anyway
-            // because retries are not possible, but better safe than sorry.
-            if hmac != result.mac.as_slice() {
-                return Err(ServiceError::BadMac("enrollment result"));
-            }
             // Generate and save a new AuthenticatorId.
             let authenticator_id = AuthenticatorId::generate_random();
             let file_name = sensor_state_index.authenticator_id_file_name();
             authenticator_id.save_to(&file_name)?;
+            let response = aidl::make_finish_enroll_session_response(&hmac);
+            Ok(response)
+        } else {
+            Ok(FinishEnrollSessionResponse::default())
         }
-        Ok(())
     }
 
     fn prepare_auth_session(
         &self,
         sensor_user_pair: &SensorUserPair,
         challenge: i64,
+        nonce: &[u8],
     ) -> ServiceResult<PrepareAuthSessionResponse> {
         let sk = self
             .sk
@@ -333,28 +321,23 @@ impl FingerGuardService {
             .sensor_session
             .try_lock()
             .map_err(|_| ServiceError::LockAcquire { name: "sensor_session", mode: "write" })?;
-        if !matches!(*sensor_session, SensorSession::NONE) {
+        if !matches!(*sensor_session, SensorSession::Idle) {
             return Err(ServiceError::StateAlreadyExists("ongoing sensor session"));
         }
 
         // Start a new auth session.
-        let stored_counter = SensorSessionCounter::load().unwrap_or_default();
-        let session_counter = stored_counter.increment();
-        session_counter.save()?;
-
-        let nonce = crypto::Nonce::generate();
-
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
+        let nonce = crypto::Nonce::import(nonce)?;
         let hmac = crypto::sensor_session_message_hmac(
             &sk,
             &nonce,
-            crypto::MessageSender::FINGERGUARD,
-            crypto::SensorSessionType::AUTH,
+            crypto::MessageSender::FingerGuard,
+            crypto::SensorSessionType::Auth,
             &sensor_state_index,
-            &session_counter,
         )?;
-        let response = aidl::make_prepare_auth_session_response(&session_counter, &nonce, &hmac);
-        *sensor_session = SensorSession::AUTH { nonce, challenge };
+        let nonce = crypto::Nonce::generate();
+        let response = aidl::make_prepare_auth_session_response(&nonce, &hmac);
+        *sensor_session = SensorSession::Auth { nonce, challenge };
         Ok(response)
     }
 
@@ -374,25 +357,23 @@ impl FingerGuardService {
             .sensor_session
             .try_lock()
             .map_err(|_| ServiceError::LockAcquire { name: "sensor_session", mode: "write" })?;
-        if !matches!(*sensor_session, SensorSession::AUTH { .. }) {
+        if !matches!(*sensor_session, SensorSession::Auth { .. }) {
             return Err(ServiceError::StateUnavailable("no ongoing auth session"));
         }
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
-        let session_counter = SensorSessionCounter::load().unwrap_or_default();
         // Close the session.
         let session = mem::take(&mut *sensor_session);
-        let SensorSession::AUTH { ref nonce, challenge } = session else {
+        let SensorSession::Auth { ref nonce, challenge } = session else {
             return Err(ServiceError::StateUnavailable("no ongoing auth session"));
         };
-        // If enrollment succeeds, compute and compare the mac.
+        // If the authentication succeeds, validate the mac is indeed from the sensor.
         if result.authenticated {
             let hmac = crypto::sensor_session_message_hmac(
                 &sk,
                 &nonce,
-                crypto::MessageSender::FPMCU,
-                crypto::SensorSessionType::AUTH,
+                crypto::MessageSender::Fpmcu,
+                crypto::SensorSessionType::Auth,
                 &sensor_state_index,
-                &session_counter,
             )?;
             // Use a constant-time comparison to avoid timing attacks against
             // the session hmac. This would be difficult to exploit anyway
@@ -496,30 +477,33 @@ impl IFingerGuard for FingerGuardService {
         &self,
         sensor_user_pair: &SensorUserPair,
         hat: &HardwareAuthToken,
+        nonce: &[u8],
     ) -> binder::Result<PrepareEnrollSessionResponse> {
         service_result_to_binder_result(
             "prepareEnrollSession",
-            FingerGuardService::prepare_enroll_session(&self, sensor_user_pair, hat),
+            FingerGuardService::prepare_enroll_session(&self, sensor_user_pair, hat, nonce),
         )
     }
     fn finishEnrollSession(
         &self,
         sensor_user_pair: &SensorUserPair,
         result: &EnrollmentResult,
-    ) -> binder::Result<()> {
+        nonce: &[u8],
+    ) -> binder::Result<FinishEnrollSessionResponse> {
         service_result_to_binder_result(
             "finishEnrollSession",
-            FingerGuardService::finish_enroll_session(&self, sensor_user_pair, result),
+            FingerGuardService::finish_enroll_session(&self, sensor_user_pair, result, nonce),
         )
     }
     fn prepareAuthSession(
         &self,
         sensor_user_pair: &SensorUserPair,
         challenge: i64,
+        nonce: &[u8],
     ) -> binder::Result<PrepareAuthSessionResponse> {
         service_result_to_binder_result(
             "prepareAuthSession",
-            FingerGuardService::prepare_auth_session(&self, sensor_user_pair, challenge),
+            FingerGuardService::prepare_auth_session(&self, sensor_user_pair, challenge, nonce),
         )
     }
     fn finishAuthSession(
@@ -679,49 +663,47 @@ mod tests {
             timestamp: 0,
             mac: vec![],
         };
+        let nonce = rng::generate_random_vec::<32>();
         hat.mac = Vec::from(assert_ok!(crypto::HmacGenerator::compute_with(&auth_token_key, &hat)));
-        let session_resp = assert_ok!(service.prepareEnrollSession(&sup, &hat));
-        assert_eq!(session_resp.sessionCounter, 1);
+        let session_resp = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
         let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
-        assert_ok!(hmac_gen.update(&session_resp.nonce));
+        assert_ok!(hmac_gen.update(&nonce));
         assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
         assert_ok!(hmac_gen.update(b"fingerguardenroll"));
-        assert_ok!(hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()));
         let hmac = assert_ok!(hmac_gen.complete());
         assert!(hmac == session_resp.mac.as_slice());
 
         let old_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
-        let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
-        assert_ok!(hmac_gen.update(&session_resp.nonce));
-        assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
-        assert_ok!(hmac_gen.update(b"fpmcuenroll"));
-        assert_ok!(hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()));
-        let hmac = assert_ok!(hmac_gen.complete());
-        let enrollment_result = EnrollmentResult { enrolled: true, mac: hmac.into() };
-        let _ = assert_ok!(service.finishEnrollSession(&sup, &enrollment_result));
+        let nonce = rng::generate_random_vec::<32>();
+        let enrollment_result = EnrollmentResult { enrolled: true };
+        let finish_resp = assert_ok!(service.finishEnrollSession(&sup, &enrollment_result, &nonce));
         // Ensure the authenticator id updates after enrollment.
         let new_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
         assert_ne!(new_auth_id, old_auth_id);
+        let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
+        assert_ok!(hmac_gen.update(&nonce));
+        assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
+        assert_ok!(hmac_gen.update(b"fingerguardenroll_finish"));
+        let hmac = assert_ok!(hmac_gen.complete());
+        assert!(hmac == finish_resp.mac.as_slice());
 
         // Test enrollment session cancellation.
         hat.challenge = assert_ok!(service.generateChallenge(&sup));
         hat.mac = Vec::from(assert_ok!(crypto::HmacGenerator::compute_with(&auth_token_key, &hat)));
-        let session_resp = assert_ok!(service.prepareEnrollSession(&sup, &hat));
-        assert_eq!(session_resp.sessionCounter, 2);
-        // Use a empty mac to signal the session cancellation.
-        let cancel_result = EnrollmentResult { enrolled: false, mac: vec![] };
-        let _ = assert_ok!(service.finishEnrollSession(&sup, &cancel_result));
+        let nonce = rng::generate_random_vec::<32>();
+        let _ = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
+        let cancel_result = EnrollmentResult { enrolled: false };
+        let _ = assert_ok!(service.finishEnrollSession(&sup, &cancel_result, &nonce));
         // ---- End Enrollment Test ----
 
         // ---- Start Authentication Test ----
         let challenge = 0xc4a11e49e as i64;
-        let session_resp = assert_ok!(service.prepareAuthSession(&sup, challenge));
-        assert_eq!(session_resp.sessionCounter, 3);
+        let nonce = rng::generate_random_vec::<32>();
+        let session_resp = assert_ok!(service.prepareAuthSession(&sup, challenge, &nonce));
         let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
-        assert_ok!(hmac_gen.update(&session_resp.nonce));
+        assert_ok!(hmac_gen.update(&nonce));
         assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
         assert_ok!(hmac_gen.update(b"fingerguardauth"));
-        assert_ok!(hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()));
         let hmac = assert_ok!(hmac_gen.complete());
         assert!(hmac == session_resp.mac.as_slice());
 
@@ -729,7 +711,6 @@ mod tests {
         assert_ok!(hmac_gen.update(&session_resp.nonce));
         assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
         assert_ok!(hmac_gen.update(b"fpmcuauth"));
-        assert_ok!(hmac_gen.update(&session_resp.sessionCounter.to_be_bytes()));
         let hmac = assert_ok!(hmac_gen.complete());
         let auth_result = AuthenticationResult { authenticated: true, mac: hmac.into() };
         let valid_hat = assert_ok!(service.finishAuthSession(&sup, &auth_result));
