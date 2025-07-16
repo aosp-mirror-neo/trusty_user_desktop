@@ -55,6 +55,8 @@ fn pinweaver_smoke_test() {
     pinweaver.removeAll(LeafSet::ALL_LEAVES).expect("removeAll() failed");
     log::info!("After removeAll()");
 
+    assert_eq!(pinweaver.removeAll(LeafSet::WEAVER), Err(binder_error::leaf_not_found()));
+
     // Insert a fresh leaf.
     pinweaver
         .insert(
@@ -134,4 +136,19 @@ fn pinweaver_smoke_test() {
         pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
         Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_LARGE_SECRET
     );
+
+    for id in 0i32..3 {
+        pinweaver
+            .insert(
+                &LeafId { leafSet: LeafSet::WEAVER, id },
+                &DEFAULT_LOW_ENTROPY_SECRET,
+                &DEFAULT_HIGH_ENTROPY_SECRET,
+                &DEFAULT_RESET_SECRET,
+                &DEFAULT_DELAY_SCHEDULE,
+                InsertMode::NEW_ONLY,
+            )
+            .expect("insert() failed");
+    }
+    pinweaver.removeAll(LeafSet::WEAVER).expect("removeAll() failed");
+    assert_eq!(pinweaver.removeAll(LeafSet::WEAVER), Err(binder_error::leaf_not_found()));
 }

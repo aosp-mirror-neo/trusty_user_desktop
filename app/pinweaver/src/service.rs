@@ -13,13 +13,15 @@ use pinweaver_storage_api::{
         StartOpRequest, StorageRequest,
     },
     response::{
-        CommitOpResponse, CommitOpResponseData, GetStatusResponse, ResponseError,
-        StartInsertResponseData, StartOpResponse, StartOpResponseData, StartRemoveResponseData,
-        StartTryAuthResponseData, StorageResponse,
+        CommitOpResponse, CommitOpResponseData, CommitRemoveBulkResponseData,
+        ContinueRemoveBulkResponse, GetStatusResponse, ResponseError, StartInsertResponseData,
+        StartOpResponse, StartOpResponseData, StartRemoveResponseData, StartTryAuthResponseData,
+        StorageResponse,
     },
     util::{SerdeOption, SerdeVec},
-    LargeSecretAuthTag, LargeSecretInfo, LargeSecretIv, LeafId as StorageLeafId, Path,
-    StorageInterface, TreeHash, TreeHashes, TreeParams, EMPTY_TREE_HASH, RESERVED_LEAF_ID,
+    LargeSecretAuthTag, LargeSecretInfo, LargeSecretIv, LeafId as StorageLeafId,
+    LeafSet as StorageLeafSet, Path, StorageInterface, TreeHash, TreeHashes, TreeParams,
+    EMPTY_TREE_HASH, RESERVED_LEAF_ID, U32,
 };
 use std::{
     ffi::CStr,
@@ -85,6 +87,10 @@ mod api_to_storage {
 
     pub fn leaf_id(leaf_id: &LeafId) -> StorageLeafId {
         StorageLeafId::from(leafid_value(leaf_id))
+    }
+
+    pub fn leaf_set(leaf_set: LeafSet) -> StorageLeafSet {
+        StorageLeafSet(U32::new(leaf_set.get() as u32))
     }
 
     pub fn insertmode(mode: InsertMode) -> binder::Result<StorageInsertMode> {
@@ -338,6 +344,61 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
             return Err(binder_error::pinweaver(c"root and storage out of sync"));
         }
         Ok(())
+    }
+
+    fn commit_remove_bulk(
+        &self,
+        leaf_set: StorageLeafSet,
+        path: Path,
+        leaf_hmac: TreeHash,
+        path_hashes: TreeHashes,
+    ) -> binder::Result<CommitRemoveBulkResponseData> {
+        // Convert parameters.
+        let gsc_path = storage_to_gsc::path(path);
+        let gsc_leaf_hmac = storage_to_gsc::hash(leaf_hmac);
+        let gsc_path_hashes = storage_to_gsc::path_hashes(path_hashes);
+
+        // Remove from the GSC first.
+        let gsc_root = self
+            .gsc
+            .remove_leaf(
+                GscTreeParams {
+                    bits_per_level: DEFAULT_TREE_BITS_PER_LEVEL,
+                    height: DEFAULT_TREE_HEIGHT,
+                },
+                RemoveLeafHeader { leaf_location: gsc_path, leaf_hmac: gsc_leaf_hmac },
+                gsc_path_hashes.as_slice(),
+            )
+            .map_err(|err| {
+                error!("gsc remove leaf failed: {:?}", err);
+                binder_error::gsc()
+            })?;
+
+        // Commit the remove operation.
+        let resp = self
+            .storage
+            .request(&StorageRequest::CommitOp(CommitOpRequest {
+                start_request: StartOpRequest::RemoveBulk(leaf_set),
+                new_leaf_hmac: EMPTY_TREE_HASH,
+                new_leaf_contents: SerdeVec::from_vec(Vec::new()),
+            }))
+            .map_err(binder_error::from_tipc)?;
+        let (root_hash, continue_or_done) = if let StorageResponse::CommitOp(CommitOpResponse {
+            root_hash,
+            op_data: CommitOpResponseData::RemoveBulk(continue_or_done),
+            ..
+        }) = resp
+        {
+            (root_hash, continue_or_done)
+        } else {
+            error!("commit_remove: unexpected response: {:?}", &resp);
+            return Err(binder_error::pinweaver(c"unexpected response"));
+        };
+        if root_hash.0 != gsc_root.0 {
+            error!("root and storage out of sync");
+            return Err(binder_error::pinweaver(c"root and storage out of sync"));
+        }
+        Ok(continue_or_done)
     }
 
     fn remove_leaf(&self, leaf_id: StorageLeafId) -> binder::Result<()> {
@@ -644,11 +705,45 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         self.remove_leaf(api_to_storage::leaf_id(id))
     }
 
-    fn removeAll(&self, leaf_set: LeafSet) -> binder::Result<()> {
-        if matches!(leaf_set, LeafSet::ALL_LEAVES) {
+    fn removeAll(&self, api_leaf_set: LeafSet) -> binder::Result<()> {
+        if matches!(api_leaf_set, LeafSet::ALL_LEAVES) {
             return self.reset_tree();
         }
-        // TODO: b/359374997 - Implement.
-        Err(binder_error::unsupported_operation())
+        let leaf_set = api_to_storage::leaf_set(api_leaf_set);
+
+        let resp = self
+            .storage
+            .request(&StorageRequest::StartOp(StartOpRequest::RemoveBulk(leaf_set)))
+            .map_err(binder_error::from_tipc)?;
+        let (mut path, mut tree_hashes, mut leaf_hmac) = match resp {
+            StorageResponse::StartOp(StartOpResponse {
+                path,
+                tree_hashes,
+                op_data: StartOpResponseData::Remove(StartRemoveResponseData { leaf_hmac }),
+            }) => (path, tree_hashes, leaf_hmac),
+            StorageResponse::Error(ResponseError::DoesNotExist) => {
+                return Err(binder_error::leaf_not_found());
+            }
+            _ => {
+                error!("start_remove: unexpected response: {:?}", &resp);
+                return Err(binder_error::pinweaver(c"unexpected response"));
+            }
+        };
+
+        loop {
+            match self.commit_remove_bulk(leaf_set, path, leaf_hmac, tree_hashes)? {
+                CommitRemoveBulkResponseData::Continue(ContinueRemoveBulkResponse {
+                    header,
+                    hashes,
+                }) => {
+                    path = header.path;
+                    tree_hashes = hashes.tree_hashes;
+                    leaf_hmac = hashes.leaf_hmac
+                }
+                CommitRemoveBulkResponseData::Finished => {
+                    return Ok(());
+                }
+            }
+        }
     }
 }
