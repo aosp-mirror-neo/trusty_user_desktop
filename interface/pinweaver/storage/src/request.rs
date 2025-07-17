@@ -16,7 +16,10 @@
 //! v1 storage request
 
 use super::{LargeSecretInfo, LeafContents, LeafId, LeafSet, TreeParams};
-use crate::util::{serde_enums, serde_fields, serde_zerocopy, SerdeOption};
+use crate::{
+    util::{serde_enums, serde_fields, serde_zerocopy, SerdeOption},
+    TreeHash,
+};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 serde_enums! {
@@ -114,6 +117,11 @@ pub struct CommitOpRequest {
     /// Large key info is not included.
     pub start_request: StartOpRequest,
 
+    /// The new HMAC of the leaf returned by PinWeaver.
+    ///
+    /// Zeroes if being removed.
+    pub new_leaf_hmac: TreeHash,
+
     /// The new contents of the leaf returned by PinWeaver.
     ///
     /// Empty if being removed.
@@ -121,7 +129,7 @@ pub struct CommitOpRequest {
 }
 
 serde_fields!(
-    CommitOpRequest { start_request, new_leaf_contents },
+    CommitOpRequest { start_request, new_leaf_hmac, new_leaf_contents },
     InsertOpRequest { leaf_id, mode, large_key_info },
 );
 serde_zerocopy!(ResetTreeRequest);

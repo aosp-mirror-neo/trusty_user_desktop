@@ -18,8 +18,11 @@ use android_system_desktop_security_gsc::aidl::android::system::desktop::securit
 use binder::Strong;
 use rpcbinder::RpcSession;
 use std::ffi::CStr;
-use tpm_commands::{TpmInterface, TpmResponseHeader, TpmvRequest};
-use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
+use tpm_commands::{
+    TpmInterface, TpmRequestMessage, TpmResponseHeader, TpmResponseMessage, TpmvRequest,
+    TpmvRequestBuild,
+};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
 pub use tpm_commands::trusty_storage_superblock_mac::{
     TrustyStorageFlags, TrustyStorageMac, TrustyStorageMacData, TrustyStorageMacFileIndex,
@@ -106,7 +109,6 @@ impl TpmInterface for GscServiceClient {
         &self,
         request: Req,
     ) -> Result<Rsp, GscServiceClientError> {
-        use tpm_commands::{TpmRequestMessage, TpmResponseMessage};
         let request = TpmRequestMessage::<Req>::new(request);
         let bytes = self
             .0
@@ -114,16 +116,52 @@ impl TpmInterface for GscServiceClient {
             .map_err(|_| GscServiceClientError::TransmitError)?;
 
         // Check for TPM errors
-        let (header, _) = TpmResponseHeader::ref_from_prefix(&bytes)
-            .map_err(|_| GscServiceClientError::Deserialization)?;
+        let (header, _) = TpmResponseHeader::ref_from_prefix(&bytes).map_err(|err| {
+            log::error!("transmit: ref_from_prefix failed: {}", err);
+            GscServiceClientError::Deserialization
+        })?;
         if header.error_code != 0 {
             return Err(GscServiceClientError::Tpm(header.error_code.into()));
         }
 
-        let response = TpmResponseMessage::<Rsp>::read_from_bytes(&bytes)
-            .map_err(|_| GscServiceClientError::Deserialization)?;
+        let response = TpmResponseMessage::<Rsp>::read_from_bytes(&bytes).map_err(|err| {
+            log::error!("transmit: read_from_bytes failed: {}", err);
+            GscServiceClientError::Deserialization
+        })?;
 
         Ok(response.response)
+    }
+
+    fn transmit_into<
+        'a,
+        Req: TpmvRequestBuild + ?Sized,
+        Rsp: FromBytes + IntoBytes + KnownLayout + Immutable + Unaligned + ?Sized,
+    >(
+        &self,
+        request: &tpm_commands::TpmRequestMessage<Req>,
+        buffer: &'a mut Vec<u8>,
+    ) -> Result<&'a mut Rsp, Self::Error> {
+        let mut bytes = self
+            .0
+            .transmit(request.as_bytes())
+            .map_err(|_| GscServiceClientError::TransmitError)?;
+
+        // Check for TPM errors
+        let (header, _) = TpmResponseHeader::ref_from_prefix(&bytes).map_err(|err| {
+            log::error!("transmit_into: ref_from_prefix failed: {}", err);
+            GscServiceClientError::Deserialization
+        })?;
+        if header.error_code != 0 {
+            return Err(GscServiceClientError::Tpm(header.error_code.into()));
+        }
+        std::mem::swap(&mut bytes, buffer);
+        drop(bytes);
+
+        let response = TpmResponseMessage::<Rsp>::mut_from_bytes(buffer).map_err(|err| {
+            log::error!("transmit_into: read_from_bytes failed: {}", err);
+            GscServiceClientError::Deserialization
+        })?;
+        Ok(&mut response.response)
     }
 }
 

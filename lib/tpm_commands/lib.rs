@@ -97,6 +97,17 @@ pub trait TpmInterface {
         &self,
         request: Req,
     ) -> Result<Rsp, Self::Error>;
+
+    /// Transmit a TPM request message and get back a TPM response message.
+    fn transmit_into<
+        'a,
+        Req: TpmvRequestBuild + ?Sized,
+        Rsp: FromBytes + IntoBytes + KnownLayout + Immutable + Unaligned + ?Sized,
+    >(
+        &self,
+        request: &TpmRequestMessage<Req>,
+        buffer: &'a mut Vec<u8>,
+    ) -> Result<&'a mut Rsp, Self::Error>;
 }
 
 /// Defines the constants required by each type of TPM vendor request.
@@ -122,7 +133,7 @@ pub trait TpmvRequest: IntoBytes + Immutable + Unaligned {
 /// Operations to build a dynamically-sized request type.
 ///
 /// See [`TpmRequestMessage::new_in_vec`].
-pub trait TpmvRequestBuild: TpmvRequest + FromZeros + KnownLayout {
+pub trait TpmvRequestBuild: TpmvRequest + FromZeros + IntoBytes + KnownLayout {
     /// Parameters to build an self-consistent instance of this request from zeros.
     ///
     /// This does not need to fill every field of the request, only those that should
@@ -269,7 +280,7 @@ impl TpmRequestHeader {
 
 /// Represents a complete TPM response. Contains both the response header and any
 /// additional fields required by the response type
-#[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq)]
+#[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned, PartialEq)]
 #[repr(C)]
 pub struct TpmResponseMessage<T: ?Sized> {
     /// The response header
@@ -280,7 +291,7 @@ pub struct TpmResponseMessage<T: ?Sized> {
 }
 
 /// Represents the initial bytes of every TPM response.
-#[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq)]
+#[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned, PartialEq)]
 #[repr(C)]
 pub struct TpmResponseHeader {
     /// The first 4 bytes of every TPM response

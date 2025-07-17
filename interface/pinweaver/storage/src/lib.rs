@@ -19,7 +19,7 @@
 //! This protocol is not version-controlled: it must change in lockstep with `libpinweaver_storage`.
 
 use crate::util::{serde_fields, serde_zerocopy, SerdeVec};
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Deref};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub mod request;
@@ -168,6 +168,14 @@ pub struct TreeParams {
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
 /// A SHA-256 digest.
 pub struct TreeHash(#[cfg_attr(feature = "serde", serde(with = "util::hex_serde"))] pub [u8; 32]);
+
+impl Deref for TreeHash {
+    type Target = [u8; 32];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl From<[u8; 32]> for TreeHash {
     fn from(value: [u8; 32]) -> Self {

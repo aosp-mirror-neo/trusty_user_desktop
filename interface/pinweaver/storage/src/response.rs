@@ -109,6 +109,12 @@ serde_enums! {
 
         /// 'No replace' operation would replace.
         WouldReplace = 4,
+
+        /// Called commit on an operation that wasn't pending.
+        BadCommit = 5,
+
+        /// A pending operation needs to be completed for consistency.
+        OperationPending = 6,
     }
 
     /// The suboperation-specific data for a start-operation response.
