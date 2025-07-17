@@ -191,14 +191,22 @@ mod tests {
 
         let client = GscServiceClient::new().unwrap();
         let res: Result<Response, GscServiceClientError> = client.transmit(Request);
-        assert_eq!(Err(GscServiceClientError::Tpm(0x508)), res);
+        assert!(res.is_err());
+
+        // TODO(mvertescher): Resolve differences between Ti50/Cr50
+        // assert_eq!(Err(GscServiceClientError::Tpm(0x508)), res);
     }
 
     #[test]
     fn read_trusty_storage_superblock_mac() {
         let client = GscServiceClient::new().unwrap();
-        let index = TrustyStorageMacFileIndex::TamperDetectPersist;
-        client.read_trusty_storage_superblock_mac(index).unwrap();
+        let tdp = TrustyStorageMacFileIndex::TamperDetectPersist;
+        let td = TrustyStorageMacFileIndex::TamperDetectPersist;
+
+        let rsp = client.read_trusty_storage_superblock_mac(tdp).unwrap();
+        log::info!("TamperDetectPersist: {:x?}", rsp);
+        let rsp = client.read_trusty_storage_superblock_mac(td).unwrap();
+        log::info!("TamperDetect: {:x?}", rsp);
     }
 
     // This test is destructive so it is disabled by default.
@@ -235,5 +243,22 @@ mod tests {
         let expected = TrustyStorageMacData { mac: TrustyStorageMac::default(), flags: data.flags };
         let res = client.read_trusty_storage_superblock_mac(index);
         assert_eq!(Ok(expected), res);
+    }
+
+    // This test is destructive so it is disabled by default.
+    // #[test]
+    #[allow(dead_code)]
+    fn delete_trusty_storage_superblock_macs() {
+        let client = GscServiceClient::new().unwrap();
+        let tdp = TrustyStorageMacFileIndex::TamperDetectPersist;
+        let td = TrustyStorageMacFileIndex::TamperDetectPersist;
+
+        client.delete_trusty_storage_superblock_mac(td).unwrap();
+        client.delete_trusty_storage_superblock_mac(tdp).unwrap();
+
+        let rsp = client.read_trusty_storage_superblock_mac(tdp).unwrap();
+        log::info!("TamperDetectPersist: {:x?}", rsp);
+        let rsp = client.read_trusty_storage_superblock_mac(td).unwrap();
+        log::info!("TamperDetect: {:x?}", rsp);
     }
 }
