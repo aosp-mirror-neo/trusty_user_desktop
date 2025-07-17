@@ -447,80 +447,103 @@ impl FingerGuardService {
     }
 }
 
+// Generically convert a service result into a binder result.
+//
+// If the result is an error this will also log it as the conversion is lossy and otherwise
+// information will be lost.
+fn service_result_to_binder_result<T>(
+    op_name: &str,
+    result: ServiceResult<T>,
+) -> binder::Result<T> {
+    result.inspect_err(|e| error!("{op_name} failed: {e:?}")).map_err(|e| match e {
+        ServiceError::StateAlreadyExists(..) => binder::StatusCode::ALREADY_EXISTS.into(),
+        _ => binder::StatusCode::FAILED_TRANSACTION.into(),
+    })
+}
+
 impl Interface for FingerGuardService {}
 
 impl IFingerGuard for FingerGuardService {
     fn initHandshake(&self, client_public_key: &[u8]) -> binder::Result<HandshakeResponse> {
-        FingerGuardService::init_handshake(&self, client_public_key)
-            .inspect_err(|e| error!("initHandshake failed: {e:?}"))
-            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "initHandshake",
+            FingerGuardService::init_handshake(&self, client_public_key),
+        )
     }
     fn newSession(&self, client_nonce: &[u8]) -> binder::Result<SessionResponse> {
-        FingerGuardService::new_session(&self, client_nonce)
-            .inspect_err(|e| error!("newSession failed: {e:?}"))
-            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "newSession",
+            FingerGuardService::new_session(&self, client_nonce),
+        )
     }
     fn generateChallenge(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
-        FingerGuardService::generate_challenge(&self, sensor_user_pair)
-            .inspect_err(|e| error!("generateChallenge failed: {e:?}"))
-            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "generateChallenge",
+            FingerGuardService::generate_challenge(&self, sensor_user_pair),
+        )
     }
     fn revokeChallenge(
         &self,
         sensor_user_pair: &SensorUserPair,
         challenge: i64,
     ) -> binder::Result<i64> {
-        FingerGuardService::revoke_challenge(&self, sensor_user_pair, challenge)
-            .inspect_err(|e| error!("revokeChallenge failed: {e:?}"))
-            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "revokeChallenge",
+            FingerGuardService::revoke_challenge(&self, sensor_user_pair, challenge),
+        )
     }
     fn prepareEnrollSession(
         &self,
         sensor_user_pair: &SensorUserPair,
         hat: &HardwareAuthToken,
     ) -> binder::Result<PrepareEnrollSessionResponse> {
-        FingerGuardService::prepare_enroll_session(&self, sensor_user_pair, hat)
-            .inspect_err(|e| error!("prepareEnrollSession failed: {e:?}"))
-            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "prepareEnrollSession",
+            FingerGuardService::prepare_enroll_session(&self, sensor_user_pair, hat),
+        )
     }
     fn finishEnrollSession(
         &self,
         sensor_user_pair: &SensorUserPair,
         result: &EnrollmentResult,
     ) -> binder::Result<()> {
-        FingerGuardService::finish_enroll_session(&self, sensor_user_pair, result)
-            .inspect_err(|e| error!("finishEnrollSession failed: {e:?}"))
-            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "finishEnrollSession",
+            FingerGuardService::finish_enroll_session(&self, sensor_user_pair, result),
+        )
     }
     fn prepareAuthSession(
         &self,
         sensor_user_pair: &SensorUserPair,
         challenge: i64,
     ) -> binder::Result<PrepareAuthSessionResponse> {
-        FingerGuardService::prepare_auth_session(&self, sensor_user_pair, challenge)
-            .inspect_err(|e| error!("prepareAuthSession failed: {e:?}"))
-            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "prepareAuthSession",
+            FingerGuardService::prepare_auth_session(&self, sensor_user_pair, challenge),
+        )
     }
     fn finishAuthSession(
         &self,
         sensor_user_pair: &SensorUserPair,
         result: &AuthenticationResult,
     ) -> binder::Result<HardwareAuthToken> {
-        FingerGuardService::finish_auth_session(&self, sensor_user_pair, result)
-            .inspect_err(|e| error!("finishAuthSession failed: {e:?}"))
-            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "finishAuthSession",
+            FingerGuardService::finish_auth_session(&self, sensor_user_pair, result),
+        )
     }
     fn getAuthenticatorId(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
-        FingerGuardService::read_authenticator_id(&self, sensor_user_pair)
-            .map(|id| id.into())
-            .inspect_err(|e| error!("getAuthenticatorId failed: {e:?}"))
-            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "getAuthenticatorId",
+            FingerGuardService::read_authenticator_id(&self, sensor_user_pair).map(|id| id.into()),
+        )
     }
     fn newAuthenticatorId(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
-        FingerGuardService::generate_authenticator_id(&self, sensor_user_pair)
-            .map(|id| id.into())
-            .inspect_err(|e| error!("newAuthenticatorId failed: {e:?}"))
-            .map_err(|_| binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "newAuthenticatorId",
+            FingerGuardService::generate_authenticator_id(&self, sensor_user_pair)
+                .map(|id| id.into()),
+        )
     }
     // TODO(b/401303592): implement
     fn getLockoutStatus(
@@ -551,7 +574,7 @@ mod tests {
     use openssl::bn::BigNumContext;
     use openssl::ec::{EcGroup, EcKey, PointConversionForm};
     use openssl::pkey::{PKey, Private};
-    use test::{assert, assert_eq, assert_ne, assert_ok};
+    use test::{assert, assert_eq, assert_ne, assert_ok, skip};
 
     test::init!();
 
@@ -575,18 +598,23 @@ mod tests {
             ));
             let client_private_key: PKey<Private> = assert_ok!(client_private_key.try_into());
 
-            // ECDH with the server.
+            // ECDH with the server. If the service has already done a handshake then it's not
+            // possible to run this test, skip it and move on.
             let service = assert_ok!(fingerguard_api::connect_finger_guard());
-            let handshake_response =
-                assert_ok!(service.initHandshake(client_public_key_bytes.as_slice()));
-            let server_public_key_bytes = handshake_response.serverPublicKey;
+            let handshake = match service.initHandshake(client_public_key_bytes.as_slice()) {
+                Err(status) if status.transaction_error() == binder::StatusCode::ALREADY_EXISTS => {
+                    skip!("service already bound to a controller")
+                }
+                result => assert_ok!(result),
+            };
+            let server_public_key_bytes = handshake.serverPublicKey;
 
             // Derive PK from the client side.
             let pk =
                 assert_ok!(crypto::perform_ecdh(&client_private_key, &server_public_key_bytes));
             // Check the computed MAC matches the one in the response.
             let hmac = assert_ok!(crypto::HmacGenerator::compute(&pk, b"tofu"));
-            assert!(hmac == handshake_response.pkMac.as_slice());
+            assert!(hmac == handshake.pkMac.as_slice());
             result = Ok(pk);
         })();
         result
