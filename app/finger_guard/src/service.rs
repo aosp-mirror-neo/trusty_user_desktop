@@ -583,47 +583,40 @@ mod tests {
         let _ = assert_ok!(fingerguard_api::connect_finger_guard());
     }
 
-    // Establish a shared PK with the fingerguard server.
-    fn init_service() -> Result<crypto::Key, ()> {
-        let mut result = Err(());
-        (|| {
-            // Prepare the client key pair.
-            let group = assert_ok!(EcGroup::from_curve_name(NIST_P256_CURVE_NAME));
-            let mut ctx = assert_ok!(BigNumContext::new());
-            let client_private_key: EcKey<Private> = assert_ok!(EcKey::generate(&group));
-            let client_public_key_bytes = assert_ok!(client_private_key.public_key().to_bytes(
-                &group,
-                PointConversionForm::UNCOMPRESSED,
-                &mut ctx
-            ));
-            let client_private_key: PKey<Private> = assert_ok!(client_private_key.try_into());
-
-            // ECDH with the server. If the service has already done a handshake then it's not
-            // possible to run this test, skip it and move on.
-            let service = assert_ok!(fingerguard_api::connect_finger_guard());
-            let handshake = match service.initHandshake(client_public_key_bytes.as_slice()) {
-                Err(status) if status.transaction_error() == binder::StatusCode::ALREADY_EXISTS => {
-                    skip!("service already bound to a controller")
-                }
-                result => assert_ok!(result),
-            };
-            let server_public_key_bytes = handshake.serverPublicKey;
-
-            // Derive PK from the client side.
-            let pk =
-                assert_ok!(crypto::perform_ecdh(&client_private_key, &server_public_key_bytes));
-            // Check the computed MAC matches the one in the response.
-            let hmac = assert_ok!(crypto::HmacGenerator::compute(&pk, b"tofu"));
-            assert!(hmac == handshake.pkMac.as_slice());
-            result = Ok(pk);
-        })();
-        result
-    }
-
     #[test]
     fn everything_with_a_shared_session() {
         let auth_token_key = assert_ok!(keymint::get_auth_token_key());
-        let pk = assert_ok!(init_service());
+
+        // Prepare the client key pair.
+        let group = assert_ok!(EcGroup::from_curve_name(NIST_P256_CURVE_NAME));
+        let mut ctx = assert_ok!(BigNumContext::new());
+        let client_private_key: EcKey<Private> = assert_ok!(EcKey::generate(&group));
+        let client_public_key_bytes = assert_ok!(client_private_key.public_key().to_bytes(
+            &group,
+            PointConversionForm::UNCOMPRESSED,
+            &mut ctx
+        ));
+        let client_private_key: PKey<Private> = assert_ok!(client_private_key.try_into());
+
+        // ECDH with the server. If the service has already done a handshake then it's not
+        // possible to run this test, skip it and move on.
+        let service = assert_ok!(fingerguard_api::connect_finger_guard());
+        let handshake = match service.initHandshake(client_public_key_bytes.as_slice()) {
+            Err(status) if status.transaction_error() == binder::StatusCode::ALREADY_EXISTS => {
+                skip!("service already bound to a controller")
+            }
+            result => assert_ok!(result),
+        };
+        let server_public_key_bytes = handshake.serverPublicKey;
+
+        // Derive PK from the client side.
+        let pk = assert_ok!(crypto::perform_ecdh(&client_private_key, &server_public_key_bytes));
+
+        // Check the computed MAC matches the one in the response.
+        let hmac = assert_ok!(crypto::HmacGenerator::compute(&pk, b"tofu"));
+        assert!(hmac == handshake.pkMac.as_slice());
+
+        // Generate the client nonce.
         let client_nonce = rng::generate_random_vec::<32>();
 
         // Start a new session with the server.
