@@ -206,9 +206,7 @@ impl ResponseData for SysInfo {
 
 /// A PinWeaver result code.
 // TODO: https://github.com/kupiakos/open-enum/issues/27 - use open_enum when it supports U32<LE>
-#[derive(
-    Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Eq, Unaligned,
-)]
+#[derive(Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Eq, Unaligned)]
 #[repr(transparent)]
 pub struct ResultCode(pub U32<LE>);
 
@@ -355,8 +353,14 @@ impl ResultCode {
 
 impl std::fmt::Display for ResultCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.description())
+        write!(f, "{:05x}: {}", self.0, self.description())
     }
 }
 
 impl std::error::Error for ResultCode {}
+
+impl std::fmt::Debug for ResultCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self, f)
+    }
+}
