@@ -6,6 +6,7 @@ aidl_interface {
     srcs: [
         "android/desktop/security/fingerguard/AuthenticationResult.aidl",
         "android/desktop/security/fingerguard/EnrollmentResult.aidl",
+        "android/desktop/security/fingerguard/FinishEnrollSessionResponse.aidl",
         "android/desktop/security/fingerguard/HandshakeResponse.aidl",
         "android/desktop/security/fingerguard/HardwareAuthToken.aidl",
         "android/desktop/security/fingerguard/IFingerGuard.aidl",

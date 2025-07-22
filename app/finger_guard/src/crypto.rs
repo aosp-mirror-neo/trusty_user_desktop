@@ -20,9 +20,10 @@ use crate::aidl::ExportToAidl;
 use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
 use crate::rng;
-use crate::storage::{SensorSessionCounter, SensorStateIndex};
+use crate::storage::SensorStateIndex;
 use fingerguard_api::aidl::{
-    HandshakeResponse::HandshakeResponse, PrepareAuthSessionResponse::PrepareAuthSessionResponse,
+    FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
+    PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
 };
 use openssl::bn::BigNumContext;
@@ -95,11 +96,6 @@ impl ExportToAidl<SessionResponse> for Nonce {
 }
 impl ExportToAidl<PrepareAuthSessionResponse> for Nonce {
     fn export(&self, out: &mut PrepareAuthSessionResponse) {
-        out.nonce = self.bytes;
-    }
-}
-impl ExportToAidl<PrepareEnrollSessionResponse> for Nonce {
-    fn export(&self, out: &mut PrepareEnrollSessionResponse) {
         out.nonce = self.bytes;
     }
 }
@@ -218,14 +214,14 @@ pub fn decrypt_aes256_gcm(
 
 /// The sender of a message.
 pub enum MessageSender {
-    FINGERGUARD,
-    FPMCU,
+    FingerGuard,
+    Fpmcu,
 }
 impl HmacSignable for MessageSender {
     fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
         let name: &[u8] = match self {
-            MessageSender::FINGERGUARD => b"fingerguard",
-            MessageSender::FPMCU => b"fpmcu",
+            MessageSender::FingerGuard => b"fingerguard",
+            MessageSender::Fpmcu => b"fpmcu",
         };
         generator.update(name)
     }
@@ -233,14 +229,16 @@ impl HmacSignable for MessageSender {
 
 /// The operation this session is performing.
 pub enum SensorSessionType {
-    ENROLL,
-    AUTH,
+    Enroll,
+    EnrollFinish,
+    Auth,
 }
 impl HmacSignable for SensorSessionType {
     fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
         let name: &[u8] = match self {
-            SensorSessionType::ENROLL => b"enroll",
-            SensorSessionType::AUTH => b"auth",
+            SensorSessionType::Enroll => b"enroll",
+            SensorSessionType::EnrollFinish => b"enroll_finish",
+            SensorSessionType::Auth => b"auth",
         };
         generator.update(name)
     }
@@ -271,6 +269,11 @@ impl ExportToAidl<PrepareAuthSessionResponse> for Hmac {
 }
 impl ExportToAidl<PrepareEnrollSessionResponse> for Hmac {
     fn export(&self, out: &mut PrepareEnrollSessionResponse) {
+        out.mac = self.bytes.to_vec();
+    }
+}
+impl ExportToAidl<FinishEnrollSessionResponse> for Hmac {
+    fn export(&self, out: &mut FinishEnrollSessionResponse) {
         out.mac = self.bytes.to_vec();
     }
 }
@@ -352,17 +355,15 @@ pub fn sensor_session_message_hmac(
     sender: MessageSender,
     session_type: SensorSessionType,
     ssi: &SensorStateIndex,
-    session_counter: &SensorSessionCounter,
 ) -> ServiceResult<Hmac> {
     //
     // Compute mac as HMAC_SHA256(key, msg) where
-    // msg = nonce || user_id || sender_name || session_name || session_counter
+    // msg = nonce || user_id || sender_name || session_name
     //
     let mut generator = HmacGenerator::new(key)?;
     generator.update_with(nonce)?;
     generator.update_with(ssi)?;
     generator.update_with(&sender)?;
     generator.update_with(&session_type)?;
-    generator.update_with(session_counter)?;
     Ok(generator.complete()?)
 }

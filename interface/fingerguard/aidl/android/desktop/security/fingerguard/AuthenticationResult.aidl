@@ -26,10 +26,10 @@ parcelable AuthenticationResult {
      * If authenticated = true:
      * The MAC is a 32 bytes HMAC-SHA256, signed with the session key
      * over the following string:
-     *         nonce || user_id || sensor_name || "auth" || session_counter
-     * where ``||'' represents concatenation; nonce, user_id,
-     * and session_counter are obtained from a previous prepareAuthSession
-     * request and response; sensor_name is the name of the sensor stack,
+     *         challenge || user_id || fpmcu_name || "auth"
+     * where ``||'' represents concatenation; challenge is from a previous
+     * PrepareAuthSessionResponse; user_id is from the input of a previous
+     * PrepareAuthSession call. fpmcu_name is the name of the sensor MCU,
      * e.g. "fpmcu".
      *
      * If authenticated = false: the MAC is empty.
