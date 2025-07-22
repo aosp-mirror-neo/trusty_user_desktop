@@ -17,9 +17,9 @@
 //! Traits and utilities for moving data into and out of AIDL interface types.
 
 use crate::crypto;
-use crate::storage::SensorSessionCounter;
 use fingerguard_api::aidl::{
-    HandshakeResponse::HandshakeResponse, PrepareAuthSessionResponse::PrepareAuthSessionResponse,
+    FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
+    PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
 };
 
@@ -65,26 +65,25 @@ pub fn make_session_response(
 
 /// Construct a new prepare_auth_session response.
 pub fn make_prepare_auth_session_response(
-    session_counter: &SensorSessionCounter,
     nonce: &crypto::Nonce,
     mac: &crypto::Hmac,
 ) -> PrepareAuthSessionResponse {
     let mut response = PrepareAuthSessionResponse::default();
-    session_counter.export(&mut response);
     nonce.export(&mut response);
     mac.export(&mut response);
     response
 }
 
 /// Construct a new prepare_enroll_session response.
-pub fn make_prepare_enroll_session_response(
-    session_counter: &SensorSessionCounter,
-    nonce: &crypto::Nonce,
-    mac: &crypto::Hmac,
-) -> PrepareEnrollSessionResponse {
+pub fn make_prepare_enroll_session_response(mac: &crypto::Hmac) -> PrepareEnrollSessionResponse {
     let mut response = PrepareEnrollSessionResponse::default();
-    session_counter.export(&mut response);
-    nonce.export(&mut response);
+    mac.export(&mut response);
+    response
+}
+
+/// Construct a new finish_enroll_session response.
+pub fn make_finish_enroll_session_response(mac: &crypto::Hmac) -> FinishEnrollSessionResponse {
+    let mut response = FinishEnrollSessionResponse::default();
     mac.export(&mut response);
     response
 }

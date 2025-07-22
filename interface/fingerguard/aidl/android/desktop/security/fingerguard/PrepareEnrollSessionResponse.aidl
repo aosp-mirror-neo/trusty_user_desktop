@@ -17,16 +17,12 @@
 package android.desktop.security.fingerguard;
 
 parcelable PrepareEnrollSessionResponse {
-    // The session counter monotonically increases.
-    long sessionCounter;
-    // Random nonce.
-    byte[32] nonce;
     /**
      * The MAC is a 32 bytes HMAC-SHA256 with the session key over the
      * following string:
-     *         nonce || user_id || ta_name || "enroll" || session_counter
+     *         nonce || user_id || ta_name || "enroll"
      *
-     * where ``||'' represents concatenation; user_id is an unsigned integer
+     * where ``||'' represents concatenation; nonce and user_id are
      * from the input of PrepareEnrollSession, ta_name is the public name
      * identifying the FingerGuard TA, i.e. "fingerguard".
      */

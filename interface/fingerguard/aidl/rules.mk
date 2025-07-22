@@ -22,6 +22,7 @@ MODULE_CRATE_NAME := android_desktop_security_fingerguard
 MODULE_AIDLS := \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/AuthenticationResult.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/EnrollmentResult.aidl \
+	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/FinishEnrollSessionResponse.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/HandshakeResponse.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/HardwareAuthToken.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/IFingerGuard.aidl \
