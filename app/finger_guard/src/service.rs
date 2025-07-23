@@ -16,7 +16,7 @@
 
 use crate::aidl;
 use crate::clock::{self, Instant};
-use crate::crypto;
+use crate::crypto::{self, MapOpenSslErrExt};
 use crate::error::{ServiceError, ServiceResult};
 use crate::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
 use crate::keymint;
@@ -120,13 +120,11 @@ impl FingerGuardService {
         if let Some(_) = *init_params {
             return Err(ServiceError::StateAlreadyExists("init_params"));
         }
-        let server_private_key =
-            crypto::ec_keygen().map_err(|e| ServiceError::OpenSsl("failed to ec keygen", e))?;
+        let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
         let server_public_key_bytes = crypto::ec_public_key_serialization(&server_private_key)
-            .map_err(|e| ServiceError::OpenSsl("failed to serialize server public key", e))?;
-        let server_private_key: PKey<Private> = server_private_key
-            .try_into()
-            .map_err(|e| ServiceError::OpenSsl("failed to convert ec key to pkey", e))?;
+            .wrap_openssl_err("failed to serialize server public key")?;
+        let server_private_key: PKey<Private> =
+            server_private_key.try_into().wrap_openssl_err("failed to convert ec key to pkey")?;
         let pk = crypto::perform_ecdh(&server_private_key, client_public_key_bytes)?;
         // generate random tpm_seed.
         let tpm_seed = crypto::Secret::generate();
@@ -169,7 +167,7 @@ impl FingerGuardService {
             &init_params.tpm_seed,
             tag.as_mut_slice(),
         )
-        .map_err(|e| ServiceError::OpenSsl("failed to encrypt tpm_seed", e))?;
+        .wrap_openssl_err("failed to encrypt tpm_seed")?;
         *sk = Some(new_sk.into());
         Ok(aidl::make_session_response(&nonce, wrapped_tpm_seed, iv, tag))
     }

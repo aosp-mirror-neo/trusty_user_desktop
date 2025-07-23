@@ -25,15 +25,15 @@
 pub enum ServiceError {
     // Wrapping errors or pseudo-errors that are returned by other libraries.
     #[error("{0}: openssl error: {1:?}")]
-    OpenSsl(&'static str, #[source] openssl::error::ErrorStack),
+    OpenSsl(&'static str, #[source] Box<dyn std::error::Error>),
     #[error("{0}: trusty storage error: {1:?}")]
-    TrustyStorage(&'static str, storage::Error),
+    TrustyStorage(&'static str, Box<dyn std::fmt::Debug>),
     #[error("{0}: trusty storage file error at {1}: {2:?}")]
-    TrustyFile(&'static str, String, storage::Error),
+    TrustyFile(&'static str, String, Box<dyn std::fmt::Debug>),
     #[error("{0}: zerocopy conversion error")]
     ZcConvert(&'static str),
     #[error("{0}: {1:?}")]
-    TipcError(&'static str, tipc::TipcError),
+    TipcError(&'static str, Box<dyn std::fmt::Debug>),
     #[error("Trusty system api {0} returns an error code: {1}")]
     TrustySysRcError(&'static str, i64),
 

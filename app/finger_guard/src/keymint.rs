@@ -32,6 +32,16 @@ fn get_auth_token_key_request() -> Vec<u8> {
         .to_vec()
 }
 
+// Extend Result with a function that can map trusty IPC errors to service errors.
+trait MapTipcErrExt<T> {
+    fn wrap_tipc_err(self, msg: &'static str) -> ServiceResult<T>;
+}
+impl<T> MapTipcErrExt<T> for Result<T, TipcError> {
+    fn wrap_tipc_err(self, msg: &'static str) -> ServiceResult<T> {
+        self.map_err(|e| ServiceError::TipcError(msg, Box::new(e)))
+    }
+}
+
 // Since we are only interested in sending/receiving the GetAuthTokenKey
 // request/response, which have simple layouts, the hardcoded request/response
 // encoding and parsing is much easier to produce and maintain. The full
@@ -88,8 +98,8 @@ struct ErrorMessage {
 // Parse the raw response of GetAuthTokenKey and returns the 32-byte auth token
 // key if any.
 pub fn get_auth_token_key() -> ServiceResult<crypto::Key> {
-    let raw_response = raw_get_auth_token_key_response()
-        .map_err(|e| ServiceError::TipcError("Keymint connection failed", e))?;
+    let raw_response =
+        raw_get_auth_token_key_response().wrap_tipc_err("Keymint connection failed")?;
 
     // For GetAuthTokenKey, the client has to distinguish between OK and error
     // responses by the size of the result byte array: 4+32 for OK, 4+4 for

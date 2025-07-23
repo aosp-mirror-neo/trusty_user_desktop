@@ -36,6 +36,16 @@ use openssl::pkey::{PKey, Private, Public};
 use openssl::symm::Cipher;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
+// Extend Result with a function that can map openssl errors to service errors.
+pub trait MapOpenSslErrExt<T> {
+    fn wrap_openssl_err(self, msg: &'static str) -> ServiceResult<T>;
+}
+impl<T> MapOpenSslErrExt<T> for Result<T, openssl::error::ErrorStack> {
+    fn wrap_openssl_err(self, msg: &'static str) -> ServiceResult<T> {
+        self.map_err(|e| ServiceError::OpenSsl(msg, Box::new(e)))
+    }
+}
+
 /// Create a type to represent a fixed-size chunk of binary data.
 ///
 /// These types are used to represent various secure blobs of data such as keys and nonces and
@@ -154,7 +164,7 @@ pub fn perform_ecdh(
         let pk = pk_deriver.derive_to_vec()?;
         Ok(pk)
     })()
-    .map_err(|e| ServiceError::OpenSsl("failed to derive pk", e))?;
+    .wrap_openssl_err("failed to derive pk")?;
     // Convert the resulting key object into a Key instance.
     let len = pk.len();
     Ok(Key {
@@ -201,7 +211,7 @@ pub fn decrypt_aes256_gcm(
         data,
         tag,
     )
-    .map_err(|e| ServiceError::OpenSsl("decryption operation failed", e))?;
+    .wrap_openssl_err("decryption operation failed")?;
     let len = secret.len();
     Ok(Secret {
         bytes: secret.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
@@ -303,13 +313,13 @@ impl HmacGenerator {
     pub fn new(key: &Key) -> ServiceResult<Self> {
         Ok(Self {
             context: HmacCtx::new(&key.bytes, Md::sha256())
-                .map_err(|e| ServiceError::OpenSsl("unable to initialize hmac", e))?,
+                .wrap_openssl_err("unable to initialize hmac")?,
         })
     }
 
     /// Update the HMAC with the given chunk of bytes.
     pub fn update(&mut self, buffer: &[u8]) -> ServiceResult<()> {
-        self.context.update(buffer).map_err(|e| ServiceError::OpenSsl("unable to update hmac", e))
+        self.context.update(buffer).wrap_openssl_err("unable to update hmac")
     }
 
     /// Update the HMAC with the given signable object.
@@ -322,7 +332,7 @@ impl HmacGenerator {
         let mut hmac = Hmac { bytes: Default::default() };
         self.context
             .finalize(hmac.bytes.as_mut_slice())
-            .map_err(|e| ServiceError::OpenSsl("unable to finalize hmac", e))?;
+            .wrap_openssl_err("unable to finalize hmac")?;
         Ok(hmac)
     }
 
