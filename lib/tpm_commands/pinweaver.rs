@@ -676,6 +676,16 @@ pub trait Pinweaver {
         resp_buffer: &'a mut Vec<u8>,
     ) -> PinWeaverResult<&'a [LogEntry]>;
 
+    /// Recover unimported leaf data by replaying an operation.
+    fn log_replay<'a>(
+        &self,
+        tree_params: TreeParams,
+        header: request::LogReplayHeader,
+        leaf_data: &[u8],
+        path_hashes: &[Hash],
+        resp_buffer: &'a mut Vec<u8>,
+    ) -> PinWeaverResult<&'a UnimportedLeafData>;
+
     /// Get current pinweaver timestamp from GSC.
     fn sys_info(&self) -> PinWeaverResult<(Hash, Timestamp)>;
 }
@@ -813,6 +823,39 @@ where
             self.transmit_into(req, resp_buffer).map_err(transport_error)?;
         resp.check_consistency(&TreeParams { height: 0, bits_per_level: 0 })?;
         Ok(&resp.data.entries)
+    }
+
+    fn log_replay<'a>(
+        &self,
+        tree_params: TreeParams,
+        header: request::LogReplayHeader,
+        leaf_data: &[u8],
+        path_hashes: &[Hash],
+        resp_buffer: &'a mut Vec<u8>,
+    ) -> PinWeaverResult<&'a UnimportedLeafData> {
+        let leaf_data =
+            UnimportedLeafData::ref_from_bytes(leaf_data).map_err(|_| Error::Deserialize)?;
+
+        let mut req_buffer = Vec::<u8>::new();
+        let req = TpmRequestMessage::<request::Request<request::LogReplay>>::new_in_vec(
+            &mut req_buffer,
+            UnimportedLeafDataBuildParams::new(leaf_data.header(), tree_params),
+        )
+        .map_err(|_| Error::RequestOverflow)?;
+
+        let data = &mut req.request.data;
+        *data.head_mut() = header;
+        data.unimported_leaf_data
+            .build_from(leaf_data, path_hashes.as_bytes())
+            .map_err(|_| Error::RequestOverflow)?;
+
+        let resp: &mut response::Response<response::UnparsedResponse> =
+            self.transmit_into(req, resp_buffer).map_err(transport_error)?;
+        resp.check_consistency(&tree_params)?;
+        let log_replay =
+            response::LogReplay::ref_from_bytes(&resp.data.0).map_err(|_| Error::Deserialize)?;
+        log_replay.check_consistency(&tree_params)?;
+        Ok(&log_replay.unimported_leaf_data)
     }
 
     fn sys_info(&self) -> PinWeaverResult<(Hash, Timestamp)> {

@@ -227,6 +227,18 @@ impl ResponseData for GetLog {
     type RequestData = request::GetLog;
 }
 
+/// Log replay response data.
+pub type LogReplay = WithUnimportedLeafData<LogReplayHeader>;
+
+/// The portion of log replay response data before the unimported leaf.
+#[derive(Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct LogReplayHeader {}
+
+impl ResponsePart for LogReplayHeader {
+    type RequestData = request::LogReplay;
+}
+
 /// Info about the PinWeaver system.
 #[derive(Clone, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
 #[repr(C)]
