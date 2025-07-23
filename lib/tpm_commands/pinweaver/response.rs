@@ -1,7 +1,7 @@
 //! PinWeaver response-only types.
 
 use super::{
-    request, Hash, Secret, TimeDiff, Timestamp, TreeParams, UnimportedLeafDataSizeError,
+    request, Hash, LogEntry, Secret, TimeDiff, Timestamp, TreeParams, UnimportedLeafDataSizeError,
     WithUnimportedLeafData, PROTOCOL_VERSION,
 };
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, Unaligned, LE, U16, U32};
@@ -213,6 +213,18 @@ pub struct TryAuthHeader {
 
 impl ResponsePart for TryAuthHeader {
     type RequestData = request::TryAuth;
+}
+
+/// Get log response.
+#[derive(Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct GetLog {
+    /// The log entries.
+    pub entries: [LogEntry],
+}
+
+impl ResponseData for GetLog {
+    type RequestData = request::GetLog;
 }
 
 /// Info about the PinWeaver system.

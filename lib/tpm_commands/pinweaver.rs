@@ -519,6 +519,102 @@ pub struct Timestamp {
     pub timer_value: U64<LE>,
 }
 
+/// The Operation type of a log entry.
+#[derive(Clone, PartialEq, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct LogOperation(pub u8);
+
+impl LogOperation {
+    const INVALID: LogOperation = LogOperation(0u8);
+    const RESET_TREE: LogOperation = LogOperation(1u8);
+    const INSERT_LEAF: LogOperation = LogOperation(2u8);
+    const REMOVE_LEAF: LogOperation = LogOperation(3u8);
+    const TRY_AUTH_00: LogOperation = LogOperation(4u8);
+    const TRY_AUTH_02: LogOperation = LogOperation(5u8);
+}
+
+impl Debug for LogOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            &LogOperation::INVALID => write!(f, "INVALID"),
+            &LogOperation::RESET_TREE => write!(f, "RESET_TREE"),
+            &LogOperation::INSERT_LEAF => write!(f, "INSERT_LEAF"),
+            &LogOperation::TRY_AUTH_00 => write!(f, "TRY_AUTH_00"),
+            &LogOperation::TRY_AUTH_02 => write!(f, "TRY_AUTH_02"),
+            other => write!(f, "LogOperation({:02x})", other.0),
+        }
+    }
+}
+
+/// An entry in the operation log kept by the GSC.
+#[derive(Clone, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct LogEntry {
+    /// The root hash after this operation.
+    pub root: Hash,
+    /// The path operated on.
+    pub label: Label,
+    /// The type of the operation.
+    pub operation: LogOperation,
+    /// The operation data.
+    data: Hash,
+}
+
+/// Handler for the different variants of LogEntry.
+pub enum LogEntryData<'a> {
+    /// A placeholder to indicate self.data isn't used when the operation is ResetTree.
+    ResetTree,
+    /// The value of self.data when operation is InsertLeaf.
+    InsertLeaf(&'a Hash),
+    /// A placeholder to indicate self.data isn't used when the operation is RemoveLeaf.
+    RemoveLeaf,
+    /// The value of self.data when operation is TryAuth in protocol version 00 and 01.
+    TryAuth00(&'a LogEntryTryAuthData00),
+    /// The value of self.data when operation is TryAuth in protocol version 02.
+    TryAuth02(&'a LogEntryTryAuthData02),
+    /// A placeholder for operations that aren't expected to be in the log.
+    UnrecognizedOperation,
+}
+
+impl LogEntry {
+    /// Interpret the data field based on the operation.
+    pub fn data(&self) -> LogEntryData<'_> {
+        match self.operation {
+            LogOperation::INSERT_LEAF => LogEntryData::InsertLeaf(&self.data),
+            LogOperation::REMOVE_LEAF => LogEntryData::RemoveLeaf,
+            LogOperation::TRY_AUTH_00 => {
+                LogEntryData::TryAuth00(FromBytes::ref_from_prefix(&self.data.0).unwrap().0)
+            }
+            LogOperation::TRY_AUTH_02 => {
+                LogEntryData::TryAuth02(FromBytes::ref_from_prefix(&self.data.0).unwrap().0)
+            }
+            _ => LogEntryData::UnrecognizedOperation,
+        }
+    }
+}
+
+/// Data stored in LogEntry::leaf_hmac when LogEntry::operation is TryAuth.
+#[derive(Clone, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct LogEntryTryAuthData00 {
+    /// The time of last access.
+    pub last_access_time: Timestamp,
+    /// The result code of the operation.
+    pub return_code: response::ResultCode,
+}
+
+/// Data stored in LogEntry::leaf_hmac when LogEntry::operation is TryAuth.
+#[derive(Clone, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct LogEntryTryAuthData02 {
+    /// The time of last access.
+    pub last_access_time: Timestamp,
+    /// The result code of the operation.
+    pub return_code: response::ResultCode,
+    /// The expiration time of the leaf.
+    pub expiration_time: Timestamp,
+}
+
 /// Wrapper around errors when using Pinweaver on the GSC.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -572,6 +668,13 @@ pub trait Pinweaver {
 
     /// Erase the existing pinweaver tree and create a new one with the specified parameters.
     fn reset_tree(&self, tree_params: TreeParams) -> PinWeaverResult<Hash>;
+
+    /// Get the log entries which can be used for log replay.
+    fn get_log<'a>(
+        &self,
+        local_root: Option<Hash>,
+        resp_buffer: &'a mut Vec<u8>,
+    ) -> PinWeaverResult<&'a [LogEntry]>;
 
     /// Get current pinweaver timestamp from GSC.
     fn sys_info(&self) -> PinWeaverResult<(Hash, Timestamp)>;
@@ -693,6 +796,23 @@ where
         resp.check_consistency(&tree_params)?;
         let header = resp.header();
         Ok(header.root)
+    }
+
+    fn get_log<'a>(
+        &self,
+        local_root: Option<Hash>,
+        resp_buffer: &'a mut Vec<u8>,
+    ) -> PinWeaverResult<&'a [LogEntry]> {
+        let mut req_buffer = Vec::<u8>::new();
+        let req =
+            TpmRequestMessage::<request::Request<request::GetLog>>::new_in_vec(&mut req_buffer, ())
+                .map_err(|_| Error::RequestOverflow)?;
+        let data = &mut req.request.data;
+        data.local_root = local_root.unwrap_or(Hash::new_zeroed());
+        let resp: &mut response::Response<response::GetLog> =
+            self.transmit_into(req, resp_buffer).map_err(transport_error)?;
+        resp.check_consistency(&TreeParams { height: 0, bits_per_level: 0 })?;
+        Ok(&resp.data.entries)
     }
 
     fn sys_info(&self) -> PinWeaverResult<(Hash, Timestamp)> {

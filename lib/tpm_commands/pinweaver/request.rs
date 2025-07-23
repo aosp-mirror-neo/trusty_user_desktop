@@ -399,6 +399,24 @@ impl RequestPart for TryAuthHeader {
     type ResponseData = response::TryAuth;
 }
 
+/// Requests that get pinweaver log from the GSC.
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct GetLog {
+    /// The root on the storage side that needs to reconciled.
+    pub local_root: Hash,
+}
+
+impl RequestData for GetLog {
+    type BuildParams = ();
+    type ResponseData = response::GetLog;
+    const MESSAGE_TYPE: MessageType = MessageType::GetLog;
+
+    fn expected_size(_: &()) -> Result<u32, Overflow> {
+        Ok(size_of::<Self>().try_into().unwrap())
+    }
+}
+
 /// Request system info from PinWeaver.
 ///
 /// This type selects the correct message.

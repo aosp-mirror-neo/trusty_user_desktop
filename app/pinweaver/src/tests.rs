@@ -17,9 +17,11 @@
 
 use crate::service::binder_error;
 use binder::Strong;
+use gsc_svc_client::GscServiceClient;
 use pinweaver_api::{
     connect_pinweaver, DelayScheduleEntry, IPinWeaver, InsertMode, LeafId, LeafSet, TryAuthResponse,
 };
+use tpm_commands::pinweaver::Pinweaver;
 
 /// TODO drop this when it is stabilized in std.
 macro_rules! assert_matches {
@@ -136,6 +138,11 @@ fn pinweaver_smoke_test() {
         pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
         Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_LARGE_SECRET
     );
+
+    let gsc = GscServiceClient::default();
+    let mut buffer = Vec::new();
+    let log_entries = gsc.get_log(None, &mut buffer).expect("get_log() failed");
+    assert!(log_entries.len() > 0);
 
     for id in 0i32..3 {
         pinweaver
