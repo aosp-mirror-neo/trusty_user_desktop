@@ -1,7 +1,6 @@
 {
-        "app_name": "finger_guard_lib",
+        "app_name": "finger_guard_svc",
         "uuid": "868899c6-e820-4cc0-a819-11565ffa8a45",
         "min_heap": 20480,
         "min_stack": 20480
 }
-

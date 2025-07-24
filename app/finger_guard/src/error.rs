@@ -22,6 +22,7 @@
 /// basically just a status code that lacks the ability to attach any kind of
 /// informative message or underlying source error.
 #[derive(thiserror::Error, Debug)]
+#[allow(missing_docs)]
 pub enum ServiceError {
     // Wrapping errors or pseudo-errors that are returned by other libraries.
     #[error("{0}: openssl error: {1:?}")]
@@ -62,3 +63,14 @@ pub enum ServiceError {
 ///
 /// This is the standard Result type to use for internal service functions.
 pub type ServiceResult<T> = Result<T, ServiceError>;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_simple_error() {
+        let err = ServiceError::BadMac("abc");
+        assert_eq!(err.to_string(), "incorrect mac for abc");
+    }
+}

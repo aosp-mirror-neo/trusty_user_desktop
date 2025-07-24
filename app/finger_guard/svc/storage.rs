@@ -18,9 +18,9 @@
 
 use crate::aidl::ExportToAidl;
 use crate::crypto::{HmacGenerator, HmacSignable};
-use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
 use crate::rng;
+use finger_guard::error::{ServiceError, ServiceResult};
 use finger_guard_api::aidl::SensorUserPair::SensorUserPair;
 use storage::{OpenMode, Port, Session};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
