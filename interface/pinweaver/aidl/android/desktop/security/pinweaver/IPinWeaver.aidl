@@ -135,4 +135,26 @@ interface IPinWeaver {
      * @param leafSet The set of leaves to remove. Resets the entire tree for ALL_LEAVES
      */
     void removeAll(in LeafSet leafSet);
+
+    /**
+     * Reconciles the on-disk Merkle tree with the GSC.
+     *
+     * This is normally done transparently once per boot on during first operation, but
+     * this RPC makes it testable.
+     *
+     * @throws EX_SERVICE_SPECIFIC if there was an internal error:
+     */
+    void reconcile();
+
+    /**
+     * An interface that provides access to the storage daemon for tests.
+     *
+     * This isn't intended to be used in production because it can put the
+     * GSC and storage out of sync potentially leading to a tree reset and
+     * complete data loss.
+     *
+     * @param request The storage request.
+     * return the storage response.
+     */
+    byte[] testStorage(in byte[] request);
 }
