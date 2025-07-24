@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
-package android.desktop.security.fingerguard;
+package android.desktop.security.finger_guard;
 
-import android.desktop.security.fingerguard.AuthenticationResult;
-import android.desktop.security.fingerguard.EnrollmentResult;
-import android.desktop.security.fingerguard.FinishEnrollSessionResponse;
-import android.desktop.security.fingerguard.HandshakeResponse;
-import android.desktop.security.fingerguard.LockoutStatus;
-import android.desktop.security.fingerguard.PrepareAuthSessionResponse;
-import android.desktop.security.fingerguard.PrepareEnrollSessionResponse;
-import android.desktop.security.fingerguard.SensorUserPair;
-import android.desktop.security.fingerguard.SessionResponse;
-import android.desktop.security.fingerguard.HardwareAuthToken;
+import android.desktop.security.finger_guard.AuthenticationResult;
+import android.desktop.security.finger_guard.EnrollmentResult;
+import android.desktop.security.finger_guard.FinishEnrollSessionResponse;
+import android.desktop.security.finger_guard.HandshakeResponse;
+import android.desktop.security.finger_guard.LockoutStatus;
+import android.desktop.security.finger_guard.PrepareAuthSessionResponse;
+import android.desktop.security.finger_guard.PrepareEnrollSessionResponse;
+import android.desktop.security.finger_guard.SensorUserPair;
+import android.desktop.security.finger_guard.SessionResponse;
+import android.desktop.security.finger_guard.HardwareAuthToken;
 
 interface IFingerGuard {
     /**

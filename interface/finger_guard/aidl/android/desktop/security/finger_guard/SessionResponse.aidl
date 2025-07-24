@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-package android.desktop.security.fingerguard;
+package android.desktop.security.finger_guard;
 
-parcelable HandshakeResponse {
-    byte[] serverPublicKey;
-    byte[] pkMac;
+parcelable SessionResponse {
+    byte[] nonce;
+    byte[] wrappedTpmSeed;
+    byte[] iv;
+    byte[] tag;
 }
-

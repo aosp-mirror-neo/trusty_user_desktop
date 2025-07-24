@@ -16,7 +16,7 @@
 
 use crate::aidl;
 use crate::clock::{self, Instant};
-use crate::crypto;
+use crate::crypto::{self, MapOpenSslErrExt};
 use crate::error::{ServiceError, ServiceResult};
 use crate::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
 use crate::keymint;
@@ -25,7 +25,7 @@ use crate::storage::{
     AuthenticatorId, PersistedState, SecureUserId, SensorStateIndex, SingleFileState,
 };
 use binder::Interface;
-use fingerguard_api::aidl::{
+use finger_guard_api::aidl::{
     AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
     HardwareAuthToken::HardwareAuthToken, IFingerGuard::IFingerGuard, LockoutStatus::LockoutStatus,
@@ -54,7 +54,7 @@ struct InitParams {
 
 impl PersistedState for InitParams {}
 impl SingleFileState for InitParams {
-    const FILE_NAME: &str = "fingerguard_init_params";
+    const FILE_NAME: &str = "finger_guard_init_params";
 }
 
 #[derive(Clone, PartialOrd, Ord, Eq, PartialEq)]
@@ -120,13 +120,11 @@ impl FingerGuardService {
         if let Some(_) = *init_params {
             return Err(ServiceError::StateAlreadyExists("init_params"));
         }
-        let server_private_key =
-            crypto::ec_keygen().map_err(|e| ServiceError::OpenSsl("failed to ec keygen", e))?;
+        let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
         let server_public_key_bytes = crypto::ec_public_key_serialization(&server_private_key)
-            .map_err(|e| ServiceError::OpenSsl("failed to serialize server public key", e))?;
-        let server_private_key: PKey<Private> = server_private_key
-            .try_into()
-            .map_err(|e| ServiceError::OpenSsl("failed to convert ec key to pkey", e))?;
+            .wrap_openssl_err("failed to serialize server public key")?;
+        let server_private_key: PKey<Private> =
+            server_private_key.try_into().wrap_openssl_err("failed to convert ec key to pkey")?;
         let pk = crypto::perform_ecdh(&server_private_key, client_public_key_bytes)?;
         // generate random tpm_seed.
         let tpm_seed = crypto::Secret::generate();
@@ -169,7 +167,7 @@ impl FingerGuardService {
             &init_params.tpm_seed,
             tag.as_mut_slice(),
         )
-        .map_err(|e| ServiceError::OpenSsl("failed to encrypt tpm_seed", e))?;
+        .wrap_openssl_err("failed to encrypt tpm_seed")?;
         *sk = Some(new_sk.into());
         Ok(aidl::make_session_response(&nonce, wrapped_tpm_seed, iv, tag))
     }
@@ -551,7 +549,7 @@ mod tests {
     use crate::crypto::{self, NIST_P256_CURVE_NAME};
     use crate::keymint;
     use crate::rng;
-    use fingerguard_api::aidl::{
+    use finger_guard_api::aidl::{
         AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
         HardwareAuthToken::HardwareAuthToken, SensorUserPair::SensorUserPair,
     };
@@ -564,7 +562,7 @@ mod tests {
 
     #[test]
     fn connect_server() {
-        let _ = assert_ok!(fingerguard_api::connect_finger_guard());
+        let _ = assert_ok!(finger_guard_api::connect_finger_guard());
     }
 
     #[test]
@@ -584,7 +582,7 @@ mod tests {
 
         // ECDH with the server. If the service has already done a handshake then it's not
         // possible to run this test, skip it and move on.
-        let service = assert_ok!(fingerguard_api::connect_finger_guard());
+        let service = assert_ok!(finger_guard_api::connect_finger_guard());
         let handshake = match service.initHandshake(client_public_key_bytes.as_slice()) {
             Err(status) if status.transaction_error() == binder::StatusCode::ALREADY_EXISTS => {
                 skip!("service already bound to a controller")
@@ -604,7 +602,7 @@ mod tests {
         let client_nonce = rng::generate_random_vec::<32>();
 
         // Start a new session with the server.
-        let service = assert_ok!(fingerguard_api::connect_finger_guard());
+        let service = assert_ok!(finger_guard_api::connect_finger_guard());
         let session_response = assert_ok!(service.newSession(client_nonce.as_slice()));
         let server_nonce = session_response.nonce;
         let all_nonce = vec![client_nonce, server_nonce].concat();
@@ -662,7 +660,7 @@ mod tests {
         let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
         assert_ok!(hmac_gen.update(&nonce));
         assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
-        assert_ok!(hmac_gen.update(b"fingerguardenroll"));
+        assert_ok!(hmac_gen.update(b"finger_guardenroll"));
         let hmac = assert_ok!(hmac_gen.complete());
         assert!(hmac == session_resp.mac.as_slice());
 
@@ -676,7 +674,7 @@ mod tests {
         let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
         assert_ok!(hmac_gen.update(&nonce));
         assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
-        assert_ok!(hmac_gen.update(b"fingerguardenroll_finish"));
+        assert_ok!(hmac_gen.update(b"finger_guardenroll_finish"));
         let hmac = assert_ok!(hmac_gen.complete());
         assert!(hmac == finish_resp.mac.as_slice());
 
@@ -696,7 +694,7 @@ mod tests {
         let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
         assert_ok!(hmac_gen.update(&nonce));
         assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
-        assert_ok!(hmac_gen.update(b"fingerguardauth"));
+        assert_ok!(hmac_gen.update(b"finger_guardauth"));
         let hmac = assert_ok!(hmac_gen.complete());
         assert!(hmac == session_resp.mac.as_slice());
 
@@ -721,14 +719,14 @@ mod tests {
 
     #[test]
     fn get_authenticator_id() {
-        let service = assert_ok!(fingerguard_api::connect_finger_guard());
+        let service = assert_ok!(finger_guard_api::connect_finger_guard());
         let sup = SensorUserPair { sensorId: 0, userId: 0 };
         assert_eq!(service.getAuthenticatorId(&sup), Ok(0));
     }
 
     #[test]
     fn new_authenticator_id() {
-        let service = assert_ok!(fingerguard_api::connect_finger_guard());
+        let service = assert_ok!(finger_guard_api::connect_finger_guard());
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let new_id = assert_ok!(service.newAuthenticatorId(&sup));
         assert_ne!(new_id, 0_i64);
@@ -736,7 +734,7 @@ mod tests {
 
     #[test]
     fn new_and_get_authenticator_id() {
-        let service = assert_ok!(fingerguard_api::connect_finger_guard());
+        let service = assert_ok!(finger_guard_api::connect_finger_guard());
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let new_id = assert_ok!(service.newAuthenticatorId(&sup));
         let got_id = assert_ok!(service.getAuthenticatorId(&sup));
@@ -745,7 +743,7 @@ mod tests {
 
     #[test]
     fn generate_and_revoke_challenge() {
-        let service = assert_ok!(fingerguard_api::connect_finger_guard());
+        let service = assert_ok!(finger_guard_api::connect_finger_guard());
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         // Generate multiple challenges and revoke them individually.
         let c1 = assert_ok!(service.generateChallenge(&sup));
@@ -764,7 +762,7 @@ mod tests {
 
     #[test]
     fn revoke_invalid_challenge() {
-        let service = assert_ok!(fingerguard_api::connect_finger_guard());
+        let service = assert_ok!(finger_guard_api::connect_finger_guard());
         let sup = SensorUserPair { sensorId: 2, userId: 2 };
         let invalid_challenge = 1234_i64;
         assert_eq!(service.revokeChallenge(&sup, invalid_challenge), Ok(0));

@@ -26,7 +26,7 @@ mod storage;
 
 use crate::service::FingerGuardService;
 use binder::BinderFeatures;
-use fingerguard_api::aidl::IFingerGuard::BnFingerGuard;
+use finger_guard_api::aidl::IFingerGuard::BnFingerGuard;
 use rpcbinder::RpcServer;
 use std::rc::Rc;
 use tipc::{Manager, PortCfg};

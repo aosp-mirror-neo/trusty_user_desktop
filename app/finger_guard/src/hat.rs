@@ -21,7 +21,7 @@ use crate::clock::Instant;
 use crate::crypto::{self, HmacGenerator, HmacSignable};
 use crate::error::ServiceResult;
 use crate::storage::{AuthenticatorId, SecureUserId};
-use fingerguard_api::aidl::HardwareAuthToken::HardwareAuthToken;
+use finger_guard_api::aidl::HardwareAuthToken::HardwareAuthToken;
 
 /// Represents an unsigned hardware auth token.
 pub struct UnsignedHat {
@@ -34,7 +34,7 @@ pub struct UnsignedHat {
 }
 
 /// Represents a signed hardware auth token.
-pub type SignedHat = fingerguard_api::aidl::HardwareAuthToken::HardwareAuthToken;
+pub type SignedHat = finger_guard_api::aidl::HardwareAuthToken::HardwareAuthToken;
 
 impl UnsignedHat {
     /// Construct a new hardware auth token with the given parameters and timestamp.

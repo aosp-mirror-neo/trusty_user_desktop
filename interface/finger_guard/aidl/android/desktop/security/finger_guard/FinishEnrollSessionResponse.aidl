@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package android.desktop.security.fingerguard;
+package android.desktop.security.finger_guard;
 
 parcelable FinishEnrollSessionResponse {
     /**
@@ -24,7 +24,7 @@ parcelable FinishEnrollSessionResponse {
      *
      * where ``||'' represents concatenation; nonce and user_id are
      * from the input of FinishEnrollSession, ta_name is the public name
-     * identifying the FingerGuard TA, i.e. "fingerguard".
+     * identifying the FingerGuard TA, i.e. "finger_guard".
      *
      * If the EnrollmentResult has a false |enrolled| bit, i.e. the enrollment
      * is either canceled or failed, return a empty MAC.

@@ -21,9 +21,23 @@ use crate::crypto::{HmacGenerator, HmacSignable};
 use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
 use crate::rng;
-use fingerguard_api::aidl::SensorUserPair::SensorUserPair;
+use finger_guard_api::aidl::SensorUserPair::SensorUserPair;
 use storage::{OpenMode, Port, Session};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
+
+// Extend Result with functions that can map trusty storage errors to service errors.
+trait MapStorageErrExt<T> {
+    fn wrap_storage_err(self, msg: &'static str) -> ServiceResult<T>;
+    fn wrap_file_err(self, msg: &'static str, file_name: String) -> ServiceResult<T>;
+}
+impl<T> MapStorageErrExt<T> for Result<T, storage::Error> {
+    fn wrap_storage_err(self, msg: &'static str) -> ServiceResult<T> {
+        self.map_err(|e| ServiceError::TrustyStorage(msg, Box::new(e)))
+    }
+    fn wrap_file_err(self, msg: &'static str, file_name: String) -> ServiceResult<T> {
+        self.map_err(|e| ServiceError::TrustyFile(msg, file_name, Box::new(e)))
+    }
+}
 
 /// A utility function to read the full content of a file.
 fn read_all_bytes(file_name: &str) -> Result<Vec<u8>, storage::Error> {
@@ -49,22 +63,22 @@ pub trait PersistedState: FromBytes + IntoBytes + Immutable {
     where
         Self: Sized,
     {
-        let all_bytes = read_all_bytes(&file_name)
-            .map_err(|e| ServiceError::TrustyFile("failed to read", file_name.to_owned(), e))?;
+        let all_bytes =
+            read_all_bytes(&file_name).wrap_file_err("failed to read", file_name.to_owned())?;
         Self::read_from_bytes(&all_bytes)
             .map_err(|_| ServiceError::ZcConvert("failed to deserialize file content"))
     }
 
     fn save_to(&self, file_name: &str) -> ServiceResult<()> {
         let mut session = Session::new(Port::TamperDetect, true)
-            .map_err(|e| ServiceError::TrustyStorage("failed to create storage session", e))?;
+            .wrap_storage_err("failed to create storage session")?;
         let mut secure_file = session
             .open_file(&file_name, OpenMode::Create)
-            .map_err(|e| ServiceError::TrustyFile("open failed", file_name.to_owned(), e))?;
+            .wrap_file_err("open failed", file_name.to_owned())?;
         let serialized_bytes = Self::as_bytes(&self);
         session
             .write_all(&mut secure_file, &serialized_bytes)
-            .map_err(|e| ServiceError::TrustyFile("write failed", file_name.to_owned(), e))?;
+            .wrap_file_err("write failed", file_name.to_owned())?;
         Ok(())
     }
 }

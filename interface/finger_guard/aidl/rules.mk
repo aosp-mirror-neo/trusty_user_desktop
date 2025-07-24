@@ -16,8 +16,8 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
 
-MODULE_AIDL_PACKAGE := android/desktop/security/fingerguard
-MODULE_CRATE_NAME := android_desktop_security_fingerguard
+MODULE_AIDL_PACKAGE := android/desktop/security/finger_guard
+MODULE_CRATE_NAME := android_desktop_security_finger_guard
 
 MODULE_AIDLS := \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/AuthenticationResult.aidl \

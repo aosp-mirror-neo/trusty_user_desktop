@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package android.desktop.security.fingerguard;
+package android.desktop.security.finger_guard;
 
 /**
  * AuthenticationResult represents an attested authentication result.

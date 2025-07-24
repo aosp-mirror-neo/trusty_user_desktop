@@ -14,20 +14,20 @@
  * limitations under the License.
  */
 
-package android.desktop.security.fingerguard;
+package android.desktop.security.finger_guard;
 
-// Represents the authenticator status for each (sensor, user) pair.
-union LockoutStatus {
-    // Indicates the sensor is not locked out.
-    parcelable Available {}
-    // Indicates the senor is permanently locked out and requires reset.
-    parcelable PermanentLockout {}
-    // Indicates the senor is temporarily locked out with a timer.
-    parcelable TimedLockout {
-        // The time to be elapsed before the sensor becomes available.
-        long durationMillis;
-    }
-    Available available;
-    PermanentLockout permanentLockout;
-    TimedLockout timedLockout;
+parcelable PrepareAuthSessionResponse {
+    // nonce for the mac in AuthenticationResult.
+    byte[32] nonce;
+
+    /**
+     * The MAC is a 32 bytes HMAC-SHA256 with the session key over the
+     * following string:
+     *         nonce || user_id || ta_name || "auth"
+     *
+     * where ``||'' represents concatenation; nonce and user_id are
+     * from the input of PrepareAuthSession, ta_name is the public name
+     * identifying the FingerGuard TA, i.e. "finger_guard".
+     */
+    byte[] mac;
 }
