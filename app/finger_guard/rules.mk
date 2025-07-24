@@ -37,7 +37,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/trusty-std \
-	trusty/user/desktop/interface/fingerguard \
+	trusty/user/desktop/interface/finger_guard \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 

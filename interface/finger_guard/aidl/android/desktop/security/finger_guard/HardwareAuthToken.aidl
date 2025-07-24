@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package android.desktop.security.fingerguard;
+package android.desktop.security.finger_guard;
 
 /**
  * HardwareAuthToken mirrors the struct of hw_auth_token_t in hw_auth_token.h.

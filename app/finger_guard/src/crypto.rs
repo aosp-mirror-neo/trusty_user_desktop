@@ -21,7 +21,7 @@ use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
 use crate::rng;
 use crate::storage::SensorStateIndex;
-use fingerguard_api::aidl::{
+use finger_guard_api::aidl::{
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
@@ -230,7 +230,7 @@ pub enum MessageSender {
 impl HmacSignable for MessageSender {
     fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
         let name: &[u8] = match self {
-            MessageSender::FingerGuard => b"fingerguard",
+            MessageSender::FingerGuard => b"finger_guard",
             MessageSender::Fpmcu => b"fpmcu",
         };
         generator.update(name)

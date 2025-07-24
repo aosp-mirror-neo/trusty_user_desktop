@@ -4,7 +4,7 @@ use binder::Strong;
 use core::ffi::CStr;
 use rpcbinder::RpcSession;
 
-pub use android_desktop_security_fingerguard::aidl::android::desktop::security::fingerguard::{
+pub use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
     self as aidl, HandshakeResponse::HandshakeResponse, IFingerGuard::IFingerGuard,
     SessionResponse::SessionResponse,
 };

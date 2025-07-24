@@ -21,7 +21,7 @@ use crate::crypto::{HmacGenerator, HmacSignable};
 use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
 use crate::rng;
-use fingerguard_api::aidl::SensorUserPair::SensorUserPair;
+use finger_guard_api::aidl::SensorUserPair::SensorUserPair;
 use storage::{OpenMode, Port, Session};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 

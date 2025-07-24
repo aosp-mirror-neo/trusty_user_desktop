@@ -17,7 +17,7 @@
 //! Traits and utilities for moving data into and out of AIDL interface types.
 
 use crate::crypto;
-use fingerguard_api::aidl::{
+use finger_guard_api::aidl::{
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,

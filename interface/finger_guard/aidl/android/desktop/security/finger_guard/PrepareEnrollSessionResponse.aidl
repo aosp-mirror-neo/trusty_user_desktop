@@ -14,9 +14,17 @@
  * limitations under the License.
  */
 
-package android.desktop.security.fingerguard;
+package android.desktop.security.finger_guard;
 
-parcelable EnrollmentResult {
-    boolean enrolled;
+parcelable PrepareEnrollSessionResponse {
+    /**
+     * The MAC is a 32 bytes HMAC-SHA256 with the session key over the
+     * following string:
+     *         nonce || user_id || ta_name || "enroll"
+     *
+     * where ``||'' represents concatenation; nonce and user_id are
+     * from the input of PrepareEnrollSession, ta_name is the public name
+     * identifying the FingerGuard TA, i.e. "finger_guard".
+     */
+    byte[] mac;
 }
-

@@ -18,12 +18,12 @@ MODULE := $(LOCAL_DIR)
 
 MODULE_SRCS := $(LOCAL_DIR)/src/lib.rs
 
-MODULE_CRATE_NAME := fingerguard_api
+MODULE_CRATE_NAME := finger_guard_api
 
 MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/base/lib/tipc/rust \
-	trusty/user/desktop/interface/fingerguard/aidl \
+	trusty/user/desktop/interface/finger_guard/aidl \
 
 include make/library.mk
