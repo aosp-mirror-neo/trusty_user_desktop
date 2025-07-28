@@ -22,6 +22,7 @@ use service::start_tipc_service;
 mod errors;
 mod message;
 mod service;
+mod weaver;
 
 pub fn init_and_start_loop() -> Result<(), WeaverTAError> {
     trusty_log::init();

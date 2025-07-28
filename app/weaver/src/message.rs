@@ -28,7 +28,7 @@ pub enum ResponseStatus {
     Ok = 0,
     Failed = 1,
     _IncorrectKey = 2,
-    _Throttle = 3,
+    Throttle = 3,
 }
 
 pub enum WeaverHalRequest {
