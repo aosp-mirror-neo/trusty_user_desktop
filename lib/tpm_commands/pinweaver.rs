@@ -658,6 +658,16 @@ pub trait Pinweaver {
         resp_buffer: &'a mut Vec<u8>,
     ) -> PinWeaverResult<(Hash, response::ResultCode, &'a response::TryAuth)>;
 
+    /// Reset the low entropy authentication retries.
+    fn reset_auth<'a>(
+        &self,
+        tree_params: TreeParams,
+        header: request::ResetAuthHeader,
+        leaf_data: &[u8],
+        path_hashes: &[Hash],
+        resp_buffer: &'a mut Vec<u8>,
+    ) -> PinWeaverResult<(Hash, &'a response::ResetAuth)>;
+
     /// Remove a leaf from the merkle tree.
     fn remove_leaf(
         &self,
@@ -767,6 +777,40 @@ where
             try_auth.check_consistency(&tree_params)?;
         }
         Ok((root, code, try_auth))
+    }
+
+    fn reset_auth<'a>(
+        &self,
+        tree_params: TreeParams,
+        header: request::ResetAuthHeader,
+        leaf_data: &[u8],
+        path_hashes: &[Hash],
+        resp_buffer: &'a mut Vec<u8>,
+    ) -> PinWeaverResult<(Hash, &'a response::ResetAuth)> {
+        let leaf_data =
+            UnimportedLeafData::ref_from_bytes(leaf_data).map_err(|_| Error::Deserialize)?;
+
+        let mut req_buffer = Vec::<u8>::new();
+        let req = TpmRequestMessage::<request::Request<request::ResetAuth>>::new_in_vec(
+            &mut req_buffer,
+            UnimportedLeafDataBuildParams::new(leaf_data.header(), tree_params),
+        )
+        .map_err(|_| Error::RequestOverflow)?;
+
+        let data = &mut req.request.data;
+        *data.head_mut() = header;
+        data.unimported_leaf_data
+            .build_from(leaf_data, path_hashes.as_bytes())
+            .map_err(|_| Error::RequestOverflow)?;
+
+        let resp: &mut response::Response<response::UnparsedResponse> =
+            self.transmit_into(req, resp_buffer).map_err(transport_error)?;
+        resp.check_consistency(&tree_params)?;
+        let root: Hash = resp.header().root;
+        let reset_auth =
+            response::ResetAuth::ref_from_bytes(&resp.data.0).map_err(|_| Error::Deserialize)?;
+        reset_auth.check_consistency(&tree_params)?;
+        Ok((root, reset_auth))
     }
 
     fn remove_leaf(

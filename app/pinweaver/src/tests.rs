@@ -163,6 +163,20 @@ fn pinweaver_smoke_test() {
         Ok(TryAuthResponse::SecondsToWait(s)) if *s > 0
     );
 
+    // Reset Retries with wrong secret.
+    assert_matches!(
+        pinweaver.resetRetries(&DEFAULT_LEAF_ID, false, &DEFAULT_LOW_ENTROPY_SECRET),
+        Err(s) if s == &binder_error::auth_failed()
+    );
+
+    // Reset Retries that succeeds.
+    assert_matches!(pinweaver.resetRetries(&DEFAULT_LEAF_ID, false, &DEFAULT_RESET_SECRET), Ok(()));
+    // Make sure the back-off is cleared.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
+        Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_HIGH_ENTROPY_SECRET
+    );
+
     // Remove that succeeds.
     pinweaver.remove(&DEFAULT_LEAF_ID).expect("remove() failed");
 

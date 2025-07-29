@@ -401,6 +401,35 @@ impl RequestPart for TryAuthHeader {
     type ResponseData = response::TryAuth;
 }
 
+/// Reset auth request data.
+pub type ResetAuth = WithUnimportedLeafData<ResetAuthHeader>;
+
+/// Header for reset auth request data.
+#[derive(Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct ResetAuthHeader {
+    /// The reset secret for PinWeaver to check against the encrypted leaf contents.
+    pub reset_secret: Secret,
+    /// If strong_reset is non-zero, the expiration timestamp will be reset too.
+    pub strong_reset: u8,
+}
+
+impl RequestPart for ResetAuthHeader {
+    const MESSAGE_TYPE: MessageType = MessageType::ResetAuth;
+    type ResponseData = response::ResetAuth;
+}
+
+impl RequestData for ResetAuth {
+    const MESSAGE_TYPE: MessageType = MessageType::ResetAuth;
+    type ResponseData = response::ResetAuth;
+
+    type BuildParams = UnimportedLeafDataBuildParams;
+
+    fn expected_size(params: &Self::BuildParams) -> Result<u32, Overflow> {
+        params.expected_size::<ResetAuthHeader>()
+    }
+}
+
 /// Requests that get pinweaver log from the GSC.
 #[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
 #[repr(C)]

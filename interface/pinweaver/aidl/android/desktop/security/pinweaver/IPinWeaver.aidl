@@ -49,6 +49,9 @@ interface IPinWeaver {
     /** The leaf doesn't exist */
     const int ERROR_LEAF_NOT_FOUND = 5;
 
+    /** The secret was not correct for this leaf */
+    const int ERROR_AUTH_FAILED = 6;
+
     /**
      * Inserts a leaf into PinWeaver.
      *
@@ -70,6 +73,22 @@ interface IPinWeaver {
         in LeafId id, in byte[] lowEntropySecret, in byte[] highEntropySecret,
         in byte[] resetSecret, in DelayScheduleEntry[] delaySchedule,
         in InsertMode allowExisting);
+
+    /**
+     * Authenticates the reset secret for this leaf and resets the retries.
+     *
+     * This authentication is not rate limited.
+     *
+     * @param id               The leaf to authenticate against
+     * @param strongReset      The expiration should be reset too.
+     * @param resetSecret      The current reset secret protecting this leaf
+     *
+     * @throws EX_ILLEGAL_ARGUMENT  if the low entropy secret is empty
+     * @throws EX_SERVICE_SPECIFIC  if there was an internal error:
+     *   - ERROR_LEAF_NOT_FOUND     if a leaf with this ID does not exist in PinWeaver
+     *   - ERROR_AUTH_FAILED if the reset secret is incorrect
+     */
+    void resetRetries(in LeafId id, in boolean strongReset, in byte[] resetSecret);
 
     /**
      * Authenticates the low entropy secret for this leaf, returning the high entropy secret.

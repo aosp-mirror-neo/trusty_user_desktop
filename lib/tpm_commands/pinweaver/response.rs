@@ -215,6 +215,18 @@ impl ResponsePart for TryAuthHeader {
     type RequestData = request::TryAuth;
 }
 
+/// Reset auth response data.
+pub type ResetAuth = WithUnimportedLeafData<ResetAuthHeader>;
+
+/// The portion reset auth response data before the unimported leaf.
+#[derive(Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct ResetAuthHeader {}
+
+impl ResponsePart for ResetAuthHeader {
+    type RequestData = request::ResetAuth;
+}
+
 /// Get log response.
 #[derive(Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
 #[repr(C)]
