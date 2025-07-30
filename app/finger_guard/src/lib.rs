@@ -22,3 +22,4 @@
 //! generically reusable features outside of implementing finger_guard.
 
 pub mod error;
+pub mod rng;

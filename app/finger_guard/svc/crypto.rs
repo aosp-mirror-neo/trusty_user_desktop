@@ -18,9 +18,9 @@
 
 use crate::aidl::ExportToAidl;
 use crate::hat::SignedHat;
-use crate::rng;
 use crate::storage::SensorStateIndex;
 use finger_guard::error::{ServiceError, ServiceResult};
+use finger_guard::rng;
 use finger_guard_api::aidl::{
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,

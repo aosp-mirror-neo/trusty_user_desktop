@@ -19,12 +19,12 @@ use crate::clock::{self, Instant};
 use crate::crypto::{self, MapOpenSslErrExt};
 use crate::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
 use crate::keymint;
-use crate::rng;
 use crate::storage::{
     AuthenticatorId, PersistedState, SecureUserId, SensorStateIndex, SingleFileState,
 };
 use binder::Interface;
 use finger_guard::error::{ServiceError, ServiceResult};
+use finger_guard::rng;
 use finger_guard_api::aidl::{
     AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
@@ -548,7 +548,7 @@ impl IFingerGuard for FingerGuardService {
 mod tests {
     use crate::crypto::{self, NIST_P256_CURVE_NAME};
     use crate::keymint;
-    use crate::rng;
+    use finger_guard::rng;
     use finger_guard_api::aidl::{
         AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
         HardwareAuthToken::HardwareAuthToken, SensorUserPair::SensorUserPair,
