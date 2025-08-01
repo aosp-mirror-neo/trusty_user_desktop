@@ -21,5 +21,10 @@
 //! environments which is useful for testing and debugging. However, it is not intended to provide
 //! generically reusable features outside of implementing finger_guard.
 
+pub mod aidl;
+pub mod crypto;
 pub mod error;
+pub mod hat;
+pub mod identifiers;
 pub mod rng;
+pub mod time;

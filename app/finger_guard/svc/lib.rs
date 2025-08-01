@@ -14,17 +14,14 @@
 * limitations under the License.
 */
 
-mod aidl;
 mod clock;
-mod crypto;
-mod hat;
 mod keymint;
 mod service;
 mod storage;
 
 use crate::service::FingerGuardService;
 use binder::BinderFeatures;
-use finger_guard_api::aidl::IFingerGuard::BnFingerGuard;
+use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::IFingerGuard::BnFingerGuard;
 use rpcbinder::RpcServer;
 use std::rc::Rc;
 use tipc::{Manager, PortCfg};

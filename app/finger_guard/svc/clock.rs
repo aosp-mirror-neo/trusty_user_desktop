@@ -14,58 +14,19 @@
  * limitations under the License.
  */
 
-//! Trusty system clock util functions.
+//! Trusty system clock functions.
 
-use crate::aidl::ExportToAidl;
-use crate::hat::SignedHat;
 use finger_guard::error::{ServiceError, ServiceResult};
-use std::ops::Add;
-use std::time::Duration;
-
-/// For the time elaspsed in nanoseconds.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Instant {
-    nanos: i64,
-}
-
-impl ExportToAidl<SignedHat> for Instant {
-    fn export(&self, out: &mut SignedHat) {
-        // The exported timestamp is in milliseconds.
-        out.timestamp = self.nanos / 1000 / 1000;
-    }
-}
-
-impl Add<Duration> for Instant {
-    type Output = Instant;
-
-    /// # Panics
-    ///
-    /// This function may panic if the result exceeds i64::MAX or the duration's
-    /// nanos representation is greater than i64::MAX. In practice, it should
-    /// never happen as either the duration is greater than ~292 years or the
-    /// result instant is ~292 years since boot.
-    /// For the actual usage of fingerprint auth rate limiting and timeout, the
-    /// duration is at most several hours, so panic shall never be a problem.
-    fn add(self, other: Duration) -> Instant {
-        let other_nanos =
-            i64::try_from(other.as_nanos()).expect("overflow with duration conversion");
-        Self {
-            nanos: self
-                .nanos
-                .checked_add(other_nanos)
-                .expect("overflow when adding duration to instant"),
-        }
-    }
-}
+use finger_guard::time;
 
 /// Returns nanoseconds since boot, including time spent in sleep.
-pub fn now() -> ServiceResult<Instant> {
+pub fn now() -> ServiceResult<time::Instant> {
     let mut time_ns = 0;
     //Safety: trivial, external syscall gets valid raw pointer to a `i64`.
     let rc = unsafe { trusty_sys::gettime(0, 0, &mut time_ns) };
     if rc < 0 {
         Err(ServiceError::TrustySysRcError("gettime", rc))
     } else {
-        Ok(Instant { nanos: time_ns })
+        Ok(time::Instant::from_nanos(time_ns))
     }
 }

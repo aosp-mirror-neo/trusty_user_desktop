@@ -25,6 +25,8 @@ rust_defaults {
         "libkmr_common",
         "libopenssl",
         "libthiserror",
+        "libzerocopy",
+        "android.desktop.security.finger_guard-rust",
     ],
 }
 

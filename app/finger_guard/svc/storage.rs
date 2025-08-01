@@ -14,14 +14,10 @@
  * limitations under the License.
  */
 
-//! Types and utilities for data which is stored persistently on the device.
+//! Utilities and traits for reading and writing types from Trusty Storage.
 
-use crate::aidl::ExportToAidl;
-use crate::crypto::{HmacGenerator, HmacSignable};
-use crate::hat::SignedHat;
 use finger_guard::error::{ServiceError, ServiceResult};
-use finger_guard::rng;
-use finger_guard_api::aidl::SensorUserPair::SensorUserPair;
+use finger_guard::identifiers;
 use storage::{OpenMode, Port, Session};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -83,6 +79,10 @@ pub trait PersistedState: FromBytes + IntoBytes + Immutable {
     }
 }
 
+// These identifier types support persistence to storage.
+impl PersistedState for identifiers::AuthenticatorId {}
+impl PersistedState for identifiers::SecureUserId {}
+
 /// Indicates that the type is pesisted to one single file.
 ///
 /// This trait suits those global singleton service states.
@@ -106,83 +106,3 @@ pub trait SingleFileState: PersistedState {
         Self::save_to(&self, Self::FILE_NAME)
     }
 }
-
-#[derive(Clone, PartialOrd, Ord, Eq, PartialEq, Debug)]
-/// Represents a key to index sensor state.
-/// It is equivalent to a SensorUserPair defined in the service interface.
-/// Within the service, this type should be used instead of the AIDL object.
-pub struct SensorStateIndex {
-    sensor_id: u32,
-    user_id: u32,
-}
-
-impl From<&SensorUserPair> for SensorStateIndex {
-    fn from(sensor_user_pair: &SensorUserPair) -> Self {
-        SensorStateIndex {
-            sensor_id: sensor_user_pair.sensorId as u32,
-            user_id: sensor_user_pair.userId as u32,
-        }
-    }
-}
-
-impl SensorStateIndex {
-    /// The file name for the authenticator id with this index.
-    pub fn authenticator_id_file_name(&self) -> String {
-        format!("s{}.u{}.authenticator_id", self.sensor_id, self.user_id)
-    }
-    /// The file name for the secure user id with this index.
-    pub fn secure_user_id_file_name(&self) -> String {
-        format!("s{}.u{}.secure_user_id", self.sensor_id, self.user_id)
-    }
-}
-
-impl HmacSignable for SensorStateIndex {
-    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
-        // Only the user id is incorporated into messages.
-        generator.update(&self.user_id.to_be_bytes())
-    }
-}
-
-#[derive(Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
-#[repr(C)]
-/// Newtype that encapsulates an authenticator id.
-pub struct AuthenticatorId(i64);
-
-impl AuthenticatorId {
-    /// Generate a new random authenticator id.
-    pub fn generate_random() -> Self {
-        Self(rng::generate_random_int!(i64))
-    }
-}
-
-impl From<AuthenticatorId> for i64 {
-    fn from(value: AuthenticatorId) -> Self {
-        value.0
-    }
-}
-impl ExportToAidl<SignedHat> for AuthenticatorId {
-    fn export(&self, out: &mut SignedHat) {
-        out.authenticatorId = self.0;
-    }
-}
-
-impl PersistedState for AuthenticatorId {}
-
-#[derive(Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
-#[repr(C)]
-/// Newtype that encapsulates a secure user id.
-pub struct SecureUserId(u64);
-
-impl From<i64> for SecureUserId {
-    fn from(value: i64) -> Self {
-        Self(value as u64)
-    }
-}
-
-impl ExportToAidl<SignedHat> for SecureUserId {
-    fn export(&self, out: &mut SignedHat) {
-        out.userId = self.0 as i64;
-    }
-}
-
-impl PersistedState for SecureUserId {}

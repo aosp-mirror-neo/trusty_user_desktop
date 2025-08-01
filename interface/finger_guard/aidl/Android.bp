@@ -3,6 +3,7 @@ aidl_interface {
     owner: "google",
     unstable: true,
     vendor_available: true,
+    host_supported: true,
     srcs: [
         "android/desktop/security/finger_guard/AuthenticationResult.aidl",
         "android/desktop/security/finger_guard/EnrollmentResult.aidl",
