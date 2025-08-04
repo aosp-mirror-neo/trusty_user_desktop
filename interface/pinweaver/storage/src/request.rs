@@ -85,7 +85,6 @@ serde_enums! {
 #[derive(Clone, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-
 pub struct ResetTreeRequest {
     /// The parameters for the newly constructed tree.
     pub tree_params: TreeParams,
