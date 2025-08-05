@@ -66,7 +66,7 @@ pub type ServiceResult<T> = Result<T, ServiceError>;
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::ServiceError;
 
     #[test]
     fn test_simple_error() {

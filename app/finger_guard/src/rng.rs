@@ -65,7 +65,7 @@ pub use _generate_random_int as generate_random_int;
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::{generate_random_buffer, generate_random_int, generate_random_vec};
     use std::array;
 
     // These tests all generate random buffers and then compare them, with the expectation that

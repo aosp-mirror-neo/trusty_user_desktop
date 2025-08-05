@@ -22,7 +22,7 @@ use std::ops::Add;
 use std::time::Duration;
 
 /// For the time elaspsed in nanoseconds.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Instant {
     nanos: i64,
 }
@@ -61,5 +61,43 @@ impl Add<Duration> for Instant {
                 .checked_add(other_nanos)
                 .expect("overflow when adding duration to instant"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::Instant;
+    use std::time::Duration;
+
+    #[test]
+    fn test_instant_default() {
+        let def = Instant::default();
+        let zero = Instant::from_nanos(0);
+        let one = Instant::from_nanos(1);
+        assert_eq!(def, zero);
+        assert_ne!(def, one);
+    }
+
+    #[test]
+    fn test_instant_plus_zero() {
+        let time = Instant::from_nanos(1234567890);
+        let plus_zero = time + Duration::ZERO;
+        assert_eq!(time, plus_zero);
+    }
+
+    #[test]
+    fn test_instant_plus_one_ns() {
+        let time = Instant::default();
+        let one_ns = Instant::from_nanos(1);
+        let time_plus = time + Duration::from_nanos(1);
+        assert_eq!(time_plus, one_ns);
+    }
+
+    #[test]
+    fn test_instant_plus_one_s() {
+        let time = Instant::default();
+        let one_s = Instant::from_nanos(1000000000);
+        let time_plus = time + Duration::from_secs(1);
+        assert_eq!(time_plus, one_s);
     }
 }

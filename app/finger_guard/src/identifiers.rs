@@ -103,3 +103,28 @@ impl ExportToAidl<SignedHat> for SecureUserId {
         out.userId = self.0 as i64;
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::SensorStateIndex;
+    use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::SensorUserPair::SensorUserPair;
+
+    #[test]
+    fn test_index_from_pair() {
+        let pair = SensorUserPair { sensorId: 314159, userId: 271828 };
+        let index = SensorStateIndex::from(&pair);
+        assert_eq!(index, SensorStateIndex { sensor_id: 314159, user_id: 271828 });
+    }
+
+    #[test]
+    fn test_auth_id_file_name() {
+        let index = SensorStateIndex::from(&SensorUserPair { sensorId: 314159, userId: 271828 });
+        assert_eq!(index.authenticator_id_file_name(), "s314159.u271828.authenticator_id");
+    }
+
+    #[test]
+    fn test_user_id_file_name() {
+        let index = SensorStateIndex::from(&SensorUserPair { sensorId: 314159, userId: 271828 });
+        assert_eq!(index.secure_user_id_file_name(), "s314159.u271828.secure_user_id");
+    }
+}
