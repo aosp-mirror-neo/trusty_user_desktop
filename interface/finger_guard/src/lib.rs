@@ -1,13 +1,10 @@
 // ! Convenience client API for IFingerGuard
 
 use binder::Strong;
-use core::ffi::CStr;
 use rpcbinder::RpcSession;
+use std::ffi::CStr;
+use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::IFingerGuard::IFingerGuard;
 
-pub use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
-    self as aidl, HandshakeResponse::HandshakeResponse, IFingerGuard::IFingerGuard,
-    SessionResponse::SessionResponse,
-};
 pub const PORT_CSTR: &CStr = c"com.android.trusty.rust.FingerGuard.V1";
 
 /// Creates a new FingerGuard client.

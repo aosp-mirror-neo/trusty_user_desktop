@@ -17,11 +17,11 @@
 //! Common functions and data structures dealing with HardwareAuthToken
 
 use crate::aidl::ExportToAidl;
-use crate::clock::Instant;
 use crate::crypto::{self, HmacGenerator, HmacSignable};
-use crate::storage::{AuthenticatorId, SecureUserId};
-use finger_guard::error::ServiceResult;
-use finger_guard_api::aidl::HardwareAuthToken::HardwareAuthToken;
+use crate::error::ServiceResult;
+use crate::identifiers::{AuthenticatorId, SecureUserId};
+use crate::time::Instant;
+use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::HardwareAuthToken::HardwareAuthToken;
 
 /// Represents an unsigned hardware auth token.
 pub struct UnsignedHat {
@@ -34,7 +34,7 @@ pub struct UnsignedHat {
 }
 
 /// Represents a signed hardware auth token.
-pub type SignedHat = finger_guard_api::aidl::HardwareAuthToken::HardwareAuthToken;
+pub type SignedHat = HardwareAuthToken;
 
 impl UnsignedHat {
     /// Construct a new hardware auth token with the given parameters and timestamp.
@@ -50,9 +50,11 @@ impl UnsignedHat {
 
     /// Attempt to convert the unsigned token into a signed one, using the given key.
     pub fn sign(&self, key: &crypto::Key) -> ServiceResult<HardwareAuthToken> {
-        let mut hat = HardwareAuthToken::default();
-        hat.version = self.version;
-        hat.challenge = self.challenge;
+        let mut hat = HardwareAuthToken {
+            version: self.version,
+            challenge: self.challenge,
+            ..Default::default()
+        };
         self.user_id.export(&mut hat);
         self.authenticator_id.export(&mut hat);
         self.authenticator_type.export(&mut hat);
@@ -62,6 +64,7 @@ impl UnsignedHat {
     }
 }
 
+/// The standard default empty hardware token.
 pub const EMPTY_HAT: HardwareAuthToken = HardwareAuthToken {
     version: 0,
     challenge: 0,
@@ -80,6 +83,7 @@ pub const EMPTY_HAT: HardwareAuthToken = HardwareAuthToken {
 pub struct AuthenticatorType(u32);
 
 impl AuthenticatorType {
+    /// A fingerprint authenticator.
     pub const FINGERPRINT: Self = Self(2);
 }
 

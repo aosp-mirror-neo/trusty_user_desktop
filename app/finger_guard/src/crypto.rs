@@ -17,11 +17,11 @@
 //! Cryptographic operations used by the finger guard service.
 
 use crate::aidl::ExportToAidl;
+use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
+use crate::identifiers::SensorStateIndex;
 use crate::rng;
-use crate::storage::SensorStateIndex;
-use finger_guard::error::{ServiceError, ServiceResult};
-use finger_guard_api::aidl::{
+use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
@@ -36,8 +36,10 @@ use openssl::pkey::{PKey, Private, Public};
 use openssl::symm::Cipher;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-// Extend Result with a function that can map openssl errors to service errors.
+/// Extend Result with a function that can map openssl errors to service errors.
 pub trait MapOpenSslErrExt<T> {
+    /// Transform Self (a result with an openssl error type) into a ServiceResult with the given
+    /// error message.
     fn wrap_openssl_err(self, msg: &'static str) -> ServiceResult<T>;
 }
 impl<T> MapOpenSslErrExt<T> for Result<T, openssl::error::ErrorStack> {
@@ -62,6 +64,7 @@ impl<T> MapOpenSslErrExt<T> for Result<T, openssl::error::ErrorStack> {
 /// instead be defined on the generated type directly.
 macro_rules! blob_newtype {
     ($name:ident, $size:literal) => {
+        /// A binary blob of representing a cryptographic object.
         #[derive(FromBytes, IntoBytes, Immutable)]
         pub struct $name {
             bytes: [u8; $size],
@@ -156,10 +159,10 @@ pub fn perform_ecdh(
     let pk = (|| {
         let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
         let mut ctx = BigNumContext::new()?;
-        let client_public_point = EcPoint::from_bytes(&group, &client_public_key_bytes, &mut ctx)?;
+        let client_public_point = EcPoint::from_bytes(&group, client_public_key_bytes, &mut ctx)?;
         let client_public_key: PKey<Public> =
             EcKey::from_public_key(&group, &client_public_point)?.try_into()?;
-        let mut pk_deriver = Deriver::new(&server_private_key)?;
+        let mut pk_deriver = Deriver::new(server_private_key)?;
         pk_deriver.set_peer(&client_public_key)?;
         let pk = pk_deriver.derive_to_vec()?;
         Ok(pk)
@@ -195,7 +198,6 @@ pub fn encrypt_aes256_gcm(
 }
 
 /// Decrypt a message using AES256-GCM with the given Hmac as a key.
-#[cfg(test)]
 pub fn decrypt_aes256_gcm(
     key: &Hmac,
     iv: Option<&[u8]>,
@@ -224,7 +226,9 @@ pub fn decrypt_aes256_gcm(
 
 /// The sender of a message.
 pub enum MessageSender {
+    /// The sender was the finger_guard service.
     FingerGuard,
+    /// The sender was the FPMCU.
     Fpmcu,
 }
 impl HmacSignable for MessageSender {
@@ -239,8 +243,11 @@ impl HmacSignable for MessageSender {
 
 /// The operation this session is performing.
 pub enum SensorSessionType {
+    /// Start fingerprint enrollment.
     Enroll,
+    /// Complete fingerprint enrollment.
     EnrollFinish,
+    /// Authenticate using fingerprint.
     Auth,
 }
 impl HmacSignable for SensorSessionType {
@@ -289,7 +296,6 @@ impl ExportToAidl<FinishEnrollSessionResponse> for Hmac {
 }
 // Allow HMACs to be converted into bytes in tests, to allow them to be used to construct realistic
 // input request messages.
-#[cfg(test)]
 impl From<Hmac> for Vec<u8> {
     fn from(value: Hmac) -> Self {
         value.bytes.to_vec()
@@ -305,6 +311,7 @@ pub struct HmacGenerator {
 
 /// Trait which types can implement to support being used as part of a signed message.
 pub trait HmacSignable {
+    /// Update the given HMAC generator with the relevant bytes from Self.
     fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()>;
 }
 
@@ -343,7 +350,7 @@ impl HmacGenerator {
     pub fn compute(key: &Key, buffer: &[u8]) -> ServiceResult<Hmac> {
         let mut generator = Self::new(key)?;
         generator.update(buffer)?;
-        Ok(generator.complete()?)
+        generator.complete()
     }
 
     /// Compute an HMAC using the given key and signable object.
@@ -353,7 +360,7 @@ impl HmacGenerator {
     pub fn compute_with(key: &Key, signable: &impl HmacSignable) -> ServiceResult<Hmac> {
         let mut generator = Self::new(key)?;
         generator.update_with(signable)?;
-        Ok(generator.complete()?)
+        generator.complete()
     }
 }
 
@@ -375,5 +382,5 @@ pub fn sensor_session_message_hmac(
     generator.update_with(ssi)?;
     generator.update_with(&sender)?;
     generator.update_with(&session_type)?;
-    Ok(generator.complete()?)
+    generator.complete()
 }
