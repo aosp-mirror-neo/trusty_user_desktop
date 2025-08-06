@@ -15,5 +15,5 @@
 */
 
 fn main() {
-    finger_guard::init_and_start_loop().expect("FingerGuard service quit unexpectedly");
+    finger_guard_svc::init_and_start_loop().expect("FingerGuard service quit unexpectedly");
 }

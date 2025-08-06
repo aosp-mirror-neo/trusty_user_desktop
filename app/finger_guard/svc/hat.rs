@@ -19,8 +19,8 @@
 use crate::aidl::ExportToAidl;
 use crate::clock::Instant;
 use crate::crypto::{self, HmacGenerator, HmacSignable};
-use crate::error::ServiceResult;
 use crate::storage::{AuthenticatorId, SecureUserId};
+use finger_guard::error::ServiceResult;
 use finger_guard_api::aidl::HardwareAuthToken::HardwareAuthToken;
 
 /// Represents an unsigned hardware auth token.

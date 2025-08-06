@@ -29,7 +29,6 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,log) \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
-	trusty/user/desktop/app/finger_guard \
+	trusty/user/desktop/app/finger_guard/svc \
 
 include make/trusted_app.mk
-

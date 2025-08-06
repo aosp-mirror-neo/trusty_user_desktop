@@ -17,7 +17,6 @@
 use crate::aidl;
 use crate::clock::{self, Instant};
 use crate::crypto::{self, MapOpenSslErrExt};
-use crate::error::{ServiceError, ServiceResult};
 use crate::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
 use crate::keymint;
 use crate::rng;
@@ -25,6 +24,7 @@ use crate::storage::{
     AuthenticatorId, PersistedState, SecureUserId, SensorStateIndex, SingleFileState,
 };
 use binder::Interface;
+use finger_guard::error::{ServiceError, ServiceResult};
 use finger_guard_api::aidl::{
     AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,

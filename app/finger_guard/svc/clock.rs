@@ -17,8 +17,8 @@
 //! Trusty system clock util functions.
 
 use crate::aidl::ExportToAidl;
-use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
+use finger_guard::error::{ServiceError, ServiceResult};
 use std::ops::Add;
 use std::time::Duration;
 
