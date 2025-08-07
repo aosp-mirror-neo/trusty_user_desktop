@@ -27,7 +27,7 @@ use android_desktop_security_finger_guard::aidl::android::desktop::security::fin
 };
 use binder::Interface;
 use finger_guard::aidl;
-use finger_guard::crypto::{self, MapOpenSslErrExt};
+use finger_guard::crypto::{self, HmacSignable, MapOpenSslErrExt};
 use finger_guard::error::{ServiceError, ServiceResult};
 use finger_guard::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
 use finger_guard::identifiers::{AuthenticatorId, SecureUserId, SensorStateIndex};
@@ -93,6 +93,14 @@ pub struct FingerGuardService {
     enrollment_challenges: Mutex<BTreeMap<EnrollmentChallenge, Instant>>,
 }
 
+/// The initial message signed by the private key during the handshake.
+struct HandshakeMessage;
+impl HmacSignable for HandshakeMessage {
+    fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
+        add_bytes(b"tofu")
+    }
+}
+
 impl FingerGuardService {
     pub fn new() -> Self {
         Self {
@@ -128,7 +136,7 @@ impl FingerGuardService {
         let pk = crypto::perform_ecdh(&server_private_key, client_public_key_bytes)?;
         // generate random tpm_seed.
         let tpm_seed = crypto::Secret::generate();
-        let mac = crypto::HmacGenerator::compute(&pk, b"tofu")?;
+        let mac = crypto::compute_hmac!(&pk, &HandshakeMessage)?;
         // save pk and tpm_seed to storage.
         let new_init_params = InitParams { pk, tpm_seed };
         new_init_params.save()?;
@@ -154,10 +162,7 @@ impl FingerGuardService {
             return Err(ServiceError::StateAlreadyExists("sk"));
         }
         let nonce = crypto::Nonce::generate();
-        let mut hmac_generator = crypto::HmacGenerator::new(&init_params.pk)?;
-        hmac_generator.update_with(&client_nonce)?;
-        hmac_generator.update_with(&nonce)?;
-        let new_sk = hmac_generator.complete()?;
+        let new_sk = crypto::compute_hmac!(&init_params.pk, &client_nonce, &nonce)?;
         let iv = rng::generate_random_vec::<12>();
         let mut tag = vec![0u8; 16];
         let wrapped_tpm_seed = crypto::encrypt_aes256_gcm(
@@ -234,7 +239,7 @@ impl FingerGuardService {
         }
         // Validate |hat|.
         let auth_token_key = self.get_auth_token_key()?;
-        let mac = crypto::HmacGenerator::compute_with(&auth_token_key, hat)?;
+        let mac = crypto::compute_hmac!(&auth_token_key, hat)?;
         if mac != hat.mac.as_slice() {
             return Err(ServiceError::BadMac("hardware auth token"));
         }
@@ -552,11 +557,23 @@ mod tests {
         HardwareAuthToken::HardwareAuthToken, SensorUserPair::SensorUserPair,
     };
     use finger_guard::crypto::{self, NIST_P256_CURVE_NAME};
+    use finger_guard::error::ServiceResult;
     use finger_guard::rng;
     use openssl::bn::BigNumContext;
     use openssl::ec::{EcGroup, EcKey, PointConversionForm};
     use openssl::pkey::{PKey, Private};
     use test::{assert, assert_eq, assert_ne, assert_ok, skip};
+
+    // Struct used in tests to allow arbitrary blobs to be supplied to the HMAC generator.
+    struct TestBlob<'a>(&'a [u8]);
+    impl<'a> crypto::HmacSignable for TestBlob<'a> {
+        fn update(
+            &self,
+            mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>,
+        ) -> ServiceResult<()> {
+            add_bytes(self.0)
+        }
+    }
 
     test::init!();
 
@@ -595,7 +612,7 @@ mod tests {
         let pk = assert_ok!(crypto::perform_ecdh(&client_private_key, &server_public_key_bytes));
 
         // Check the computed MAC matches the one in the response.
-        let hmac = assert_ok!(crypto::HmacGenerator::compute(&pk, b"tofu"));
+        let hmac = assert_ok!(crypto::compute_hmac!(&pk, &TestBlob(b"tofu")));
         assert!(hmac == handshake.pkMac.as_slice());
 
         // Generate the client nonce.
@@ -604,9 +621,11 @@ mod tests {
         // Start a new session with the server.
         let service = assert_ok!(finger_guard_api::connect_finger_guard());
         let session_response = assert_ok!(service.newSession(client_nonce.as_slice()));
-        let server_nonce = session_response.nonce;
-        let all_nonce = vec![client_nonce, server_nonce].concat();
-        let sk = assert_ok!(crypto::HmacGenerator::compute(&pk, &all_nonce));
+        let sk = assert_ok!(crypto::compute_hmac!(
+            &pk,
+            &TestBlob(&client_nonce),
+            &TestBlob(&session_response.nonce)
+        ));
 
         // Decrypt the wrapped tpm seed.
         let iv = session_response.iv;
@@ -655,13 +674,14 @@ mod tests {
             mac: vec![],
         };
         let nonce = rng::generate_random_vec::<32>();
-        hat.mac = Vec::from(assert_ok!(crypto::HmacGenerator::compute_with(&auth_token_key, &hat)));
+        hat.mac = Vec::from(assert_ok!(crypto::compute_hmac!(&auth_token_key, &hat)));
         let session_resp = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
-        let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
-        assert_ok!(hmac_gen.update(&nonce));
-        assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
-        assert_ok!(hmac_gen.update(b"finger_guardenroll"));
-        let hmac = assert_ok!(hmac_gen.complete());
+        let hmac = assert_ok!(crypto::compute_hmac!(
+            &sk,
+            &TestBlob(&nonce),
+            &TestBlob(&user_id.to_be_bytes()),
+            &TestBlob(b"finger_guardenroll")
+        ));
         assert!(hmac == session_resp.mac.as_slice());
 
         let old_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
@@ -671,16 +691,17 @@ mod tests {
         // Ensure the authenticator id updates after enrollment.
         let new_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
         assert_ne!(new_auth_id, old_auth_id);
-        let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
-        assert_ok!(hmac_gen.update(&nonce));
-        assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
-        assert_ok!(hmac_gen.update(b"finger_guardenroll_finish"));
-        let hmac = assert_ok!(hmac_gen.complete());
+        let hmac = assert_ok!(crypto::compute_hmac!(
+            &sk,
+            &TestBlob(&nonce),
+            &TestBlob(&user_id.to_be_bytes()),
+            &TestBlob(b"finger_guardenroll_finish")
+        ));
         assert!(hmac == finish_resp.mac.as_slice());
 
         // Test enrollment session cancellation.
         hat.challenge = assert_ok!(service.generateChallenge(&sup));
-        hat.mac = Vec::from(assert_ok!(crypto::HmacGenerator::compute_with(&auth_token_key, &hat)));
+        hat.mac = Vec::from(assert_ok!(crypto::compute_hmac!(&auth_token_key, &hat)));
         let nonce = rng::generate_random_vec::<32>();
         let _ = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
         let cancel_result = EnrollmentResult { enrolled: false };
@@ -691,18 +712,20 @@ mod tests {
         let challenge = 0xc4a11e49e as i64;
         let nonce = rng::generate_random_vec::<32>();
         let session_resp = assert_ok!(service.prepareAuthSession(&sup, challenge, &nonce));
-        let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
-        assert_ok!(hmac_gen.update(&nonce));
-        assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
-        assert_ok!(hmac_gen.update(b"finger_guardauth"));
-        let hmac = assert_ok!(hmac_gen.complete());
+        let hmac = assert_ok!(crypto::compute_hmac!(
+            &sk,
+            &TestBlob(&nonce),
+            &TestBlob(&user_id.to_be_bytes()),
+            &TestBlob(b"finger_guardauth")
+        ));
         assert!(hmac == session_resp.mac.as_slice());
 
-        let mut hmac_gen = assert_ok!(crypto::HmacGenerator::new(&sk));
-        assert_ok!(hmac_gen.update(&session_resp.nonce));
-        assert_ok!(hmac_gen.update(&user_id.to_be_bytes()));
-        assert_ok!(hmac_gen.update(b"fpmcuauth"));
-        let hmac = assert_ok!(hmac_gen.complete());
+        let hmac = assert_ok!(crypto::compute_hmac!(
+            &sk,
+            &TestBlob(&nonce),
+            &TestBlob(&user_id.to_be_bytes()),
+            &TestBlob(b"fpmcuauth")
+        ));
         let auth_result = AuthenticationResult { authenticated: true, mac: hmac.into() };
         let valid_hat = assert_ok!(service.finishAuthSession(&sup, &auth_result));
         assert_eq!(valid_hat.challenge, challenge);
@@ -710,8 +733,7 @@ mod tests {
         assert_eq!(valid_hat.authenticatorId, new_auth_id);
         assert_ne!(valid_hat.timestamp, 0);
         assert!(
-            crypto::HmacGenerator::compute_with(&auth_token_key, &valid_hat).unwrap()
-                == valid_hat.mac.as_slice()
+            crypto::compute_hmac!(&auth_token_key, &valid_hat).unwrap() == valid_hat.mac.as_slice()
         );
 
         // ---- End Authentication Test ----

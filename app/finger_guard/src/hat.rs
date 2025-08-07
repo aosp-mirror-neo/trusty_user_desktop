@@ -17,7 +17,7 @@
 //! Common functions and data structures dealing with HardwareAuthToken
 
 use crate::aidl::ExportToAidl;
-use crate::crypto::{self, HmacGenerator, HmacSignable};
+use crate::crypto::{self, HmacSignable};
 use crate::error::ServiceResult;
 use crate::identifiers::{AuthenticatorId, SecureUserId};
 use crate::time::Instant;
@@ -59,7 +59,7 @@ impl UnsignedHat {
         self.authenticator_id.export(&mut hat);
         self.authenticator_type.export(&mut hat);
         self.timestamp.export(&mut hat);
-        HmacGenerator::compute_with(key, &hat)?.export(&mut hat);
+        crypto::compute_hmac!(key, &hat)?.export(&mut hat);
         Ok(hat)
     }
 }
@@ -106,12 +106,12 @@ impl ExportToAidl<SignedHat> for AuthenticatorType {
 /// (big-endian). This odd construction is compatible with the hw_auth_token_t
 /// structure.
 impl HmacSignable for HardwareAuthToken {
-    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
-        generator.update(&self.version.to_ne_bytes())?;
-        generator.update(&self.challenge.to_ne_bytes())?;
-        generator.update(&self.userId.to_ne_bytes())?;
-        generator.update(&self.authenticatorId.to_ne_bytes())?;
-        generator.update(&self.authenticatorType.to_be_bytes())?;
-        generator.update(&self.timestamp.to_be_bytes())
+    fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
+        add_bytes(&self.version.to_ne_bytes())?;
+        add_bytes(&self.challenge.to_ne_bytes())?;
+        add_bytes(&self.userId.to_ne_bytes())?;
+        add_bytes(&self.authenticatorId.to_ne_bytes())?;
+        add_bytes(&self.authenticatorType.to_be_bytes())?;
+        add_bytes(&self.timestamp.to_be_bytes())
     }
 }

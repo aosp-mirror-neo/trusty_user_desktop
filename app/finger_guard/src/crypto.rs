@@ -113,8 +113,8 @@ impl ExportToAidl<PrepareAuthSessionResponse> for Nonce {
     }
 }
 impl HmacSignable for Nonce {
-    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
-        generator.update(&self.bytes)
+    fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
+        add_bytes(&self.bytes)
     }
 }
 
@@ -232,12 +232,12 @@ pub enum MessageSender {
     Fpmcu,
 }
 impl HmacSignable for MessageSender {
-    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
+    fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
         let name: &[u8] = match self {
             MessageSender::FingerGuard => b"finger_guard",
             MessageSender::Fpmcu => b"fpmcu",
         };
-        generator.update(name)
+        add_bytes(name)
     }
 }
 
@@ -251,13 +251,13 @@ pub enum SensorSessionType {
     Auth,
 }
 impl HmacSignable for SensorSessionType {
-    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
+    fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
         let name: &[u8] = match self {
             SensorSessionType::Enroll => b"enroll",
             SensorSessionType::EnrollFinish => b"enroll_finish",
             SensorSessionType::Auth => b"auth",
         };
-        generator.update(name)
+        add_bytes(name)
     }
 }
 
@@ -311,8 +311,8 @@ pub struct HmacGenerator {
 
 /// Trait which types can implement to support being used as part of a signed message.
 pub trait HmacSignable {
-    /// Update the given HMAC generator with the relevant bytes from Self.
-    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()>;
+    /// Update the HMAC with the relevant bytes from Self.
+    fn update(&self, add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()>;
 }
 
 impl HmacGenerator {
@@ -324,14 +324,10 @@ impl HmacGenerator {
         })
     }
 
-    /// Update the HMAC with the given chunk of bytes.
-    pub fn update(&mut self, buffer: &[u8]) -> ServiceResult<()> {
-        self.context.update(buffer).wrap_openssl_err("unable to update hmac")
-    }
-
     /// Update the HMAC with the given signable object.
-    pub fn update_with(&mut self, signable: &impl HmacSignable) -> ServiceResult<()> {
-        signable.update(self)
+    pub fn update(&mut self, signable: &impl HmacSignable) -> ServiceResult<()> {
+        signable
+            .update(|bytes| self.context.update(bytes).wrap_openssl_err("unable to update hmac"))
     }
 
     /// Complete the generation of the HMAC, returning the final result.
@@ -342,27 +338,24 @@ impl HmacGenerator {
             .wrap_openssl_err("unable to finalize hmac")?;
         Ok(hmac)
     }
+}
 
-    /// Compute an HMAC using the given key and buffer.
-    ///
-    /// This is a useful helper method that simplifies the very common case of
-    /// computing an HMAC using a single pre-existing buffer of bytes.
-    pub fn compute(key: &Key, buffer: &[u8]) -> ServiceResult<Hmac> {
-        let mut generator = Self::new(key)?;
-        generator.update(buffer)?;
-        generator.complete()
-    }
-
-    /// Compute an HMAC using the given key and signable object.
-    ///
-    /// This is a useful helper method that simplifies the very common case of
-    /// computing an HMAC using a single pre-existing object.
-    pub fn compute_with(key: &Key, signable: &impl HmacSignable) -> ServiceResult<Hmac> {
-        let mut generator = Self::new(key)?;
-        generator.update_with(signable)?;
-        generator.complete()
+/// Macro which computes an HMAC from a number of HMAC signables.
+///
+/// This is a convenience wrapper that does a "new + update*N + complete" call but in a single
+/// compact invocation. This behaves like a function but unlike a function it takes a variable
+/// number of arguments.
+#[macro_export]
+macro_rules! _compute_hmac {
+    ($key:expr, $($signable:expr),*) => {
+        (|| {
+            let mut generator = $crate::crypto::HmacGenerator::new($key)?;
+            $(generator.update($signable)?;)*
+            generator.complete()
+        })()
     }
 }
+pub use _compute_hmac as compute_hmac;
 
 /// Helper to compute the HMAC for the enrollment/authentication
 /// session messages from this service or from the sensor.
@@ -377,10 +370,99 @@ pub fn sensor_session_message_hmac(
     // Compute mac as HMAC_SHA256(key, msg) where
     // msg = nonce || user_id || sender_name || session_name
     //
-    let mut generator = HmacGenerator::new(key)?;
-    generator.update_with(nonce)?;
-    generator.update_with(ssi)?;
-    generator.update_with(&sender)?;
-    generator.update_with(&session_type)?;
-    generator.complete()
+    compute_hmac!(key, nonce, ssi, &sender, &session_type)
+}
+
+#[cfg(test)]
+mod test {
+    use super::{compute_hmac, HmacGenerator, HmacSignable, Key};
+    use crate::error::ServiceResult;
+    use std::array;
+
+    // Struct used in tests to allow arbitrary blobs to be supplied to the HMAC generator.
+    struct TestBlob(&'static [u8]);
+    impl HmacSignable for TestBlob {
+        fn update(
+            &self,
+            mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>,
+        ) -> ServiceResult<()> {
+            add_bytes(self.0)
+        }
+    }
+
+    #[test]
+    fn test_empty_hmac() {
+        let key = Key { bytes: [0; 32] };
+        let generator = HmacGenerator::new(&key).expect("could not construct HMAC generator");
+        let hmac = generator.complete().expect("HMAC computation failed");
+        let expected = [
+            0xB6, 0x13, 0x67, 0x9A, 0x08, 0x14, 0xD9, 0xEC, 0x77, 0x2F, 0x95, 0xD7, 0x78, 0xC3,
+            0x5F, 0xC5, 0xFF, 0x16, 0x97, 0xC4, 0x93, 0x71, 0x56, 0x53, 0xC6, 0xC7, 0x12, 0x14,
+            0x42, 0x92, 0xC5, 0xAD,
+        ];
+        assert_eq!(hmac.bytes, expected);
+    }
+
+    #[test]
+    fn test_basic_hmac() {
+        let key = Key { bytes: array::from_fn(|i| (i + 1) as u8) };
+        let mut generator = HmacGenerator::new(&key).expect("could not construct HMAC generator");
+        generator.update(&TestBlob(b"Hello, World!")).expect("HMAC update failed");
+        let hmac = generator.complete().expect("HMAC computation failed");
+        let expected = [
+            0x07, 0xF1, 0xBF, 0xCB, 0x5A, 0x28, 0xB0, 0xF4, 0x52, 0x75, 0xA7, 0x29, 0x07, 0xB0,
+            0xE8, 0x45, 0x21, 0xF6, 0xEF, 0xE9, 0xD4, 0xFD, 0xE3, 0xDB, 0xE5, 0xED, 0x5E, 0xCE,
+            0x1A, 0x99, 0x8B, 0x9E,
+        ];
+        assert_eq!(hmac.bytes, expected);
+    }
+
+    #[test]
+    fn test_compute_hmac() {
+        let key = Key { bytes: array::from_fn(|i| (i + 1) as u8) };
+        let hmac =
+            compute_hmac!(&key, &TestBlob(b"Hello, World!")).expect("HMAC computation failed");
+        let expected = [
+            0x07, 0xF1, 0xBF, 0xCB, 0x5A, 0x28, 0xB0, 0xF4, 0x52, 0x75, 0xA7, 0x29, 0x07, 0xB0,
+            0xE8, 0x45, 0x21, 0xF6, 0xEF, 0xE9, 0xD4, 0xFD, 0xE3, 0xDB, 0xE5, 0xED, 0x5E, 0xCE,
+            0x1A, 0x99, 0x8B, 0x9E,
+        ];
+        assert_eq!(hmac.bytes, expected);
+    }
+
+    #[test]
+    fn test_multi_part_hmac() {
+        let key = Key { bytes: array::from_fn(|i| (i + 1) as u8) };
+        let mut generator = HmacGenerator::new(&key).expect("could not construct HMAC generator");
+        generator.update(&TestBlob(b"Hello")).expect("HMAC update 1 failed");
+        generator.update(&TestBlob(b", ")).expect("HMAC update 2 failed");
+        generator.update(&TestBlob(b"World")).expect("HMAC update 3 failed");
+        generator.update(&TestBlob(b"!")).expect("HMAC update 4 failed");
+        let hmac = generator.complete().expect("HMAC computation failed");
+        let expected = [
+            0x07, 0xF1, 0xBF, 0xCB, 0x5A, 0x28, 0xB0, 0xF4, 0x52, 0x75, 0xA7, 0x29, 0x07, 0xB0,
+            0xE8, 0x45, 0x21, 0xF6, 0xEF, 0xE9, 0xD4, 0xFD, 0xE3, 0xDB, 0xE5, 0xED, 0x5E, 0xCE,
+            0x1A, 0x99, 0x8B, 0x9E,
+        ];
+        assert_eq!(hmac.bytes, expected);
+    }
+
+    #[test]
+    fn test_multi_part_compute_hmac() {
+        let key = Key { bytes: array::from_fn(|i| (i + 1) as u8) };
+        let hmac = compute_hmac!(
+            &key,
+            &TestBlob(b"Hello"),
+            &TestBlob(b", "),
+            &TestBlob(b"World"),
+            &TestBlob(b"!")
+        )
+        .expect("HMAC computation failed");
+        let expected = [
+            0x07, 0xF1, 0xBF, 0xCB, 0x5A, 0x28, 0xB0, 0xF4, 0x52, 0x75, 0xA7, 0x29, 0x07, 0xB0,
+            0xE8, 0x45, 0x21, 0xF6, 0xEF, 0xE9, 0xD4, 0xFD, 0xE3, 0xDB, 0xE5, 0xED, 0x5E, 0xCE,
+            0x1A, 0x99, 0x8B, 0x9E,
+        ];
+        assert_eq!(hmac.bytes, expected);
+    }
 }
