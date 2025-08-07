@@ -14,59 +14,17 @@
 * limitations under the License.
 */
 
-mod aidl;
-mod clock;
-mod crypto;
-mod error;
-mod hat;
-mod keymint;
-mod rng;
-mod service;
-mod storage;
+//! Implements the core capabilities of the finger_guard service.
+//!
+//! This crate only contains the aspects of the service that do not depend directly on other
+//! trusty specific libraries and interfaces. This allows it to be built for non-trusty
+//! environments which is useful for testing and debugging. However, it is not intended to provide
+//! generically reusable features outside of implementing finger_guard.
 
-use crate::service::FingerGuardService;
-use binder::BinderFeatures;
-use finger_guard_api::aidl::IFingerGuard::BnFingerGuard;
-use rpcbinder::RpcServer;
-use std::rc::Rc;
-use tipc::{Manager, PortCfg};
-
-// The port on FingerGuard TA which the Fingerprint sensor HAL connects to.
-const APP_SERVICE_PORT: &str = "com.android.trusty.rust.FingerGuard.V1";
-
-const PORT_COUNT: usize = 1;
-const CONNECTION_COUNT: usize = 1;
-
-tipc::service_dispatcher! {
-    enum FingerGuardDispatcher {
-        RpcServer
-    }
-}
-pub fn init_and_start_loop() -> tipc::Result<()> {
-    trusty_log::init();
-
-    let mut dispatcher =
-        FingerGuardDispatcher::<PORT_COUNT>::new().expect("Could not create dispatcher");
-    let service = FingerGuardService::new();
-    let binder_service = BnFingerGuard::new_binder(service, BinderFeatures::default());
-    let rpc_service = RpcServer::new_per_session(move |_uuid| Some(binder_service.as_binder()));
-
-    // Allow secure (within trusty) and non-secure (outside trusty) connections.
-    // Originally only intended for non-secure connections, now allowed secure connection as well
-    // to facilitate the unit tests within the trusty environment.
-    let app_cfg = PortCfg::new(APP_SERVICE_PORT)
-        .expect("Could not create port config")
-        .allow_ta_connect()
-        .allow_ns_connect();
-    dispatcher
-        .add_service(Rc::new(rpc_service), app_cfg)
-        .expect("Could not add FingerGuardService to dispatcher");
-
-    // <_, _, 1, 1> means we define a Manager with a single port, and max one connection.
-    Manager::<_, _, PORT_COUNT, CONNECTION_COUNT>::new_with_dispatcher(dispatcher, [])
-        .expect("Could not create service manager")
-        .run_event_loop()
-        .expect("FingerGuard event loop failed");
-
-    Ok(())
-}
+pub mod aidl;
+pub mod crypto;
+pub mod error;
+pub mod hat;
+pub mod identifiers;
+pub mod rng;
+pub mod time;

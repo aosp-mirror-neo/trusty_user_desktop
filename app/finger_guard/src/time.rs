@@ -14,18 +14,24 @@
  * limitations under the License.
  */
 
-//! Trusty system clock util functions.
+//! Data structures representing time-related abstractions for finger_guard.
 
 use crate::aidl::ExportToAidl;
-use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
 use std::ops::Add;
 use std::time::Duration;
 
 /// For the time elaspsed in nanoseconds.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Instant {
     nanos: i64,
+}
+
+impl Instant {
+    /// Given an exapsed time in nanoseconds, construct an instant.
+    pub fn from_nanos(nanos: i64) -> Self {
+        Self { nanos }
+    }
 }
 
 impl ExportToAidl<SignedHat> for Instant {
@@ -58,14 +64,40 @@ impl Add<Duration> for Instant {
     }
 }
 
-/// Returns nanoseconds since boot, including time spent in sleep.
-pub fn now() -> ServiceResult<Instant> {
-    let mut time_ns = 0;
-    //Safety: trivial, external syscall gets valid raw pointer to a `i64`.
-    let rc = unsafe { trusty_sys::gettime(0, 0, &mut time_ns) };
-    if rc < 0 {
-        Err(ServiceError::TrustySysRcError("gettime", rc))
-    } else {
-        Ok(Instant { nanos: time_ns })
+#[cfg(test)]
+mod test {
+    use super::Instant;
+    use std::time::Duration;
+
+    #[test]
+    fn test_instant_default() {
+        let def = Instant::default();
+        let zero = Instant::from_nanos(0);
+        let one = Instant::from_nanos(1);
+        assert_eq!(def, zero);
+        assert_ne!(def, one);
+    }
+
+    #[test]
+    fn test_instant_plus_zero() {
+        let time = Instant::from_nanos(1234567890);
+        let plus_zero = time + Duration::ZERO;
+        assert_eq!(time, plus_zero);
+    }
+
+    #[test]
+    fn test_instant_plus_one_ns() {
+        let time = Instant::default();
+        let one_ns = Instant::from_nanos(1);
+        let time_plus = time + Duration::from_nanos(1);
+        assert_eq!(time_plus, one_ns);
+    }
+
+    #[test]
+    fn test_instant_plus_one_s() {
+        let time = Instant::default();
+        let one_s = Instant::from_nanos(1000000000);
+        let time_plus = time + Duration::from_secs(1);
+        assert_eq!(time_plus, one_s);
     }
 }

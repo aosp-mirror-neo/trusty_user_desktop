@@ -17,7 +17,7 @@
 //! Traits and utilities for moving data into and out of AIDL interface types.
 
 use crate::crypto;
-use finger_guard_api::aidl::{
+use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
@@ -34,6 +34,12 @@ use finger_guard_api::aidl::{
 /// From trait, but for situations where it takes multiple types to create the AIDL type this
 /// is a reasonable compromise.
 pub trait ExportToAidl<T> {
+    /// Export the relevant contexts of Self into the `out` parameter.
+    ///
+    /// The function should not assume that the output parameter is in any particular state when
+    /// being passed in. When an object of type T is being exported to by multiple source
+    /// ExportToAidl objects, the result should be the same regardless of the order in which the
+    /// export functions are called.
     fn export(&self, out: &mut T);
 }
 
@@ -42,8 +48,8 @@ pub fn make_handshake_response(
     server_public_key: Vec<u8>,
     pk_mac: &crypto::Hmac,
 ) -> HandshakeResponse {
-    let mut response = HandshakeResponse::default();
-    response.serverPublicKey = server_public_key;
+    let mut response =
+        HandshakeResponse { serverPublicKey: server_public_key, ..Default::default() };
     pk_mac.export(&mut response);
     response
 }

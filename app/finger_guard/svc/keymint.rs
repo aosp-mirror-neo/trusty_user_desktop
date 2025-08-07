@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-use crate::crypto;
-use crate::error::{ServiceError, ServiceResult};
+use finger_guard::crypto;
+use finger_guard::error::{ServiceError, ServiceResult};
 use kmr_common::wire::legacy::{self, TrustyKeymasterSecureOperation};
 use std::ffi::CStr;
 use tipc::{Deserialize, Handle, Serialize, Serializer, TipcError};
