@@ -20,7 +20,7 @@
 //! meaning beyond the internal process state and so should be modified only very carefully.
 
 use crate::aidl::ExportToAidl;
-use crate::crypto::{HmacGenerator, HmacSignable};
+use crate::crypto::HmacSignable;
 use crate::error::ServiceResult;
 use crate::hat::SignedHat;
 use crate::rng;
@@ -58,9 +58,9 @@ impl SensorStateIndex {
 }
 
 impl HmacSignable for SensorStateIndex {
-    fn update(&self, generator: &mut HmacGenerator) -> ServiceResult<()> {
+    fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
         // Only the user id is incorporated into messages.
-        generator.update(&self.user_id.to_be_bytes())
+        add_bytes(&self.user_id.to_be_bytes())
     }
 }
 
