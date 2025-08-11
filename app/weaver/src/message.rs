@@ -27,7 +27,7 @@ const SIZE_OF_TIMEOUT: usize = 8;
 pub enum ResponseStatus {
     Ok = 0,
     Failed = 1,
-    _IncorrectKey = 2,
+    IncorrectKey = 2,
     Throttle = 3,
 }
 

@@ -19,6 +19,8 @@
 use crate::message::{ResponseStatus, WeaverHalResponse};
 use crate::WeaverTAError;
 use binder::Strong;
+use pinweaver_api::aidl::IPinWeaver::ERROR_LEAF_NOT_FOUND;
+use pinweaver_api::aidl::IPinWeaver::ERROR_LOWENT_AUTH_FAILED;
 use pinweaver_api::connect_pinweaver;
 use pinweaver_api::DelayScheduleEntry;
 use pinweaver_api::IPinWeaver;
@@ -51,15 +53,18 @@ pub(crate) fn connect_to_pinweaver() -> Result<PinWeaverImpl, WeaverTAError> {
 
 impl Weaver for PinWeaverImpl {
     fn read(&self, slot_id: i32, key: &[u8]) -> Result<WeaverHalResponse, WeaverTAError> {
-        let auth_response = self
-            .pinweaver_connection
-            .tryAuthenticate(&LeafId { leafSet: LeafSet::WEAVER, id: slot_id }, key)
-            .map_err(|e| {
-                WeaverTAError::PinweaverError("Could not perform 'tryAuthenticate'".to_string(), e)
-            })?;
+        let mut key_resize = Vec::with_capacity(32);
+        if key.len() < 32 {
+            key_resize.extend_from_slice(key);
+            key_resize.resize(32usize, 0u8);
+        }
+        let auth_response = self.pinweaver_connection.tryAuthenticate(
+            &LeafId { leafSet: LeafSet::WEAVER, id: slot_id },
+            if key.len() >= 32 { &key[0..32] } else { key_resize.as_slice() },
+        );
 
         match auth_response {
-            SecondsToWait(timeout) => {
+            Ok(SecondsToWait(timeout)) => {
                 // Convert timeout to uint
                 let timeout = u64::try_from(timeout).map_err(|_| {
                     WeaverTAError::PinweaverUnexpectedResult(format!(
@@ -74,11 +79,31 @@ impl Weaver for PinWeaverImpl {
                     value: Vec::new(),
                 })
             }
-            HighEntropySecret(value) => Ok(WeaverHalResponse::ReadResponse {
+            Ok(HighEntropySecret(value)) => Ok(WeaverHalResponse::ReadResponse {
                 status: ResponseStatus::Ok,
                 timeout: 0,
                 value,
             }),
+            Err(e) => {
+                if e.service_specific_error() == ERROR_LOWENT_AUTH_FAILED {
+                    Ok(WeaverHalResponse::ReadResponse {
+                        status: ResponseStatus::IncorrectKey,
+                        timeout: 0,
+                        value: Vec::new(),
+                    })
+                } else if e.service_specific_error() == ERROR_LEAF_NOT_FOUND {
+                    Ok(WeaverHalResponse::ReadResponse {
+                        status: ResponseStatus::Failed,
+                        timeout: 0,
+                        value: Vec::new(),
+                    })
+                } else {
+                    Err(WeaverTAError::PinweaverError(
+                        "Could not perform 'tryAuthenticate'".to_string(),
+                        e,
+                    ))
+                }
+            }
         }
     }
 
@@ -90,10 +115,16 @@ impl Weaver for PinWeaverImpl {
     ) -> Result<WeaverHalResponse, WeaverTAError> {
         let delay_schedule = vec![DelayScheduleEntry { attemptCount: 5, delaySecs: 60 }];
 
+        let mut key_resize = Vec::with_capacity(32);
+        if key.len() < 32 {
+            key_resize.extend_from_slice(key);
+            key_resize.resize(32usize, 0u8);
+        }
+
         self.pinweaver_connection
             .insert(
                 &LeafId { leafSet: LeafSet::WEAVER, id: slot_id },
-                key,
+                if key.len() >= 32 { &key[0..32] } else { key_resize.as_slice() },
                 value,
                 &delay_schedule,
                 InsertMode::REPLACE_EXISTING,
