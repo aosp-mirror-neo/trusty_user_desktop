@@ -121,11 +121,18 @@ impl Weaver for PinWeaverImpl {
             key_resize.resize(32usize, 0u8);
         }
 
+        let mut reset_resize = Vec::with_capacity(32);
+        if value.len() < 32 {
+            reset_resize.extend_from_slice(value);
+            reset_resize.resize(32usize, 0u8);
+        }
+
         self.pinweaver_connection
             .insert(
                 &LeafId { leafSet: LeafSet::WEAVER, id: slot_id },
                 if key.len() >= 32 { &key[0..32] } else { key_resize.as_slice() },
                 value,
+                if value.len() >= 32 { &value[0..32] } else { reset_resize.as_slice() },
                 &delay_schedule,
                 InsertMode::REPLACE_EXISTING,
             )
