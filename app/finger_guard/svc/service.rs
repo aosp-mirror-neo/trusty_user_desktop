@@ -554,11 +554,14 @@ mod tests {
     use crate::keymint;
     use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
         AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
-        HardwareAuthToken::HardwareAuthToken, SensorUserPair::SensorUserPair,
+        SensorUserPair::SensorUserPair,
     };
     use finger_guard::crypto::{self, NIST_P256_CURVE_NAME};
     use finger_guard::error::ServiceResult;
+    use finger_guard::hat::{AuthenticatorType, UnsignedHat};
+    use finger_guard::identifiers::{AuthenticatorId, SecureUserId};
     use finger_guard::rng;
+    use finger_guard::time::Instant;
     use openssl::bn::BigNumContext;
     use openssl::ec::{EcGroup, EcKey, PointConversionForm};
     use openssl::pkey::{PKey, Private};
@@ -659,22 +662,19 @@ mod tests {
         let sensor_id = 1_i32;
         let user_id = 1_i32;
         let sup = SensorUserPair { sensorId: sensor_id, userId: user_id };
+        let secure_user_id_int = 0x1337BEEF_i64;
+        let secure_user_id = SecureUserId::from(secure_user_id_int);
 
         // ---- Start Enrollment Test ----
-
-        let challenge = service.generateChallenge(&sup).unwrap();
-        let secure_user_id = 0x1337BEEF as i64;
-        let mut hat = HardwareAuthToken {
-            version: 0,
-            challenge: challenge,
-            userId: secure_user_id,
-            authenticatorId: 0,
-            authenticatorType: 0,
-            timestamp: 0,
-            mac: vec![],
-        };
+        let hat = UnsignedHat::new(
+            assert_ok!(service.generateChallenge(&sup)),
+            secure_user_id,
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = assert_ok!(hat.sign(&auth_token_key));
         let nonce = rng::generate_random_vec::<32>();
-        hat.mac = Vec::from(assert_ok!(crypto::compute_hmac!(&auth_token_key, &hat)));
         let session_resp = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
         let hmac = assert_ok!(crypto::compute_hmac!(
             &sk,
@@ -700,8 +700,14 @@ mod tests {
         assert!(hmac == finish_resp.mac.as_slice());
 
         // Test enrollment session cancellation.
-        hat.challenge = assert_ok!(service.generateChallenge(&sup));
-        hat.mac = Vec::from(assert_ok!(crypto::compute_hmac!(&auth_token_key, &hat)));
+        let hat = UnsignedHat::new(
+            assert_ok!(service.generateChallenge(&sup)),
+            secure_user_id,
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = assert_ok!(hat.sign(&auth_token_key));
         let nonce = rng::generate_random_vec::<32>();
         let _ = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
         let cancel_result = EnrollmentResult { enrolled: false };
@@ -709,7 +715,7 @@ mod tests {
         // ---- End Enrollment Test ----
 
         // ---- Start Authentication Test ----
-        let challenge = 0xc4a11e49e as i64;
+        let challenge = 0xc4a11e49e_i64;
         let nonce = rng::generate_random_vec::<32>();
         let session_resp = assert_ok!(service.prepareAuthSession(&sup, challenge, &nonce));
         let hmac = assert_ok!(crypto::compute_hmac!(
@@ -726,10 +732,10 @@ mod tests {
             &TestBlob(&user_id.to_be_bytes()),
             &TestBlob(b"fpmcuauth")
         ));
-        let auth_result = AuthenticationResult { authenticated: true, mac: hmac.into() };
+        let auth_result = AuthenticationResult::from(hmac);
         let valid_hat = assert_ok!(service.finishAuthSession(&sup, &auth_result));
         assert_eq!(valid_hat.challenge, challenge);
-        assert_eq!(valid_hat.userId, secure_user_id);
+        assert_eq!(valid_hat.userId, secure_user_id_int);
         assert_eq!(valid_hat.authenticatorId, new_auth_id);
         assert_ne!(valid_hat.timestamp, 0);
         assert!(

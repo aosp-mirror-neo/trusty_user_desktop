@@ -22,6 +22,7 @@ use crate::hat::SignedHat;
 use crate::identifiers::SensorStateIndex;
 use crate::rng;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
+    AuthenticationResult::AuthenticationResult,
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
@@ -269,6 +270,14 @@ impl From<Hmac> for Key {
         Self { bytes: value.bytes }
     }
 }
+// HMACs can also be reported as an authentication result.
+impl From<Hmac> for AuthenticationResult {
+    fn from(value: Hmac) -> Self {
+        // An HMAC is only provided on a successful authentication, so the authenticated bit is
+        // assumed to be true if you're constructing a result from an HMAC.
+        Self { authenticated: true, mac: value.bytes.to_vec() }
+    }
+}
 impl ExportToAidl<SignedHat> for Hmac {
     fn export(&self, out: &mut SignedHat) {
         out.mac = self.bytes.to_vec();
@@ -292,13 +301,6 @@ impl ExportToAidl<PrepareEnrollSessionResponse> for Hmac {
 impl ExportToAidl<FinishEnrollSessionResponse> for Hmac {
     fn export(&self, out: &mut FinishEnrollSessionResponse) {
         out.mac = self.bytes.to_vec();
-    }
-}
-// Allow HMACs to be converted into bytes in tests, to allow them to be used to construct realistic
-// input request messages.
-impl From<Hmac> for Vec<u8> {
-    fn from(value: Hmac) -> Self {
-        value.bytes.to_vec()
     }
 }
 
