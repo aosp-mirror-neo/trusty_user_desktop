@@ -35,7 +35,6 @@ use finger_guard::rng;
 use finger_guard::time::Instant;
 use log::error;
 use once_cell::sync::OnceCell;
-use openssl::pkey::{PKey, Private};
 use std::collections::BTreeMap;
 use std::default::Default;
 use std::mem;
@@ -131,9 +130,7 @@ impl FingerGuardService {
         let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
         let server_public_key_bytes = crypto::ec_public_key_serialization(&server_private_key)
             .wrap_openssl_err("failed to serialize server public key")?;
-        let server_private_key: PKey<Private> =
-            server_private_key.try_into().wrap_openssl_err("failed to convert ec key to pkey")?;
-        let pk = crypto::perform_ecdh(&server_private_key, client_public_key_bytes)?;
+        let pk = crypto::perform_ecdh(server_private_key, client_public_key_bytes)?;
         // generate random tpm_seed.
         let tpm_seed = crypto::Secret::generate();
         let mac = crypto::compute_hmac!(&pk, &HandshakeMessage)?;
@@ -167,7 +164,7 @@ impl FingerGuardService {
         let mut tag = vec![0u8; 16];
         let wrapped_tpm_seed = crypto::encrypt_aes256_gcm(
             &new_sk,
-            Some(iv.as_slice()),
+            iv.as_slice(),
             b"tpm_seed", // aad = "tpm_seed"
             &init_params.tpm_seed,
             tag.as_mut_slice(),
@@ -564,7 +561,6 @@ mod tests {
     use finger_guard::time::Instant;
     use openssl::bn::BigNumContext;
     use openssl::ec::{EcGroup, EcKey, PointConversionForm};
-    use openssl::pkey::{PKey, Private};
     use test::{assert, assert_eq, assert_ne, assert_ok, skip};
 
     // Struct used in tests to allow arbitrary blobs to be supplied to the HMAC generator.
@@ -592,13 +588,12 @@ mod tests {
         // Prepare the client key pair.
         let group = assert_ok!(EcGroup::from_curve_name(NIST_P256_CURVE_NAME));
         let mut ctx = assert_ok!(BigNumContext::new());
-        let client_private_key: EcKey<Private> = assert_ok!(EcKey::generate(&group));
+        let client_private_key = assert_ok!(EcKey::generate(&group));
         let client_public_key_bytes = assert_ok!(client_private_key.public_key().to_bytes(
             &group,
             PointConversionForm::UNCOMPRESSED,
             &mut ctx
         ));
-        let client_private_key: PKey<Private> = assert_ok!(client_private_key.try_into());
 
         // ECDH with the server. If the service has already done a handshake then it's not
         // possible to run this test, skip it and move on.
@@ -612,7 +607,7 @@ mod tests {
         let server_public_key_bytes = handshake.serverPublicKey;
 
         // Derive PK from the client side.
-        let pk = assert_ok!(crypto::perform_ecdh(&client_private_key, &server_public_key_bytes));
+        let pk = assert_ok!(crypto::perform_ecdh(client_private_key, &server_public_key_bytes));
 
         // Check the computed MAC matches the one in the response.
         let hmac = assert_ok!(crypto::compute_hmac!(&pk, &TestBlob(b"tofu")));
@@ -637,7 +632,7 @@ mod tests {
         let aad = b"tpm_seed";
         assert_ok!(crypto::decrypt_aes256_gcm(
             &sk,
-            Some(iv.as_slice()),
+            iv.as_slice(),
             aad,
             encrypted_tpm_seed.as_slice(),
             tag.as_slice(),
@@ -646,7 +641,7 @@ mod tests {
         // Bad AAD leads to a decryption error.
         assert!(crypto::decrypt_aes256_gcm(
             &sk,
-            Some(iv.as_slice()),
+            iv.as_slice(),
             b"incorrect_aad",
             encrypted_tpm_seed.as_slice(),
             tag.as_slice(),
