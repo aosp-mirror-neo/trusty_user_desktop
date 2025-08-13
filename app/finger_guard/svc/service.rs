@@ -35,7 +35,6 @@ use finger_guard::rng;
 use finger_guard::time::Instant;
 use log::error;
 use once_cell::sync::OnceCell;
-use openssl::pkey::{PKey, Private};
 use std::collections::BTreeMap;
 use std::default::Default;
 use std::mem;
@@ -131,9 +130,7 @@ impl FingerGuardService {
         let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
         let server_public_key_bytes = crypto::ec_public_key_serialization(&server_private_key)
             .wrap_openssl_err("failed to serialize server public key")?;
-        let server_private_key: PKey<Private> =
-            server_private_key.try_into().wrap_openssl_err("failed to convert ec key to pkey")?;
-        let pk = crypto::perform_ecdh(&server_private_key, client_public_key_bytes)?;
+        let pk = crypto::perform_ecdh(server_private_key, client_public_key_bytes)?;
         // generate random tpm_seed.
         let tpm_seed = crypto::Secret::generate();
         let mac = crypto::compute_hmac!(&pk, &HandshakeMessage)?;
@@ -167,7 +164,7 @@ impl FingerGuardService {
         let mut tag = vec![0u8; 16];
         let wrapped_tpm_seed = crypto::encrypt_aes256_gcm(
             &new_sk,
-            Some(iv.as_slice()),
+            iv.as_slice(),
             b"tpm_seed", // aad = "tpm_seed"
             &init_params.tpm_seed,
             tag.as_mut_slice(),
@@ -554,14 +551,16 @@ mod tests {
     use crate::keymint;
     use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
         AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
-        HardwareAuthToken::HardwareAuthToken, SensorUserPair::SensorUserPair,
+        SensorUserPair::SensorUserPair,
     };
     use finger_guard::crypto::{self, NIST_P256_CURVE_NAME};
     use finger_guard::error::ServiceResult;
+    use finger_guard::hat::{AuthenticatorType, UnsignedHat};
+    use finger_guard::identifiers::{AuthenticatorId, SecureUserId};
     use finger_guard::rng;
+    use finger_guard::time::Instant;
     use openssl::bn::BigNumContext;
     use openssl::ec::{EcGroup, EcKey, PointConversionForm};
-    use openssl::pkey::{PKey, Private};
     use test::{assert, assert_eq, assert_ne, assert_ok, skip};
 
     // Struct used in tests to allow arbitrary blobs to be supplied to the HMAC generator.
@@ -589,13 +588,12 @@ mod tests {
         // Prepare the client key pair.
         let group = assert_ok!(EcGroup::from_curve_name(NIST_P256_CURVE_NAME));
         let mut ctx = assert_ok!(BigNumContext::new());
-        let client_private_key: EcKey<Private> = assert_ok!(EcKey::generate(&group));
+        let client_private_key = assert_ok!(EcKey::generate(&group));
         let client_public_key_bytes = assert_ok!(client_private_key.public_key().to_bytes(
             &group,
             PointConversionForm::UNCOMPRESSED,
             &mut ctx
         ));
-        let client_private_key: PKey<Private> = assert_ok!(client_private_key.try_into());
 
         // ECDH with the server. If the service has already done a handshake then it's not
         // possible to run this test, skip it and move on.
@@ -609,7 +607,7 @@ mod tests {
         let server_public_key_bytes = handshake.serverPublicKey;
 
         // Derive PK from the client side.
-        let pk = assert_ok!(crypto::perform_ecdh(&client_private_key, &server_public_key_bytes));
+        let pk = assert_ok!(crypto::perform_ecdh(client_private_key, &server_public_key_bytes));
 
         // Check the computed MAC matches the one in the response.
         let hmac = assert_ok!(crypto::compute_hmac!(&pk, &TestBlob(b"tofu")));
@@ -634,7 +632,7 @@ mod tests {
         let aad = b"tpm_seed";
         assert_ok!(crypto::decrypt_aes256_gcm(
             &sk,
-            Some(iv.as_slice()),
+            iv.as_slice(),
             aad,
             encrypted_tpm_seed.as_slice(),
             tag.as_slice(),
@@ -643,7 +641,7 @@ mod tests {
         // Bad AAD leads to a decryption error.
         assert!(crypto::decrypt_aes256_gcm(
             &sk,
-            Some(iv.as_slice()),
+            iv.as_slice(),
             b"incorrect_aad",
             encrypted_tpm_seed.as_slice(),
             tag.as_slice(),
@@ -659,22 +657,19 @@ mod tests {
         let sensor_id = 1_i32;
         let user_id = 1_i32;
         let sup = SensorUserPair { sensorId: sensor_id, userId: user_id };
+        let secure_user_id_int = 0x1337BEEF_i64;
+        let secure_user_id = SecureUserId::from(secure_user_id_int);
 
         // ---- Start Enrollment Test ----
-
-        let challenge = service.generateChallenge(&sup).unwrap();
-        let secure_user_id = 0x1337BEEF as i64;
-        let mut hat = HardwareAuthToken {
-            version: 0,
-            challenge: challenge,
-            userId: secure_user_id,
-            authenticatorId: 0,
-            authenticatorType: 0,
-            timestamp: 0,
-            mac: vec![],
-        };
+        let hat = UnsignedHat::new(
+            assert_ok!(service.generateChallenge(&sup)),
+            secure_user_id,
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = assert_ok!(hat.sign(&auth_token_key));
         let nonce = rng::generate_random_vec::<32>();
-        hat.mac = Vec::from(assert_ok!(crypto::compute_hmac!(&auth_token_key, &hat)));
         let session_resp = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
         let hmac = assert_ok!(crypto::compute_hmac!(
             &sk,
@@ -700,8 +695,14 @@ mod tests {
         assert!(hmac == finish_resp.mac.as_slice());
 
         // Test enrollment session cancellation.
-        hat.challenge = assert_ok!(service.generateChallenge(&sup));
-        hat.mac = Vec::from(assert_ok!(crypto::compute_hmac!(&auth_token_key, &hat)));
+        let hat = UnsignedHat::new(
+            assert_ok!(service.generateChallenge(&sup)),
+            secure_user_id,
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = assert_ok!(hat.sign(&auth_token_key));
         let nonce = rng::generate_random_vec::<32>();
         let _ = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
         let cancel_result = EnrollmentResult { enrolled: false };
@@ -709,7 +710,7 @@ mod tests {
         // ---- End Enrollment Test ----
 
         // ---- Start Authentication Test ----
-        let challenge = 0xc4a11e49e as i64;
+        let challenge = 0xc4a11e49e_i64;
         let nonce = rng::generate_random_vec::<32>();
         let session_resp = assert_ok!(service.prepareAuthSession(&sup, challenge, &nonce));
         let hmac = assert_ok!(crypto::compute_hmac!(
@@ -726,10 +727,10 @@ mod tests {
             &TestBlob(&user_id.to_be_bytes()),
             &TestBlob(b"fpmcuauth")
         ));
-        let auth_result = AuthenticationResult { authenticated: true, mac: hmac.into() };
+        let auth_result = AuthenticationResult::from(hmac);
         let valid_hat = assert_ok!(service.finishAuthSession(&sup, &auth_result));
         assert_eq!(valid_hat.challenge, challenge);
-        assert_eq!(valid_hat.userId, secure_user_id);
+        assert_eq!(valid_hat.userId, secure_user_id_int);
         assert_eq!(valid_hat.authenticatorId, new_auth_id);
         assert_ne!(valid_hat.timestamp, 0);
         assert!(

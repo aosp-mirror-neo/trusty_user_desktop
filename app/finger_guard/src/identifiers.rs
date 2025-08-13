@@ -31,7 +31,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 ///
 /// It is equivalent to a SensorUserPair defined in the service interface.
 /// Within the service, this type should be used instead of the AIDL object.
-#[derive(Clone, PartialOrd, Ord, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialOrd, Ord, Eq, PartialEq, Debug)]
 pub struct SensorStateIndex {
     sensor_id: u32,
     user_id: u32,
@@ -65,7 +65,7 @@ impl HmacSignable for SensorStateIndex {
 }
 
 /// Newtype that encapsulates an authenticator id.
-#[derive(Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
+#[derive(Copy, Clone, Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
 pub struct AuthenticatorId(i64);
 
@@ -88,7 +88,7 @@ impl ExportToAidl<SignedHat> for AuthenticatorId {
 }
 
 /// Newtype that encapsulates a secure user id.
-#[derive(Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
+#[derive(Copy, Clone, Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
 pub struct SecureUserId(u64);
 

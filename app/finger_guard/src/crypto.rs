@@ -22,6 +22,7 @@ use crate::hat::SignedHat;
 use crate::identifiers::SensorStateIndex;
 use crate::rng;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
+    AuthenticationResult::AuthenticationResult,
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
@@ -152,17 +153,18 @@ pub fn ec_public_key_serialization(
 
 /// Perform a DH exchange using a private and public key, returning the new private key.
 pub fn perform_ecdh(
-    server_private_key: &PKey<Private>,
+    server_private_key: EcKey<Private>,
     client_public_key_bytes: &[u8],
 ) -> ServiceResult<Key> {
     // Perform all of the crypto operations to produce the new key.
     let pk = (|| {
+        let server_private_key: PKey<Private> = server_private_key.try_into()?;
         let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
         let mut ctx = BigNumContext::new()?;
         let client_public_point = EcPoint::from_bytes(&group, client_public_key_bytes, &mut ctx)?;
         let client_public_key: PKey<Public> =
             EcKey::from_public_key(&group, &client_public_point)?.try_into()?;
-        let mut pk_deriver = Deriver::new(server_private_key)?;
+        let mut pk_deriver = Deriver::new(&server_private_key)?;
         pk_deriver.set_peer(&client_public_key)?;
         let pk = pk_deriver.derive_to_vec()?;
         Ok(pk)
@@ -182,7 +184,7 @@ pub fn perform_ecdh(
 /// Encrypt a message using AES256-GCM with the given Hmac as a key.
 pub fn encrypt_aes256_gcm(
     key: &Hmac,
-    iv: Option<&[u8]>,
+    iv: &[u8],
     aad: &[u8],
     data: &Secret,
     tag: &mut [u8],
@@ -190,7 +192,7 @@ pub fn encrypt_aes256_gcm(
     openssl::symm::encrypt_aead(
         Cipher::aes_256_gcm(),
         key.bytes.as_slice(),
-        iv,
+        Some(iv),
         aad,
         &data.bytes,
         tag,
@@ -200,7 +202,7 @@ pub fn encrypt_aes256_gcm(
 /// Decrypt a message using AES256-GCM with the given Hmac as a key.
 pub fn decrypt_aes256_gcm(
     key: &Hmac,
-    iv: Option<&[u8]>,
+    iv: &[u8],
     aad: &[u8],
     data: &[u8],
     tag: &[u8],
@@ -208,7 +210,7 @@ pub fn decrypt_aes256_gcm(
     let secret = openssl::symm::decrypt_aead(
         Cipher::aes_256_gcm(),
         key.bytes.as_slice(),
-        iv,
+        Some(iv),
         aad,
         data,
         tag,
@@ -269,6 +271,14 @@ impl From<Hmac> for Key {
         Self { bytes: value.bytes }
     }
 }
+// HMACs can also be reported as an authentication result.
+impl From<Hmac> for AuthenticationResult {
+    fn from(value: Hmac) -> Self {
+        // An HMAC is only provided on a successful authentication, so the authenticated bit is
+        // assumed to be true if you're constructing a result from an HMAC.
+        Self { authenticated: true, mac: value.bytes.to_vec() }
+    }
+}
 impl ExportToAidl<SignedHat> for Hmac {
     fn export(&self, out: &mut SignedHat) {
         out.mac = self.bytes.to_vec();
@@ -292,13 +302,6 @@ impl ExportToAidl<PrepareEnrollSessionResponse> for Hmac {
 impl ExportToAidl<FinishEnrollSessionResponse> for Hmac {
     fn export(&self, out: &mut FinishEnrollSessionResponse) {
         out.mac = self.bytes.to_vec();
-    }
-}
-// Allow HMACs to be converted into bytes in tests, to allow them to be used to construct realistic
-// input request messages.
-impl From<Hmac> for Vec<u8> {
-    fn from(value: Hmac) -> Self {
-        value.bytes.to_vec()
     }
 }
 
@@ -375,7 +378,10 @@ pub fn sensor_session_message_hmac(
 
 #[cfg(test)]
 mod test {
-    use super::{compute_hmac, HmacGenerator, HmacSignable, Key};
+    use super::{
+        compute_hmac, decrypt_aes256_gcm, ec_keygen, ec_public_key_serialization,
+        encrypt_aes256_gcm, perform_ecdh, Hmac, HmacGenerator, HmacSignable, Key, Secret,
+    };
     use crate::error::ServiceResult;
     use std::array;
 
@@ -464,5 +470,61 @@ mod test {
             0x1A, 0x99, 0x8B, 0x9E,
         ];
         assert_eq!(hmac.bytes, expected);
+    }
+
+    #[test]
+    fn test_key_exchange() {
+        // Generate two keys.
+        let client_private = ec_keygen().expect("client keygen failed");
+        let server_private = ec_keygen().expect("server keygen failed");
+        // Do a Diffie-Hellman exchange.
+        let client_public = ec_public_key_serialization(&client_private)
+            .expect("could not get client public key bytes");
+        let server_public = ec_public_key_serialization(&server_private)
+            .expect("could not get server public key bytes");
+        let client_key = perform_ecdh(client_private, server_public.as_slice())
+            .expect("client handshake failed");
+        let server_key = perform_ecdh(server_private, client_public.as_slice())
+            .expect("server handshake failed");
+        // We should now have matching keys.
+        assert_eq!(client_key.bytes, server_key.bytes);
+    }
+
+    #[test]
+    fn test_encrypt_round_trip() {
+        let key = Key { bytes: array::from_fn(|i| i as u8 + 1) };
+        let hmac = compute_hmac!(&key, &TestBlob(b"something")).expect("HMAC computation failed");
+        let iv: [u8; 12] = array::from_fn(|i| i as u8);
+        let plaintext = Secret { bytes: array::from_fn(|i| i as u8) };
+        let mut tag = [0_u8; 16];
+        let ciphertext = encrypt_aes256_gcm(&hmac, &iv, b"some_aad", &plaintext, &mut tag)
+            .expect("encryption failed");
+        assert_ne!(plaintext.bytes, ciphertext.as_slice());
+        let decrypted = decrypt_aes256_gcm(&hmac, &iv, b"some_aad", &ciphertext, &tag)
+            .expect("decryption failed");
+        assert_eq!(plaintext.bytes, decrypted.bytes);
+    }
+
+    #[test]
+    fn test_decrypt_fails() {
+        let key = Key { bytes: array::from_fn(|i| i as u8 + 1) };
+        let hmac = compute_hmac!(&key, &TestBlob(b"something")).expect("HMAC computation failed");
+        let iv: [u8; 12] = array::from_fn(|i| i as u8);
+        let plaintext = Secret { bytes: array::from_fn(|i| i as u8) };
+        let mut tag = [0_u8; 16];
+        let ciphertext = encrypt_aes256_gcm(&hmac, &iv, b"some_aad", &plaintext, &mut tag)
+            .expect("encryption failed");
+        decrypt_aes256_gcm(&Hmac { bytes: [0; 32] }, &iv, b"some_aad", &ciphertext, &tag)
+            .err()
+            .expect("decrypt worked with bad key");
+        decrypt_aes256_gcm(&hmac, &[0; 12], b"some_aad", &ciphertext, &tag)
+            .err()
+            .expect("decrypt worked with bad IV");
+        decrypt_aes256_gcm(&hmac, &iv, b"bad_aad", &ciphertext, &tag)
+            .err()
+            .expect("decrypt worked with bad AAD");
+        decrypt_aes256_gcm(&hmac, &iv, b"some_aad", &ciphertext, &tag.map(|x| x + 1))
+            .err()
+            .expect("decrypt worked with bad tag");
     }
 }
