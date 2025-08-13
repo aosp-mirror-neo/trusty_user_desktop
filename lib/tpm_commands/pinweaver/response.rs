@@ -68,7 +68,10 @@ impl<R: ?Sized + ResponseData> Response<R> {
         }
         if !matches!(
             self.header.result_code,
-            ResultCode::Success | ResultCode::SuccessWithIncrement
+            ResultCode::Success
+                | ResultCode::SuccessWithIncrement
+                | ResultCode::LowentAuthFailed
+                | ResultCode::RateLimitReached
         ) {
             return Err(Error::ResultCode(self.header.result_code));
         }
@@ -80,7 +83,11 @@ impl<R: ?Sized + ResponseData> Response<R> {
                 received: received_data_size,
             });
         }
-        self.data.check_consistency(tree_params)
+        // An empty unimported leaf is returned for ResultCode::RateLimitReached.
+        if self.header.result_code != ResultCode::RateLimitReached {
+            self.data.check_consistency(tree_params)?
+        }
+        Ok(())
     }
 }
 
@@ -137,6 +144,20 @@ pub struct ResponseHeader {
     pub root: Hash,
 }
 
+/// Intermediate type when parsing responses since the data may be empty on error.
+#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
+pub struct UnparsedResponse(pub [u8]);
+
+impl ResponseData for UnparsedResponse {
+    type RequestData = request::UnparsedRequest;
+
+    /// Checks the validity of the message-type-specific data.
+    fn check_consistency(&self, _tree_params: &TreeParams) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
 /// The response data from resetting a tree.
 ///
 /// No extra data comes with the response.
@@ -177,6 +198,8 @@ pub type TryAuth = WithUnimportedLeafData<TryAuthHeader>;
 ///
 /// The unimported leaf is used for the `LowentAuthfailed` and `Success` return codes.
 // TODO: b/359374997 - confirm that unimported leaf data validation still works for other errors.
+#[derive(Clone, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
 pub struct TryAuthHeader {
     /// Used for the `RateLimitReached` return code only.
     pub seconds_to_wait: TimeDiff,

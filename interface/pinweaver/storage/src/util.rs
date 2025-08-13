@@ -205,6 +205,16 @@ impl<T> SerdeOption<T> {
             Self::Some(v) => Some(v),
         }
     }
+
+    /// Return true if self is SerdeOption::None.
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// Return true if self is SerdeOption::Some.
+    pub fn is_some(&self) -> bool {
+        matches!(self, Self::Some(_))
+    }
 }
 
 impl<T> From<SerdeOption<T>> for Option<T> {

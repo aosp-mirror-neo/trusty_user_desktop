@@ -14,6 +14,12 @@ pub use android_desktop_security_pinweaver::aidl::android::desktop::security::pi
     TryAuthResponse::TryAuthResponse,
 };
 
+/// Convert LeafId into an i64 value that can be used with storage.
+pub const fn leafid_value(mode: &LeafId) -> i64 {
+    let upper: i64 = (mode.leafSet.get() as i64) << 32;
+    upper | mode.id as i64
+}
+
 /// Constructs the appropriate delay schedule entry table to request no rate limiting.
 ///
 /// An empty delay schedule table is rejected, so use this to opt-out of rate limiting.

@@ -4,7 +4,10 @@ use super::{
     path_auxiliary_hash_count, response, DelaySchedule, Hash, Iv, Label, LeafHeader, LeafVersion,
     Overflow, Secret, TreeParams, ValidPcrCriteria, WithUnimportedLeafData, PROTOCOL_VERSION,
 };
-use crate::{TpmvRequest, TpmvRequestBuild, NO_SESSION_TAG, VENDOR_COMMAND_ORDINAL};
+use crate::{
+    pinweaver::{AuthChannel, LeafType, TimeDiff},
+    TpmvRequest, TpmvRequestBuild, NO_SESSION_TAG, VENDOR_COMMAND_ORDINAL,
+};
 use zerocopy::{
     FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, Unaligned, BE, LE, U16, U32,
 };
@@ -109,7 +112,7 @@ impl<Header: FromBytes + KnownLayout + Immutable + IntoBytes + Unaligned + std::
 }
 
 /// Identifies the correct message type and response type from part of a request.
-pub trait RequestPart {
+pub trait RequestPart: FromBytes + KnownLayout + Immutable + IntoBytes + Unaligned {
     /// The type of message that should always be filled in this request.
     const MESSAGE_TYPE: MessageType;
 
@@ -119,14 +122,10 @@ pub trait RequestPart {
     type ResponseData: ?Sized;
 }
 
-impl<Header: FromBytes + KnownLayout + Immutable + IntoBytes + Unaligned + RequestPart> RequestData
-    for WithPathHashes<Header>
-where
-    Header::ResponseData: response::ResponseData<RequestData = Self>,
-{
+impl RequestData for InsertLeaf {
     type BuildParams = TreeParams;
-    type ResponseData = Header::ResponseData;
-    const MESSAGE_TYPE: MessageType = Header::MESSAGE_TYPE;
+    type ResponseData = response::InsertLeaf;
+    const MESSAGE_TYPE: MessageType = MessageType::InsertLeaf;
 
     fn init(&mut self, _: TreeParams) -> Result<(), Overflow> {
         // No header requires init.
@@ -137,7 +136,33 @@ where
         let tail_size = path_auxiliary_hash_count(params.bits_per_level, params.height)?
             .checked_mul(size_of::<Hash>())
             .ok_or(Overflow)?;
-        size_of::<Header>().checked_add(tail_size).ok_or(Overflow)?.try_into().map_err(|_| Overflow)
+        size_of::<InsertLeafHeader>()
+            .checked_add(tail_size)
+            .ok_or(Overflow)?
+            .try_into()
+            .map_err(|_| Overflow)
+    }
+}
+
+impl RequestData for RemoveLeaf {
+    type BuildParams = TreeParams;
+    type ResponseData = response::RemoveLeaf;
+    const MESSAGE_TYPE: MessageType = MessageType::RemoveLeaf;
+
+    fn init(&mut self, _: TreeParams) -> Result<(), Overflow> {
+        // No header requires init.
+        Ok(())
+    }
+
+    fn expected_size(params: &TreeParams) -> Result<u32, Overflow> {
+        let tail_size = path_auxiliary_hash_count(params.bits_per_level, params.height)?
+            .checked_mul(size_of::<Hash>())
+            .ok_or(Overflow)?;
+        size_of::<RemoveLeafHeader>()
+            .checked_add(tail_size)
+            .ok_or(Overflow)?
+            .try_into()
+            .map_err(|_| Overflow)
     }
 }
 
@@ -160,20 +185,31 @@ pub struct UnimportedLeafDataBuildParams {
     pub tree_params: TreeParams,
 }
 
-impl<Header: FromBytes + KnownLayout + Immutable + IntoBytes + Unaligned + RequestPart> RequestData
-    for WithUnimportedLeafData<Header>
-where
-    Header::ResponseData: response::ResponseData<RequestData = Self>,
-{
+impl UnimportedLeafDataBuildParams {
+    /// Create an UnimportedLeafDataBuildParams from the provided parameters.
+    pub fn new(leaf_header: &LeafHeader, tree_params: TreeParams) -> Self {
+        UnimportedLeafDataBuildParams {
+            leaf_version: *leaf_header.leaf_version(),
+            pub_len: leaf_header.pub_len.get(),
+            sec_len: leaf_header.sec_len.get(),
+            tree_params,
+        }
+    }
+}
+
+impl RequestData for TryAuth {
     type BuildParams = UnimportedLeafDataBuildParams;
-    type ResponseData = Header::ResponseData;
-    const MESSAGE_TYPE: MessageType = Header::MESSAGE_TYPE;
+    type ResponseData = response::TryAuth;
+    const MESSAGE_TYPE: MessageType = MessageType::TryAuth;
 
     fn expected_size(params: &UnimportedLeafDataBuildParams) -> Result<u32, Overflow> {
         let TreeParams { bits_per_level, height } = params.tree_params;
         let path_hashes = path_auxiliary_hash_count(bits_per_level, height)?;
         let static_len = const {
-            size_of::<Header>() + size_of::<LeafHeader>() + size_of::<Hash>() + size_of::<Iv>()
+            size_of::<TryAuthHeader>()
+                + size_of::<LeafHeader>()
+                + size_of::<Hash>()
+                + size_of::<Iv>()
         };
         let pub_sec_len = usize::from(params.pub_len) + usize::from(params.sec_len);
         let path_hashes_size = path_hashes.checked_mul(size_of::<Hash>()).ok_or(Overflow)?;
@@ -206,6 +242,22 @@ pub struct RequestHeader {
     ///
     /// Does *not* include the size of this header.
     data_size: U16<LE>,
+}
+
+/// Intermediate type when parsing requests as a companion type for UnparsedResponse.
+#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
+pub struct UnparsedRequest(pub [u8]);
+
+impl RequestData for UnparsedRequest {
+    type ResponseData = response::UnparsedResponse;
+    type BuildParams = ();
+
+    const MESSAGE_TYPE: MessageType = MessageType::Invalid;
+
+    fn expected_size(_params: &Self::BuildParams) -> Result<u32, Overflow> {
+        Ok(0)
+    }
 }
 
 /// The type of PinWeaver request - identifies what the rest of the message should contain.
@@ -291,7 +343,20 @@ pub struct InsertLeafHeader {
     pub reset_secret: Secret,
 
     /// The Platform Configuration Register criteria used to validate a leaf.
+    /// Added in protocol V1.
     pub valid_pcr_criteria: ValidPcrCriteria,
+
+    /// Expiration delay (0 means no delay).
+    /// Added in protocol V2.
+    pub expiration_delay: TimeDiff,
+
+    /// Leaf type (LeafType::NORMAL is the default).
+    /// Added in protocol V2.
+    pub leaf_type: LeafType,
+
+    /// Auth channel (for leaf_type BIOMETRICS only).
+    /// Added in protocol V2.
+    pub auth_channel: AuthChannel,
 }
 
 impl RequestPart for InsertLeafHeader {

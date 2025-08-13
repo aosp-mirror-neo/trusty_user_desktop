@@ -19,7 +19,10 @@
 //! This protocol is not version-controlled: it must change in lockstep with `libpinweaver_storage`.
 
 use crate::util::{serde_fields, serde_zerocopy, SerdeVec};
-use std::{fmt::Debug, ops::Deref};
+use std::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub mod request;
@@ -51,6 +54,10 @@ pub const LEAF_SIZE: u32 = 389;
 /// Increasing this much further will require protocol restructuring
 /// as it can't be sent in a single datagram over vsock.
 pub const MAX_LARGE_SECRET_SIZE: u32 = 1024;
+
+/// Replacement operators need a temporary leaf_id since it is a unique field.
+pub const RESERVED_LEAF_ID: LeafId =
+    LeafId { leaf_set: LeafSet(U32::new(u32::MAX)), inner_id: U32::new(u32::MAX) };
 
 /// The interface to communicate with the storage daemon.
 pub trait StorageInterface {
@@ -88,13 +95,27 @@ pub use response::StorageResponse;
 pub struct U32(zerocopy::byteorder::U32<zerocopy::byteorder::LE>);
 impl U32 {
     /// Constructs an unaligned `u32`.
-    pub fn new(val: u32) -> Self {
+    pub const fn new(val: u32) -> Self {
         Self(zerocopy::byteorder::U32::new(val))
     }
 
     /// Gets the underlying `u32` value.
     pub fn get(&self) -> u32 {
         self.0.get()
+    }
+}
+
+impl Deref for U32 {
+    type Target = zerocopy::byteorder::U32<zerocopy::byteorder::LE>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for U32 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -169,6 +190,9 @@ pub struct TreeParams {
 /// A SHA-256 digest.
 pub struct TreeHash(#[cfg_attr(feature = "serde", serde(with = "util::hex_serde"))] pub [u8; 32]);
 
+/// Tree hash for empty leaves.
+pub const EMPTY_TREE_HASH: TreeHash = TreeHash([0; 32]);
+
 impl Deref for TreeHash {
     type Target = [u8; 32];
 
@@ -225,13 +249,15 @@ serde_zerocopy!(LargeSecretAuthTag, LargeSecretIv, LeafId, LeafSet, Path, TreeHa
 
 impl From<LeafId> for i64 {
     fn from(id: LeafId) -> i64 {
-        zerocopy::transmute!(id)
+        ((id.leaf_set.0.get() as i64) << 32) | (id.inner_id.get() as i64)
     }
 }
 
 impl From<i64> for LeafId {
     fn from(id: i64) -> LeafId {
-        zerocopy::transmute!(id)
+        let inner_id = U32::new((id & 0x00000000ffffffff) as u32);
+        let leaf_set = LeafSet(U32::new((u64::from_ne_bytes(id.to_ne_bytes()) >> 32) as u32));
+        LeafId { leaf_set, inner_id }
     }
 }
 

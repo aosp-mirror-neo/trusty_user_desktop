@@ -15,20 +15,123 @@
  */
 //! Unit tests.
 
-use gsc_svc_client::GscServiceClient;
-use log::info;
-use tpm_commands::pinweaver::Pinweaver;
+use crate::service::binder_error;
+use binder::Strong;
+use pinweaver_api::{
+    connect_pinweaver, DelayScheduleEntry, IPinWeaver, InsertMode, LeafId, LeafSet, TryAuthResponse,
+};
+
+/// TODO drop this when it is stabilized in std.
+macro_rules! assert_matches {
+    ($first:expr, $($second:pat_param)|+ $(if $third:expr)?) => {
+        let a = $first;
+        if !matches!(&a, $($second)|+ $(if $third)?) {
+            panic!(
+                "'{}' does not match '{}'; Got '{:?}'",
+                stringify!($first),
+                stringify!($($second)|+ $(if $third)?),
+                a
+            );
+        }
+    };
+}
 
 test::init!();
 
 #[test]
-fn pinweaver_test() {
-    let gsc = GscServiceClient::default();
+fn pinweaver_smoke_test() {
+    const DEFAULT_LEAF_ID: LeafId = LeafId { leafSet: LeafSet::WEAVER, id: 77i32 };
+    const DEFAULT_LOW_ENTROPY_SECRET: [u8; 32] = [5u8; 32];
+    const DEFAULT_HIGH_ENTROPY_SECRET: [u8; 32] = [6u8; 32];
+    const DEFAULT_LARGE_SECRET: [u8; 33] = [6u8; 33];
+    const DEFAULT_RESET_SECRET: [u8; 32] = [7u8; 32];
+    const DEFAULT_DELAY_SCHEDULE: [DelayScheduleEntry; 1] =
+        [DelayScheduleEntry { attemptCount: 1, delaySecs: 999 }];
 
-    // TODO(TBD) Replace with:
-    //   assert_matches!(gsc.sys_info(), Ok()))
-    // when assert_matches stablizes.
-    let result = gsc.sys_info();
-    info!("pinweaver current time: {:?}", result);
-    assert!(matches!(result, Ok(_)));
+    // Start from a known state.
+    let pinweaver: Strong<dyn IPinWeaver> =
+        connect_pinweaver().expect("connect_pinweaver() failed");
+
+    pinweaver.removeAll(LeafSet::ALL_LEAVES).expect("removeAll() failed");
+    log::info!("After removeAll()");
+
+    // Insert a fresh leaf.
+    pinweaver
+        .insert(
+            &DEFAULT_LEAF_ID,
+            &DEFAULT_LOW_ENTROPY_SECRET,
+            &DEFAULT_HIGH_ENTROPY_SECRET,
+            &DEFAULT_RESET_SECRET,
+            &DEFAULT_DELAY_SCHEDULE,
+            InsertMode::NEW_ONLY,
+        )
+        .expect("insert() failed");
+    log::info!("After first insert()");
+
+    // Insert with replacement.
+    pinweaver
+        .insert(
+            &DEFAULT_LEAF_ID,
+            &DEFAULT_LOW_ENTROPY_SECRET,
+            &DEFAULT_HIGH_ENTROPY_SECRET,
+            &DEFAULT_RESET_SECRET,
+            &DEFAULT_DELAY_SCHEDULE,
+            InsertMode::REPLACE_EXISTING,
+        )
+        .expect("insert() failed");
+    log::info!("After second insert()");
+
+    // Insert that fails with WouldReplace.
+    assert_eq!(
+        pinweaver.insert(
+            &DEFAULT_LEAF_ID,
+            &DEFAULT_LOW_ENTROPY_SECRET,
+            &DEFAULT_HIGH_ENTROPY_SECRET,
+            &DEFAULT_RESET_SECRET,
+            &DEFAULT_DELAY_SCHEDULE,
+            InsertMode::NEW_ONLY,
+        ),
+        Err(binder_error::leaf_exists())
+    );
+    log::info!("After third insert()");
+
+    // Try Auth that succeeds.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
+        Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_HIGH_ENTROPY_SECRET
+    );
+
+    // Try Auth that fails.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &[0u8; 32]),
+        Err(s) if s == &binder_error::low_entropy_auth_failed()
+    );
+
+    // Try Auth during back-off.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
+        Ok(TryAuthResponse::SecondsToWait(s)) if *s > 0
+    );
+
+    // Remove that succeeds.
+    pinweaver.remove(&DEFAULT_LEAF_ID).expect("remove() failed");
+
+    // Remove that failes with DoesNotExist.
+    assert_eq!(pinweaver.remove(&DEFAULT_LEAF_ID), Err(binder_error::leaf_not_found()));
+
+    // Check that large secrets work.
+    pinweaver
+        .insert(
+            &DEFAULT_LEAF_ID,
+            &DEFAULT_LOW_ENTROPY_SECRET,
+            &DEFAULT_LARGE_SECRET,
+            &DEFAULT_RESET_SECRET,
+            &DEFAULT_DELAY_SCHEDULE,
+            InsertMode::NEW_ONLY,
+        )
+        .expect("insert() failed");
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
+        Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_LARGE_SECRET
+    );
 }
