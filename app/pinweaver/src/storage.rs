@@ -3,7 +3,7 @@ use pinweaver_storage_api::{
     StorageInterface, StorageRequest, StorageResponse,
 };
 use std::sync::{Arc, Mutex, MutexGuard};
-use tipc::{Handle, TipcError, UnbufferedService};
+use tipc::{Handle, TipcError, UnbufferedService, MAX_MSG_HANDLES};
 use trusty_std::alloc::FallibleVec;
 use trusty_sys::Error;
 
@@ -102,5 +102,21 @@ impl StorageInterface for StorageClient {
         buf.resize(MAX_MESSAGE_SIZE, 0);
         let response: Response = handle.recv(&mut buf)?;
         Ok(response.0)
+    }
+
+    fn request_raw(&self, request: &[u8]) -> tipc::Result<Vec<u8>> {
+        let guard = self.lock()?;
+        let handle = guard.as_ref().ok_or(TipcError::SystemError(Error::NotReady))?;
+        handle.send_vectored(&[request], &[])?;
+        let mut buf: Vec<u8> = FallibleVec::try_with_capacity(MAX_MESSAGE_SIZE)?;
+        buf.resize(MAX_MESSAGE_SIZE, 0);
+        let mut handles: [Option<Handle>; MAX_MSG_HANDLES] = Default::default();
+        let (byte_count, handle_count) =
+            handle.recv_vectored(&mut [buf.as_mut_slice()], &mut handles)?;
+        if handle_count > 0 {
+            return Err(tipc::TipcError::InvalidHandle);
+        }
+        buf.resize(byte_count, 0);
+        Ok(buf)
     }
 }

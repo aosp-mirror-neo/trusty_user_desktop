@@ -137,6 +137,9 @@ serde_enums! {
 
         /// The response when starting to authenticate the low-entropy secret in a leaf.
         TryAuth(StartTryAuthResponseData) = 2,
+
+        /// The response when starting a replay operation.
+        LogReplay(StartLogReplayResponseData) = 3,
     }
 
     /// The suboperation-specific data for a commit-operation response.
@@ -202,6 +205,18 @@ pub struct StartTryAuthResponseData {
     pub large_key_info: SerdeOption<LargeSecretInfo>,
 }
 
+/// The response when starting to authenticate the low-entropy secret in a leaf.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Debug)]
+pub struct StartLogReplayResponseData {
+    /// The LeafId associated with the operation.
+    /// A new one in LeafSet::ALL might be allocated.
+    pub id: LeafId,
+
+    /// The encrypted leaf contents stored on disk.
+    pub leaf_contents: LeafContents,
+}
+
 /// Header for [`ContinueRemoveBulkResponse`].
 #[derive(Clone, Debug, FromBytes, KnownLayout, Immutable, IntoBytes)]
 #[repr(C)]
@@ -243,6 +258,7 @@ serde_fields! {
     CommitOpResponse { path, root_hash, op_data },
     StartInsertResponseData { replacing_path },
     StartTryAuthResponseData { leaf_contents, large_key_info },
+    StartLogReplayResponseData { id, leaf_contents },
     ContinueRemoveBulkResponse { header, hashes },
     RemoveHashes { leaf_hmac, tree_hashes },
 }

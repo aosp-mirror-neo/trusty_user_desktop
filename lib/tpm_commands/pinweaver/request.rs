@@ -195,6 +195,20 @@ impl UnimportedLeafDataBuildParams {
             tree_params,
         }
     }
+
+    /// Get the expected size of an UnimportedLeafData based on these parameters.
+    pub fn expected_size<H>(&self) -> Result<u32, Overflow> {
+        let TreeParams { bits_per_level, height } = self.tree_params;
+        let path_hashes = path_auxiliary_hash_count(bits_per_level, height)?;
+        let static_len = const {
+            size_of::<H>() + size_of::<LeafHeader>() + size_of::<Hash>() + size_of::<Iv>()
+        };
+        let pub_sec_len = usize::from(self.pub_len) + usize::from(self.sec_len);
+        let path_hashes_size = path_hashes.checked_mul(size_of::<Hash>()).ok_or(Overflow)?;
+        let dyn_len = pub_sec_len.checked_add(path_hashes_size).ok_or(Overflow)?;
+        let total_len = static_len.checked_add(dyn_len).ok_or(Overflow)?;
+        total_len.try_into().map_err(|_| Overflow)
+    }
 }
 
 impl RequestData for TryAuth {
@@ -203,19 +217,7 @@ impl RequestData for TryAuth {
     const MESSAGE_TYPE: MessageType = MessageType::TryAuth;
 
     fn expected_size(params: &UnimportedLeafDataBuildParams) -> Result<u32, Overflow> {
-        let TreeParams { bits_per_level, height } = params.tree_params;
-        let path_hashes = path_auxiliary_hash_count(bits_per_level, height)?;
-        let static_len = const {
-            size_of::<TryAuthHeader>()
-                + size_of::<LeafHeader>()
-                + size_of::<Hash>()
-                + size_of::<Iv>()
-        };
-        let pub_sec_len = usize::from(params.pub_len) + usize::from(params.sec_len);
-        let path_hashes_size = path_hashes.checked_mul(size_of::<Hash>()).ok_or(Overflow)?;
-        let dyn_len = pub_sec_len.checked_add(path_hashes_size).ok_or(Overflow)?;
-        let total_len = static_len.checked_add(dyn_len).ok_or(Overflow)?;
-        total_len.try_into().map_err(|_| Overflow)
+        params.expected_size::<TryAuthHeader>()
     }
 
     fn init(&mut self, params: UnimportedLeafDataBuildParams) -> Result<(), Overflow> {
@@ -397,6 +399,80 @@ pub struct TryAuthHeader {
 impl RequestPart for TryAuthHeader {
     const MESSAGE_TYPE: MessageType = MessageType::TryAuth;
     type ResponseData = response::TryAuth;
+}
+
+/// Reset auth request data.
+pub type ResetAuth = WithUnimportedLeafData<ResetAuthHeader>;
+
+/// Header for reset auth request data.
+#[derive(Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct ResetAuthHeader {
+    /// The reset secret for PinWeaver to check against the encrypted leaf contents.
+    pub reset_secret: Secret,
+    /// If strong_reset is non-zero, the expiration timestamp will be reset too.
+    pub strong_reset: u8,
+}
+
+impl RequestPart for ResetAuthHeader {
+    const MESSAGE_TYPE: MessageType = MessageType::ResetAuth;
+    type ResponseData = response::ResetAuth;
+}
+
+impl RequestData for ResetAuth {
+    const MESSAGE_TYPE: MessageType = MessageType::ResetAuth;
+    type ResponseData = response::ResetAuth;
+
+    type BuildParams = UnimportedLeafDataBuildParams;
+
+    fn expected_size(params: &Self::BuildParams) -> Result<u32, Overflow> {
+        params.expected_size::<ResetAuthHeader>()
+    }
+}
+
+/// Requests that get pinweaver log from the GSC.
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct GetLog {
+    /// The root on the storage side that needs to reconciled.
+    pub local_root: Hash,
+}
+
+impl RequestData for GetLog {
+    type BuildParams = ();
+    type ResponseData = response::GetLog;
+    const MESSAGE_TYPE: MessageType = MessageType::GetLog;
+
+    fn expected_size(_: &()) -> Result<u32, Overflow> {
+        Ok(size_of::<Self>().try_into().unwrap())
+    }
+}
+
+/// Log replay request data.
+pub type LogReplay = WithUnimportedLeafData<LogReplayHeader>;
+
+/// Log replay request header.
+#[derive(Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct LogReplayHeader {
+    /// The root hash associated with the log event.
+    pub log_root: Hash,
+}
+
+impl RequestPart for LogReplayHeader {
+    const MESSAGE_TYPE: MessageType = MessageType::LogReplay;
+    type ResponseData = response::LogReplay;
+}
+
+impl RequestData for LogReplay {
+    const MESSAGE_TYPE: MessageType = MessageType::LogReplay;
+    type ResponseData = response::LogReplay;
+
+    type BuildParams = UnimportedLeafDataBuildParams;
+
+    fn expected_size(params: &Self::BuildParams) -> Result<u32, Overflow> {
+        params.expected_size::<LogReplayHeader>()
+    }
 }
 
 /// Request system info from PinWeaver.

@@ -66,6 +66,9 @@ pub trait StorageInterface {
 
     /// Execute a storage request.
     fn request(&self, request: &StorageRequest) -> Result<StorageResponse, Self::Error>;
+
+    /// Execute a storage request from raw bytes.
+    fn request_raw(&self, request: &[u8]) -> Result<Vec<u8>, Self::Error>;
 }
 
 pub use request::StorageRequest;

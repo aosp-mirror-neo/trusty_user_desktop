@@ -15,11 +15,22 @@
  */
 //! Unit tests.
 
-use crate::service::binder_error;
+use crate::service::{api_to_storage, binder_error, gsc_to_storage};
 use binder::Strong;
+use gsc_svc_client::GscServiceClient;
 use pinweaver_api::{
     connect_pinweaver, DelayScheduleEntry, IPinWeaver, InsertMode, LeafId, LeafSet, TryAuthResponse,
 };
+use pinweaver_storage_api::{
+    request::{CommitOpRequest, StartOpRequest},
+    response::{StartOpResponse, StartOpResponseData, StartTryAuthResponseData},
+    util::{DeserializeExact, ForwardTipcSerialize, SerdeVec},
+    StorageRequest, StorageResponse, EMPTY_TREE_HASH,
+};
+use std::convert::AsRef;
+use tipc::{Deserialize, Handle, Serialize, Serializer};
+use tpm_commands::pinweaver::{Pinweaver, UnimportedLeafData};
+use zerocopy::FromBytes;
 
 /// TODO drop this when it is stabilized in std.
 macro_rules! assert_matches {
@@ -36,24 +47,63 @@ macro_rules! assert_matches {
     };
 }
 
+const DEFAULT_LEAF_ID: LeafId = LeafId { leafSet: LeafSet::WEAVER, id: 77i32 };
+const DEFAULT_LOW_ENTROPY_SECRET: [u8; 32] = [5u8; 32];
+const DEFAULT_HIGH_ENTROPY_SECRET: [u8; 32] = [6u8; 32];
+const DEFAULT_LARGE_SECRET: [u8; 33] = [6u8; 33];
+const DEFAULT_RESET_SECRET: [u8; 32] = [7u8; 32];
+const DEFAULT_DELAY_SCHEDULE: [DelayScheduleEntry; 1] =
+    [DelayScheduleEntry { attemptCount: 1, delaySecs: 999 }];
+const OTHER_LEAF_ID: LeafId = LeafId { leafSet: LeafSet::WEAVER, id: 88i32 };
+const OTHER_LOW_ENTROPY_SECRET: [u8; 32] = [8u8; 32];
+const OTHER_HIGH_ENTROPY_SECRET: [u8; 32] = [9u8; 32];
+const OTHER_DELAY_SCHEDULE: [DelayScheduleEntry; 1] =
+    [DelayScheduleEntry { attemptCount: 10, delaySecs: 999 }];
+const THIRD_LEAF_ID: LeafId = LeafId { leafSet: LeafSet::WEAVER, id: 99i32 };
+
 test::init!();
+
+/// A serializer that borrows its input bytes and does not allocate.
+#[derive(Default)]
+struct TestSerializer(Vec<u8>);
+
+impl<'a> Serializer<'a> for TestSerializer {
+    type Ok = ();
+    type Error = ();
+
+    fn serialize_bytes(&mut self, bytes: &'a [u8]) -> Result<Self::Ok, Self::Error> {
+        self.0.extend(bytes);
+        Ok(())
+    }
+
+    fn serialize_handle(&mut self, _handle: &'a Handle) -> Result<Self::Ok, Self::Error> {
+        panic!("no handles should be used");
+    }
+}
+
+/// A test-only helper to provide access to the storage daemon through IPinweaver.
+fn storage_request(
+    pinweaver: &dyn IPinWeaver,
+    request: &StorageRequest,
+) -> binder::Result<StorageResponse> {
+    let mut serializer = TestSerializer::default();
+    ForwardTipcSerialize(request).serialize(&mut serializer).expect("serialize failed");
+    let buffer = pinweaver.testStorage(serializer.0.as_slice())?;
+    let resp = DeserializeExact::<StorageResponse>::deserialize(buffer.as_slice(), &mut [])
+        .expect("deserialize failed");
+    Ok(resp.0)
+}
 
 #[test]
 fn pinweaver_smoke_test() {
-    const DEFAULT_LEAF_ID: LeafId = LeafId { leafSet: LeafSet::WEAVER, id: 77i32 };
-    const DEFAULT_LOW_ENTROPY_SECRET: [u8; 32] = [5u8; 32];
-    const DEFAULT_HIGH_ENTROPY_SECRET: [u8; 32] = [6u8; 32];
-    const DEFAULT_LARGE_SECRET: [u8; 33] = [6u8; 33];
-    const DEFAULT_RESET_SECRET: [u8; 32] = [7u8; 32];
-    const DEFAULT_DELAY_SCHEDULE: [DelayScheduleEntry; 1] =
-        [DelayScheduleEntry { attemptCount: 1, delaySecs: 999 }];
-
     // Start from a known state.
     let pinweaver: Strong<dyn IPinWeaver> =
         connect_pinweaver().expect("connect_pinweaver() failed");
 
     pinweaver.removeAll(LeafSet::ALL_LEAVES).expect("removeAll() failed");
     log::info!("After removeAll()");
+
+    assert_eq!(pinweaver.removeAll(LeafSet::WEAVER), Err(binder_error::leaf_not_found()));
 
     // Insert a fresh leaf.
     pinweaver
@@ -113,6 +163,20 @@ fn pinweaver_smoke_test() {
         Ok(TryAuthResponse::SecondsToWait(s)) if *s > 0
     );
 
+    // Reset Retries with wrong secret.
+    assert_matches!(
+        pinweaver.resetRetries(&DEFAULT_LEAF_ID, false, &DEFAULT_LOW_ENTROPY_SECRET),
+        Err(s) if s == &binder_error::auth_failed()
+    );
+
+    // Reset Retries that succeeds.
+    assert_matches!(pinweaver.resetRetries(&DEFAULT_LEAF_ID, false, &DEFAULT_RESET_SECRET), Ok(()));
+    // Make sure the back-off is cleared.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
+        Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_HIGH_ENTROPY_SECRET
+    );
+
     // Remove that succeeds.
     pinweaver.remove(&DEFAULT_LEAF_ID).expect("remove() failed");
 
@@ -133,5 +197,189 @@ fn pinweaver_smoke_test() {
     assert_matches!(
         pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
         Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_LARGE_SECRET
+    );
+
+    let gsc = GscServiceClient::default();
+    let mut buffer = Vec::new();
+    let log_entries = gsc.get_log(None, &mut buffer).expect("get_log() failed");
+    assert!(log_entries.len() > 0);
+
+    let _ = storage_request(pinweaver.as_ref(), &StorageRequest::GetStatus);
+
+    for id in 0i32..3 {
+        pinweaver
+            .insert(
+                &LeafId { leafSet: LeafSet::WEAVER, id },
+                &DEFAULT_LOW_ENTROPY_SECRET,
+                &DEFAULT_HIGH_ENTROPY_SECRET,
+                &DEFAULT_RESET_SECRET,
+                &DEFAULT_DELAY_SCHEDULE,
+                InsertMode::NEW_ONLY,
+            )
+            .expect("insert() failed");
+    }
+    pinweaver.removeAll(LeafSet::WEAVER).expect("removeAll() failed");
+    assert_eq!(pinweaver.removeAll(LeafSet::WEAVER), Err(binder_error::leaf_not_found()));
+}
+
+#[test]
+fn pinweaver_log_replay_test() {
+    // Start from a known state.
+    let pinweaver: Strong<dyn IPinWeaver> =
+        connect_pinweaver().expect("connect_pinweaver() failed");
+
+    pinweaver.removeAll(LeafSet::ALL_LEAVES).expect("removeAll() failed");
+    log::info!("After removeAll()");
+
+    pinweaver
+        .insert(
+            &DEFAULT_LEAF_ID,
+            &DEFAULT_LOW_ENTROPY_SECRET,
+            &DEFAULT_HIGH_ENTROPY_SECRET,
+            &DEFAULT_RESET_SECRET,
+            &OTHER_DELAY_SCHEDULE,
+            InsertMode::NEW_ONLY,
+        )
+        .expect("insert() failed");
+
+    pinweaver
+        .insert(
+            &OTHER_LEAF_ID,
+            &OTHER_LOW_ENTROPY_SECRET,
+            &OTHER_HIGH_ENTROPY_SECRET,
+            &DEFAULT_RESET_SECRET,
+            &OTHER_DELAY_SCHEDULE,
+            InsertMode::NEW_ONLY,
+        )
+        .expect("insert() failed");
+
+    // Try Auth that succeeds.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
+        Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_HIGH_ENTROPY_SECRET
+    );
+
+    // Back up the leaf contents to force storage out of sync.
+    let start_request = StartOpRequest::TryAuth(api_to_storage::leaf_id(&DEFAULT_LEAF_ID));
+    let resp = storage_request(pinweaver.as_ref(), &StorageRequest::StartOp(start_request.clone()))
+        .expect("storage request failed");
+    let (new_leaf_hmac, new_leaf_contents) = if let StorageResponse::StartOp(StartOpResponse {
+        op_data: StartOpResponseData::TryAuth(StartTryAuthResponseData { leaf_contents, .. }),
+        ..
+    }) = resp
+    {
+        let hmac = gsc_to_storage::hmac(
+            &UnimportedLeafData::ref_from_bytes(leaf_contents.as_ref())
+                .expect("parsing leaf data failed")
+                .hmac,
+        );
+        (hmac, leaf_contents)
+    } else {
+        panic!("unexpected response: {:?}", resp);
+    };
+    // Try Auth that fails.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &[0u8; 32]),
+        Err(s) if s == &binder_error::low_entropy_auth_failed()
+    );
+    // Roll back the try-auth with a fake operation.
+    let _ = storage_request(pinweaver.as_ref(), &StorageRequest::StartOp(start_request.clone()))
+        .expect("storage request failed");
+    let _ = storage_request(
+        pinweaver.as_ref(),
+        &StorageRequest::CommitOp(CommitOpRequest {
+            start_request,
+            new_leaf_hmac,
+            new_leaf_contents,
+        }),
+    )
+    .expect("storage request failed");
+
+    // Test log-replay.
+    pinweaver.reconcile().expect("reconcile failed");
+
+    pinweaver
+        .insert(
+            &THIRD_LEAF_ID,
+            &OTHER_LOW_ENTROPY_SECRET,
+            &DEFAULT_HIGH_ENTROPY_SECRET,
+            &DEFAULT_RESET_SECRET,
+            &OTHER_DELAY_SCHEDULE,
+            InsertMode::NEW_ONLY,
+        )
+        .expect("insert() failed");
+    // Remove the THIRD_LEAF_ID to test replaying an insert.
+    let start_request = StartOpRequest::Remove(api_to_storage::leaf_id(&THIRD_LEAF_ID));
+    let _ = storage_request(pinweaver.as_ref(), &StorageRequest::StartOp(start_request.clone()))
+        .expect("storage request failed");
+    let _ = storage_request(
+        pinweaver.as_ref(),
+        &StorageRequest::CommitOp(CommitOpRequest {
+            start_request,
+            new_leaf_hmac: EMPTY_TREE_HASH,
+            new_leaf_contents: SerdeVec::from_vec(Vec::new()),
+        }),
+    )
+    .expect("storage request failed");
+
+    // Test log-replay.
+    pinweaver.reconcile().expect("reconcile failed");
+    assert_matches!(
+        pinweaver.tryAuthenticate(&THIRD_LEAF_ID, &OTHER_LOW_ENTROPY_SECRET),
+        Err(err) if *err == binder_error::leaf_not_found()
+    );
+
+    // Back up the leaf contents to force storage out of sync.
+    let resp = storage_request(
+        pinweaver.as_ref(),
+        &StorageRequest::StartOp(
+            StartOpRequest::TryAuth(api_to_storage::leaf_id(&OTHER_LEAF_ID)).clone(),
+        ),
+    )
+    .expect("storage request failed");
+    let (path, new_leaf_hmac, new_leaf_contents) =
+        if let StorageResponse::StartOp(StartOpResponse {
+            path,
+            op_data: StartOpResponseData::TryAuth(StartTryAuthResponseData { leaf_contents, .. }),
+            ..
+        }) = resp
+        {
+            let hmac = gsc_to_storage::hmac(
+                &UnimportedLeafData::ref_from_bytes(leaf_contents.as_ref())
+                    .expect("parsing leaf data failed")
+                    .hmac,
+            );
+            (path, hmac, leaf_contents)
+        } else {
+            panic!("unexpected response: {:?}", resp);
+        };
+
+    pinweaver.remove(&OTHER_LEAF_ID).expect("remove failed");
+
+    // Restore OTHER_LEAF_ID for the storage only.
+    let start_request = StartOpRequest::LogReplay(path);
+    let _ = storage_request(pinweaver.as_ref(), &StorageRequest::StartOp(start_request.clone()))
+        .expect("storage request failed");
+    let _ = storage_request(
+        pinweaver.as_ref(),
+        &StorageRequest::CommitOp(CommitOpRequest {
+            start_request,
+            new_leaf_hmac,
+            new_leaf_contents,
+        }),
+    )
+    .expect("storage request failed");
+
+    // Test log-replay.
+    pinweaver.reconcile().expect("reconcile failed");
+    assert_matches!(
+        pinweaver.tryAuthenticate(&OTHER_LEAF_ID, &OTHER_LOW_ENTROPY_SECRET),
+        Err(err) if *err == binder_error::leaf_not_found()
+    );
+
+    // Make sure the existing leaf still works.
+    assert_matches!(
+        pinweaver.tryAuthenticate(&DEFAULT_LEAF_ID, &DEFAULT_LOW_ENTROPY_SECRET),
+        Ok(TryAuthResponse::HighEntropySecret(s)) if s == &DEFAULT_HIGH_ENTROPY_SECRET
     );
 }

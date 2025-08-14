@@ -1,5 +1,5 @@
 use binder::Interface;
-use log::error;
+use log::{error, warn};
 use openssl::{
     rand::rand_bytes,
     symm::{decrypt_aead, encrypt_aead, Cipher},
@@ -13,32 +13,43 @@ use pinweaver_storage_api::{
         StartOpRequest, StorageRequest,
     },
     response::{
-        CommitOpResponse, CommitOpResponseData, GetStatusResponse, ResponseError,
-        StartInsertResponseData, StartOpResponse, StartOpResponseData, StartRemoveResponseData,
-        StartTryAuthResponseData, StorageResponse,
+        CommitOpResponse, CommitOpResponseData, CommitRemoveBulkResponseData,
+        ContinueRemoveBulkResponse, GetStatusResponse, ResponseError, StartInsertResponseData,
+        StartOpResponse, StartOpResponseData, StartRemoveResponseData, StartTryAuthResponseData,
+        StorageResponse,
     },
     util::{SerdeOption, SerdeVec},
-    LargeSecretAuthTag, LargeSecretInfo, LargeSecretIv, LeafId as StorageLeafId, Path,
-    StorageInterface, TreeHash, TreeHashes, TreeParams, EMPTY_TREE_HASH, RESERVED_LEAF_ID,
+    LargeSecretAuthTag, LargeSecretInfo, LargeSecretIv, LeafId as StorageLeafId,
+    LeafSet as StorageLeafSet, Path, StorageInterface, TreeHash, TreeHashes, TreeParams,
+    EMPTY_TREE_HASH, RESERVED_LEAF_ID, U32,
 };
 use std::{
+    collections::BTreeMap as Map,
     ffi::CStr,
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 use tipc::TipcError;
 use tpm_commands::pinweaver::{
-    request::{InsertLeafHeader, RemoveLeafHeader, TryAuthHeader},
-    response::ResultCode,
-    DelaySchedule, DelayScheduleEntry as GscDelayScheduleEntry, Hash, Pinweaver, Secret, TimeDiff,
-    TreeParams as GscTreeParams, ValidPcrCriteria, DELAY_SCHEDULE_ENTRIES,
+    request::{
+        InsertLeafHeader, LogReplayHeader, RemoveLeafHeader, ResetAuthHeader, TryAuthHeader,
+    },
+    response::{Error as GscError, ResultCode},
+    DelaySchedule, DelayScheduleEntry as GscDelayScheduleEntry, Error as TpmError, Hash, Label,
+    LogEntryData, Pinweaver, Secret, TimeDiff, TreeParams as GscTreeParams, ValidPcrCriteria,
+    DELAY_SCHEDULE_ENTRIES,
 };
 use zerocopy::{IntoBytes, LittleEndian, U64};
 
 const DEFAULT_TREE_HEIGHT: u8 = 6u8;
 const DEFAULT_TREE_BITS_PER_LEVEL: u8 = 2u8;
 
-mod api_to_gsc {
+static RECONCILED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) mod api_to_gsc {
     use super::*;
 
     use tpm_commands::pinweaver::TimeDiff;
@@ -80,11 +91,15 @@ mod api_to_gsc {
     }
 }
 
-mod api_to_storage {
+pub(crate) mod api_to_storage {
     use super::*;
 
     pub fn leaf_id(leaf_id: &LeafId) -> StorageLeafId {
         StorageLeafId::from(leafid_value(leaf_id))
+    }
+
+    pub fn leaf_set(leaf_set: LeafSet) -> StorageLeafSet {
+        StorageLeafSet(U32::new(leaf_set.get() as u32))
     }
 
     pub fn insertmode(mode: InsertMode) -> binder::Result<StorageInsertMode> {
@@ -97,7 +112,7 @@ mod api_to_storage {
     }
 }
 
-mod gsc_to_storage {
+pub(crate) mod gsc_to_storage {
     use super::*;
 
     use pinweaver_storage_api::TreeHash;
@@ -107,7 +122,7 @@ mod gsc_to_storage {
     }
 }
 
-mod storage_to_gsc {
+pub(crate) mod storage_to_gsc {
     use pinweaver_storage_api::TreeHashes;
 
     use super::*;
@@ -125,13 +140,13 @@ mod storage_to_gsc {
     }
 }
 
-pub mod binder_error {
+pub(crate) mod binder_error {
     use super::*;
 
     use binder::{ExceptionCode, Status};
     use pinweaver_api::aidl::IPinWeaver::{
-        ERROR_GSC, ERROR_LEAF_EXISTS, ERROR_LEAF_NOT_FOUND, ERROR_LOWENT_AUTH_FAILED,
-        ERROR_PINWEAVER,
+        ERROR_AUTH_FAILED, ERROR_GSC, ERROR_LEAF_EXISTS, ERROR_LEAF_NOT_FOUND,
+        ERROR_LOWENT_AUTH_FAILED, ERROR_PINWEAVER,
     };
 
     pub fn gsc() -> Status {
@@ -161,6 +176,10 @@ pub mod binder_error {
         )
     }
 
+    pub fn auth_failed() -> Status {
+        Status::new_service_specific_error(ERROR_AUTH_FAILED, Some(c"auth failed"))
+    }
+
     pub fn from_tipc(_err: TipcError) -> Status {
         pinweaver(c"tipc error")
     }
@@ -186,6 +205,204 @@ pub struct PinWeaverService<Deps: PinWeaverServiceDeps> {
 impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
     pub fn new(storage: Arc<Deps::Storage>, gsc: Arc<Deps::Gsc>) -> Self {
         Self { storage, gsc }
+    }
+
+    pub fn reconcile_once(&self) -> binder::Result<()> {
+        if !RECONCILED.load(Ordering::Acquire) {
+            self.reconcile()?;
+        }
+        Ok(())
+    }
+
+    pub fn reconcile_storage_with_gsc(&self) -> binder::Result<bool> {
+        // Get storage root
+        let resp = self
+            .storage
+            .request(&StorageRequest::GetStatus)
+            .map_err(binder_error::from_tipc)
+            .expect("failed to comminicate with pinweaverstoraged");
+        let storage_root =
+            if let StorageResponse::GetStatus(GetStatusResponse { root_hash, .. }) = resp {
+                root_hash
+            } else {
+                // Don't bother to reconcile if the storage is inaccessible or uninitialized.
+                return Ok(true);
+            };
+
+        // Get GSC root
+        let (gsc_root, _) = self.gsc.sys_info().map_err(|err| {
+            error!("gsc.sys_info() failed: {:?}", err);
+            binder_error::gsc()
+        })?;
+        if storage_root.0 == gsc_root.0 {
+            return Ok(true);
+        }
+        warn!("GSC and storage out of sync; attempting log replay");
+
+        // Get the GSC log.
+        let mut buffer = Vec::new();
+        let entries = self.gsc.get_log(Some(Hash(storage_root.0)), &mut buffer).map_err(|err| {
+            error!("gsc.get_log() failed: {:?}", err);
+            binder_error::gsc()
+        })?;
+
+        // Replay the log
+        let mut to_replay = entries.iter().rev().peekable();
+        // We need to skip the first operation if we have already applied it to storage.
+        if matches!(to_replay.peek(), Some(entry) if entry.root.0 == storage_root.0) {
+            let _skip = to_replay.next();
+        }
+        let mut to_remove = Map::new();
+        let mut new_root: TreeHash = storage_root;
+        while let Some(entry) = to_replay.next() {
+            match entry.data() {
+                LogEntryData::ResetTree => {
+                    return Ok(false);
+                }
+                LogEntryData::InsertLeaf(hmac) => {
+                    // This is somewhat precarious because we don't have the data to recover this leaf.
+                    // The best we can do is try to remove it.
+                    if let Ok((root, leaf_id)) =
+                        self.replay_without_gsc(entry.label, TreeHash(hmac.0))
+                    {
+                        new_root = root;
+                        to_remove.insert(entry.label.get(), leaf_id);
+                    } else {
+                        return Ok(false);
+                    }
+                }
+                LogEntryData::TryAuth00(_) | LogEntryData::TryAuth02(_) => {
+                    // Skip try-auth for an inserted leaf since it will fail, and if it gets removed
+                    // before it is needed, replay may still succeed.
+                    if to_remove.contains_key(&entry.label.get()) {
+                        continue;
+                    }
+                    // Skip non-remove operations on the same leaf.
+                    if matches!(to_replay.peek(), Some(next_entry) if next_entry.label == entry.label)
+                    {
+                        continue;
+                    }
+                    if let Ok(root) = self.replay_try_auth(entry.root, entry.label) {
+                        new_root = root;
+                    } else {
+                        return Ok(false);
+                    }
+                }
+                LogEntryData::RemoveLeaf => {
+                    if let Ok((root, _)) = self.replay_without_gsc(entry.label, EMPTY_TREE_HASH) {
+                        new_root = root;
+                    } else {
+                        return Ok(false);
+                    };
+                    to_remove.remove(&entry.label.get());
+                }
+                LogEntryData::UnrecognizedOperation => {
+                    error!("Got unrecognized option: {:02x}", entry.operation.0);
+                    continue;
+                }
+            }
+        }
+        // If there are leaves to remove skip the root check since, self.remove_leaf(..) will only
+        // succeed if the storage and gsc roots are in sync after the operation.
+        if to_remove.is_empty() {
+            return Ok(new_root.0 == gsc_root.0);
+        }
+        for leaf_id in to_remove.into_values() {
+            self.remove_leaf(leaf_id)?;
+        }
+        Ok(true)
+    }
+
+    fn start_replay(&self, label: Label) -> binder::Result<StorageResponse> {
+        self.storage
+            .request(&StorageRequest::StartOp(StartOpRequest::LogReplay(Path::from(label.get()))))
+            .map_err(binder_error::from_tipc)
+    }
+
+    fn replay_without_gsc(
+        &self,
+        label: Label,
+        new_leaf_hmac: TreeHash,
+    ) -> binder::Result<(TreeHash, StorageLeafId)> {
+        let start_resp = self.start_replay(label)?;
+        let leaf_id = if let StorageResponse::StartOp(StartOpResponse {
+            op_data: StartOpResponseData::LogReplay(data),
+            ..
+        }) = start_resp
+        {
+            data.id
+        } else {
+            error!("start_replay: unexpected response: {:?}", &start_resp);
+            return Err(binder_error::pinweaver(c"unexpected response"));
+        };
+
+        let resp = self
+            .storage
+            .request(&StorageRequest::CommitOp(CommitOpRequest {
+                start_request: StartOpRequest::LogReplay(Path::from(label.get())),
+                new_leaf_hmac,
+                new_leaf_contents: SerdeVec::from_vec(Vec::new()),
+            }))
+            .map_err(binder_error::from_tipc)?;
+        let root_hash = if let StorageResponse::CommitOp(CommitOpResponse { root_hash, .. }) = resp
+        {
+            root_hash
+        } else {
+            error!("commit_replay: unexpected response: {:?}", &resp);
+            return Err(binder_error::pinweaver(c"unexpected response"));
+        };
+        Ok((root_hash, leaf_id))
+    }
+
+    fn replay_try_auth(&self, log_root: Hash, label: Label) -> binder::Result<TreeHash> {
+        let start_resp = self.start_replay(label)?;
+        let (contents, path_hashes) = if let StorageResponse::StartOp(StartOpResponse {
+            op_data: StartOpResponseData::LogReplay(data),
+            tree_hashes,
+            ..
+        }) = start_resp
+        {
+            (data.leaf_contents, storage_to_gsc::path_hashes(tree_hashes))
+        } else {
+            error!("start_replay: unexpected response: {:?}", &start_resp);
+            return Err(binder_error::pinweaver(c"unexpected response"));
+        };
+
+        let mut buffer = Vec::new();
+        let new_data = self
+            .gsc
+            .log_replay(
+                GscTreeParams {
+                    bits_per_level: DEFAULT_TREE_BITS_PER_LEVEL,
+                    height: DEFAULT_TREE_HEIGHT,
+                },
+                LogReplayHeader { log_root },
+                contents.as_ref(),
+                path_hashes.as_slice(),
+                &mut buffer,
+            )
+            .map_err(|err| {
+                error!("gsc log replay failed: {:?}", err);
+                binder_error::gsc()
+            })?;
+
+        let new_leaf_hmac = TreeHash(new_data.hmac.0);
+        let resp = self
+            .storage
+            .request(&StorageRequest::CommitOp(CommitOpRequest {
+                start_request: StartOpRequest::LogReplay(Path::from(label.get())),
+                new_leaf_hmac,
+                new_leaf_contents: SerdeVec::from_vec(new_data.as_bytes().to_vec()),
+            }))
+            .map_err(binder_error::from_tipc)?;
+        let root_hash = if let StorageResponse::CommitOp(CommitOpResponse { root_hash, .. }) = resp
+        {
+            root_hash
+        } else {
+            error!("commit_replay: unexpected response: {:?}", &resp);
+            return Err(binder_error::pinweaver(c"unexpected response"));
+        };
+        Ok(root_hash)
     }
 
     fn handle_secret_size(
@@ -340,6 +557,61 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
         Ok(())
     }
 
+    fn commit_remove_bulk(
+        &self,
+        leaf_set: StorageLeafSet,
+        path: Path,
+        leaf_hmac: TreeHash,
+        path_hashes: TreeHashes,
+    ) -> binder::Result<CommitRemoveBulkResponseData> {
+        // Convert parameters.
+        let gsc_path = storage_to_gsc::path(path);
+        let gsc_leaf_hmac = storage_to_gsc::hash(leaf_hmac);
+        let gsc_path_hashes = storage_to_gsc::path_hashes(path_hashes);
+
+        // Remove from the GSC first.
+        let gsc_root = self
+            .gsc
+            .remove_leaf(
+                GscTreeParams {
+                    bits_per_level: DEFAULT_TREE_BITS_PER_LEVEL,
+                    height: DEFAULT_TREE_HEIGHT,
+                },
+                RemoveLeafHeader { leaf_location: gsc_path, leaf_hmac: gsc_leaf_hmac },
+                gsc_path_hashes.as_slice(),
+            )
+            .map_err(|err| {
+                error!("gsc remove leaf failed: {:?}", err);
+                binder_error::gsc()
+            })?;
+
+        // Commit the remove operation.
+        let resp = self
+            .storage
+            .request(&StorageRequest::CommitOp(CommitOpRequest {
+                start_request: StartOpRequest::RemoveBulk(leaf_set),
+                new_leaf_hmac: EMPTY_TREE_HASH,
+                new_leaf_contents: SerdeVec::from_vec(Vec::new()),
+            }))
+            .map_err(binder_error::from_tipc)?;
+        let (root_hash, continue_or_done) = if let StorageResponse::CommitOp(CommitOpResponse {
+            root_hash,
+            op_data: CommitOpResponseData::RemoveBulk(continue_or_done),
+            ..
+        }) = resp
+        {
+            (root_hash, continue_or_done)
+        } else {
+            error!("commit_remove: unexpected response: {:?}", &resp);
+            return Err(binder_error::pinweaver(c"unexpected response"));
+        };
+        if root_hash.0 != gsc_root.0 {
+            error!("root and storage out of sync");
+            return Err(binder_error::pinweaver(c"root and storage out of sync"));
+        }
+        Ok(continue_or_done)
+    }
+
     fn remove_leaf(&self, leaf_id: StorageLeafId) -> binder::Result<()> {
         let resp = self
             .storage
@@ -413,6 +685,8 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         api_delay_schedule: &[DelayScheduleEntry],
         api_insert_mode: InsertMode,
     ) -> binder::Result<()> {
+        self.reconcile_once()?;
+
         // Convert parameters from IPinweaver to storage and GSC types.
         let leaf_id = api_to_storage::leaf_id(api_leaf_id);
         let low_entropy_secret = api_to_gsc::secret(api_low_entropy_secret)?;
@@ -531,6 +805,8 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         api_leaf_id: &LeafId,
         api_low_entropy_secret: &[u8],
     ) -> binder::Result<TryAuthResponse> {
+        self.reconcile_once()?;
+
         // Convert parameters from IPinweaver to storage and GSC types.
         let leaf_id = api_to_storage::leaf_id(api_leaf_id);
         let low_entropy_secret = api_to_gsc::secret(api_low_entropy_secret)?;
@@ -628,6 +904,89 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         Ok(TryAuthResponse::HighEntropySecret(high_entropy_secret))
     }
 
+    fn resetRetries(
+        &self,
+        api_leaf_id: &LeafId,
+        strong_reset: bool,
+        api_reset_secret: &[u8],
+    ) -> binder::Result<()> {
+        self.reconcile_once()?;
+
+        // Convert parameters from IPinweaver to storage and GSC types.
+        let leaf_id = api_to_storage::leaf_id(api_leaf_id);
+        let reset_secret = api_to_gsc::secret(api_reset_secret)?;
+
+        // Start try auth
+        let start_request = StartOpRequest::TryAuth(leaf_id);
+        let ret = self.first_request_helper(&StorageRequest::StartOp(start_request.clone()))?;
+        // Extract returned values and convert from Storage to GSC.
+        let (tree_hashes, leaf_contents) = match ret {
+            StorageResponse::StartOp(StartOpResponse {
+                tree_hashes,
+                op_data:
+                    StartOpResponseData::TryAuth(StartTryAuthResponseData { leaf_contents, .. }),
+                ..
+            }) => (tree_hashes, leaf_contents),
+            StorageResponse::Error(ResponseError::DoesNotExist) => {
+                return Err(binder_error::leaf_not_found());
+            }
+            _ => {
+                error!("start_try_auth: unexpected response: {:?}", ret);
+                return Err(binder_error::pinweaver(c"unexpected response"));
+            }
+        };
+        let path_hashes: Vec<Hash> = storage_to_gsc::path_hashes(tree_hashes);
+
+        // GSC reset auth
+        let mut resp_buffer = Vec::<u8>::new();
+        let (gsc_root, reset_auth) = self
+            .gsc
+            .reset_auth(
+                GscTreeParams {
+                    bits_per_level: DEFAULT_TREE_BITS_PER_LEVEL,
+                    height: DEFAULT_TREE_HEIGHT,
+                },
+                ResetAuthHeader { reset_secret, strong_reset: strong_reset as u8 },
+                leaf_contents.deref(),
+                path_hashes.as_slice(),
+                &mut resp_buffer,
+            )
+            .map_err(|err| {
+                error!("gsc reset auth failed: {:?}", err);
+                if matches!(err, TpmError::Response(GscError::ResultCode(code)) if code == ResultCode::ResetAuthFailed)
+                {
+                    binder_error::auth_failed()
+                } else {
+                    binder_error::gsc()
+                }
+            })?;
+        let new_leaf_hmac = gsc_to_storage::hmac(&reset_auth.unimported_leaf_data.hmac);
+
+        // Commit try auth
+        let resp = self
+            .storage
+            .request(&StorageRequest::CommitOp(CommitOpRequest {
+                start_request,
+                new_leaf_hmac,
+                new_leaf_contents: SerdeVec::from_vec(
+                    reset_auth.unimported_leaf_data.as_bytes().to_vec(),
+                ),
+            }))
+            .map_err(binder_error::from_tipc)?;
+        let root_hash = if let StorageResponse::CommitOp(CommitOpResponse { root_hash, .. }) = resp
+        {
+            root_hash
+        } else {
+            error!("commit_insert: unexpected response: {:?}", &resp);
+            return Err(binder_error::pinweaver(c"unexpected response"));
+        };
+        if root_hash.0 != gsc_root.0 {
+            error!("root and storage out of sync");
+            return Err(binder_error::pinweaver(c"root and storage out of sync"));
+        }
+        Ok(())
+    }
+
     fn tryAuthenticateThenReplace(
         &self,
         _id: &LeafId,
@@ -636,19 +995,73 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         _new_high_entropy_secret: Option<&[u8]>,
         _new_delay_schedule: Option<&[Option<DelayScheduleEntry>]>,
     ) -> binder::Result<TryAuthResponse> {
+        self.reconcile_once()?;
+
         // TODO: b/359374997 - Implement.
         Err(binder_error::unsupported_operation())
     }
 
     fn remove(&self, id: &LeafId) -> binder::Result<()> {
+        self.reconcile_once()?;
+
         self.remove_leaf(api_to_storage::leaf_id(id))
     }
 
-    fn removeAll(&self, leaf_set: LeafSet) -> binder::Result<()> {
-        if matches!(leaf_set, LeafSet::ALL_LEAVES) {
-            return self.reset_tree();
+    fn removeAll(&self, api_leaf_set: LeafSet) -> binder::Result<()> {
+        if matches!(api_leaf_set, LeafSet::ALL_LEAVES) {
+            self.reset_tree()?;
+            RECONCILED.store(true, Ordering::Release);
+            return Ok(());
         }
-        // TODO: b/359374997 - Implement.
-        Err(binder_error::unsupported_operation())
+        self.reconcile_once()?;
+
+        let leaf_set = api_to_storage::leaf_set(api_leaf_set);
+
+        let resp = self
+            .storage
+            .request(&StorageRequest::StartOp(StartOpRequest::RemoveBulk(leaf_set)))
+            .map_err(binder_error::from_tipc)?;
+        let (mut path, mut tree_hashes, mut leaf_hmac) = match resp {
+            StorageResponse::StartOp(StartOpResponse {
+                path,
+                tree_hashes,
+                op_data: StartOpResponseData::Remove(StartRemoveResponseData { leaf_hmac }),
+            }) => (path, tree_hashes, leaf_hmac),
+            StorageResponse::Error(ResponseError::DoesNotExist) => {
+                return Err(binder_error::leaf_not_found());
+            }
+            _ => {
+                error!("start_remove: unexpected response: {:?}", &resp);
+                return Err(binder_error::pinweaver(c"unexpected response"));
+            }
+        };
+
+        loop {
+            match self.commit_remove_bulk(leaf_set, path, leaf_hmac, tree_hashes)? {
+                CommitRemoveBulkResponseData::Continue(ContinueRemoveBulkResponse {
+                    header,
+                    hashes,
+                }) => {
+                    path = header.path;
+                    tree_hashes = hashes.tree_hashes;
+                    leaf_hmac = hashes.leaf_hmac
+                }
+                CommitRemoveBulkResponseData::Finished => {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    fn reconcile(&self) -> binder::Result<()> {
+        if !self.reconcile_storage_with_gsc()? {
+            self.reset_tree()?;
+        }
+        RECONCILED.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn testStorage(&self, request: &[u8]) -> binder::Result<Vec<u8>> {
+        self.storage.request_raw(request).map_err(binder_error::from_tipc)
     }
 }
