@@ -1,0 +1,6 @@
+{
+        "app_name": "keymint_legacy_client",
+        "uuid": "f23a14c3-9f99-4481-ae41-54e9627defbe",
+        "min_heap": 16384,
+        "min_stack": 16384
+}

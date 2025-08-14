@@ -1,0 +1,669 @@
+/*
+ * Copyright (C) 2025 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+//! # `keymint_legacy_client`
+//!
+//! This is a helper library to interact with the KeyMint legacy interface used
+//! to provision UDS certificates and device attestation IDs. For convenience,
+//! this library works inside and outside of Trusty, and exposes different
+//! interfaces depending on what commands are available.
+
+use kmr_wire::cbor::Value;
+use kmr_wire::keymint::ErrorCode;
+use kmr_wire::legacy::{
+    self, AppendUdsCertificateRequest, AppendUdsCertificateResponse, ClearUdsCertificateRequest,
+    ClearUdsCertificateResponse, GetUdsCertsRequest, GetUdsCertsResponse, InnerSerialize,
+    SetAttestationIdsRequest, SetAttestationIdsResponse, TrustyKeymasterOperation,
+    TrustyKeymasterSecureOperation,
+};
+use std::collections::HashMap;
+use std::fmt::Debug;
+
+/// Max size for a single KeyMint message.
+#[allow(dead_code)]
+const KEYMINT_MAX_BUFFER_LENGTH: usize = 4096;
+
+/// Possible client errors
+#[derive(thiserror::Error, Debug)]
+pub enum KeyMintClientError {
+    /// Cbor deserialization error
+    #[error("{0}")]
+    Cbor(String),
+    /// Legacy deserialization error
+    #[error("{0:?}")]
+    LegacyDeserialize(Box<dyn Debug>),
+    /// Error parsing legacy error code
+    #[error("{0:?}")]
+    LegacyDeserializeErrorCode(Box<dyn Debug>),
+    /// Legacy error code was sent in response
+    #[error("{0:?}")]
+    LegacyErrorCode(ErrorCode),
+    /// Legacy serialization error
+    #[error("{0:?}")]
+    LegacySerialize(Box<dyn Debug>),
+    /// Incorrect CBOR key
+    #[error("failed to extract uds certificates")]
+    MissingUdsCertsKey,
+    /// Tipc channel error
+    #[error("failed to transmit over tipc channel")]
+    TipcChannel(#[from] std::io::Error),
+    /// Tipc handle error
+    #[error("{0}")]
+    TipcHandleError(String),
+}
+
+#[cfg(target_os = "trusty")]
+impl From<tipc::TipcError> for KeyMintClientError {
+    fn from(error: tipc::TipcError) -> Self {
+        KeyMintClientError::TipcHandleError(format!("{:?}", error))
+    }
+}
+
+/// Abstract the interface to KeyMint.
+pub trait KeyMintInterface
+where
+    KeyMintClientError: From<Self::Error>,
+{
+    /// An abstraction of the Error type returned.
+    type Error;
+
+    /// Transmit bytes to KeyMint and return response bytes back.
+    fn transmit(&mut self, request: &[u8]) -> Result<Vec<u8>, Self::Error>;
+
+    /// Send a legacy KeyMint request message to the interface and return a
+    /// legacy KeyMint response message.
+    fn transaction<Req: InnerSerialize, Rsp: InnerSerialize>(
+        &mut self,
+        code: u32,
+        request: Req,
+    ) -> Result<Rsp, KeyMintClientError> {
+        let mut buf = get_message_request(code);
+        request
+            .serialize_into(&mut buf)
+            .map_err(|e| KeyMintClientError::LegacySerialize(Box::new(e)))?;
+        let rsp = self.transmit(&buf)?;
+        let error_code = legacy::deserialize_trusty_rsp_error_code(&rsp)
+            .map_err(|e| KeyMintClientError::LegacyDeserializeErrorCode(Box::new(e)))?;
+        if error_code != ErrorCode::Ok {
+            return Err(KeyMintClientError::LegacyErrorCode(error_code));
+        }
+        let (rsp, _rest) = Rsp::deserialize(&rsp[legacy::LEGACY_NON_SEC_RSP_HEADER_SIZE..])
+            .map_err(|e| KeyMintClientError::LegacyDeserialize(Box::new(e)))?;
+        Ok(rsp)
+    }
+}
+
+fn get_message_request(cmd: u32) -> Vec<u8> {
+    (cmd << legacy::TRUSTY_CMD_SHIFT).to_ne_bytes().to_vec()
+}
+
+/// A KeyMint legacy client to be used outside of Trusty.
+#[derive(Debug)]
+pub struct KeyMintNonsecureLegacyClient<T: KeyMintInterface>(T)
+where
+    KeyMintClientError: From<T::Error>;
+
+impl<T: KeyMintInterface> KeyMintNonsecureLegacyClient<T>
+where
+    KeyMintClientError: From<T::Error>,
+{
+    /// Clear the UDS certificate chain stored in KeyMint secure storage.
+    pub fn clear_uds_certificate(&mut self) -> Result<(), KeyMintClientError> {
+        const CODE: u32 = TrustyKeymasterOperation::ClearUdsCertificate as u32;
+        let _: ClearUdsCertificateResponse =
+            self.0.transaction(CODE, ClearUdsCertificateRequest {})?;
+        Ok(())
+    }
+
+    /// Append a UDS certificate chain stored in KeyMint secure storage.
+    pub fn append_uds_certificate(&mut self, cert: &[u8]) -> Result<(), KeyMintClientError> {
+        const CODE: u32 = TrustyKeymasterOperation::AppendUdsCertificate as u32;
+        let request = AppendUdsCertificateRequest { cert_data: cert.to_vec() };
+        let _: AppendUdsCertificateResponse = self.0.transaction(CODE, request)?;
+        Ok(())
+    }
+}
+
+/// Tipc channel implementation of `KeyMintInterface` for host Android use.
+#[cfg(not(test))]
+#[cfg(not(target_os = "trusty"))]
+pub mod tipc_channel {
+    use super::*;
+
+    /// Tipc channel KeyMint interface
+    #[derive(Debug)]
+    pub struct TipcChannelKeyMintInterface(trusty::TipcChannel);
+
+    impl KeyMintInterface for TipcChannelKeyMintInterface {
+        type Error = std::io::Error;
+
+        fn transmit(&mut self, request: &[u8]) -> Result<Vec<u8>, Self::Error> {
+            self.0.send(request)?;
+            let mut buf = vec![0; KEYMINT_MAX_BUFFER_LENGTH];
+            self.0.recv(&mut buf)?;
+            Ok(buf)
+        }
+    }
+
+    impl KeyMintNonsecureLegacyClient<TipcChannelKeyMintInterface> {
+        /// Create a new `KeyMintNonsecureLegacyClient` given an `ipc_device`
+        /// path, e.g., "VSOCK:200:1".
+        ///
+        /// Refer to [`hwsec_trusty_utils::query_trusty_ipc_device`] for
+        /// additional information.
+        pub fn new_with_ipc_device(ipc_device: &str) -> Result<Self, KeyMintClientError> {
+            const KEYMASTER_PORT: &str = "com.android.trusty.keymaster";
+            let connection = trusty::TipcChannel::connect(ipc_device, KEYMASTER_PORT)?;
+            Ok(Self(TipcChannelKeyMintInterface(connection)))
+        }
+    }
+}
+
+/// A KeyMint legacy client to be used from within Trusty.
+#[derive(Debug)]
+pub struct KeyMintSecureLegacyClient<T: KeyMintInterface>(T)
+where
+    KeyMintClientError: From<T::Error>;
+
+impl<T: KeyMintInterface> KeyMintSecureLegacyClient<T>
+where
+    KeyMintClientError: From<T::Error>,
+{
+    /// Gather device information stored in KeyMint secure storage.
+    pub fn get_device_info(&mut self) -> Result<HashMap<String, Value>, KeyMintClientError> {
+        // The `GetDeviceInfoResponse` is special because it does not contain a
+        // length field. As a result, we directly transmit bytes and parse the
+        // rest of the message as CBOR.
+        const GET_DEVICE_INFO_CMD: u32 = TrustyKeymasterSecureOperation::GetDeviceInfo as u32;
+        let req = get_message_request(GET_DEVICE_INFO_CMD);
+        let res = self.0.transmit(&req)?;
+        let cbor = &res[4..];
+        let map: HashMap<String, Value> = kmr_wire::cbor::from_reader(cbor)
+            .map_err(|e| KeyMintClientError::Cbor(format!("{}", e)))?;
+
+        Ok(map)
+    }
+
+    /// Return the UDS certificate chain stored in KeyMint secure storage.
+    pub fn get_uds_certs(&mut self) -> Result<Vec<Vec<u8>>, KeyMintClientError> {
+        const CODE: u32 = TrustyKeymasterSecureOperation::GetUdsCerts as u32;
+        let rsp: GetUdsCertsResponse = self.0.transaction(CODE, GetUdsCertsRequest {})?;
+        let mut map: HashMap<String, Vec<Vec<u8>>> =
+            kmr_wire::cbor::from_reader(rsp.uds_certs.as_slice())
+                .map_err(|e| KeyMintClientError::Cbor(format!("{}", e)))?;
+        let certs = map.remove("GSMIRkpSecp384r1").ok_or(KeyMintClientError::MissingUdsCertsKey)?;
+
+        Ok(certs)
+    }
+
+    /// Set the attestation IDs stored in KeyMint secure storage.
+    pub fn set_attestation_ids(
+        &mut self,
+        ids: SetAttestationIdsRequest,
+    ) -> Result<(), KeyMintClientError> {
+        const CODE: u32 = TrustyKeymasterSecureOperation::SetAttestationIds as u32;
+        let _: SetAttestationIdsResponse = self.0.transaction(CODE, ids)?;
+        Ok(())
+    }
+}
+
+/// Helper function useful for debugging in Trusty
+#[allow(dead_code)]
+fn debug_print_large_buffer(buf: &[u8]) {
+    let step = 256;
+    for start in (0..buf.len()).step_by(step) {
+        let end = buf.len().min(start + step);
+        log::info!("{}: {:02x?}", start, &buf[start..end]);
+    }
+}
+
+/// Tipc handle implementation of `KeyMintInterface` for Trusty use.
+#[cfg(target_os = "trusty")]
+mod trusty {
+    use super::*;
+
+    /// Tipc handle KeyMint interface
+    #[derive(Debug)]
+    pub struct TipcHandleKeyMintInterface(tipc::Handle);
+
+    impl KeyMintInterface for TipcHandleKeyMintInterface {
+        type Error = tipc::TipcError;
+
+        fn transmit(&mut self, request: &[u8]) -> Result<Vec<u8>, Self::Error> {
+            self.0.send(&request)?;
+            let mut buf = vec![0; KEYMINT_MAX_BUFFER_LENGTH];
+            let _: () = self.0.recv(&mut buf)?;
+            Ok(buf)
+        }
+    }
+
+    impl KeyMintSecureLegacyClient<TipcHandleKeyMintInterface> {
+        /// Create a new `KeyMintSecureLegacyClient` that connects to the Trusty
+        /// KeyMint secure legacy port.
+        pub fn new() -> Result<Self, KeyMintClientError> {
+            const KEYMASTER_PORT: &std::ffi::CStr = c"com.android.trusty.keymaster.secure";
+            let handle = tipc::Handle::connect(KEYMASTER_PORT)?;
+            Ok(Self(TipcHandleKeyMintInterface(handle)))
+        }
+    }
+}
+
+/*
+// TODO(mvertescher): Migrate to use openssl
+#[cfg(test)]
+fn debug_print_certificate(der: &[u8]) {
+    use x509_cert::certificate::{CertificateInner, Raw};
+    use x509_cert::der::Decode;
+
+    let cert = CertificateInner::<Raw>::from_der(der).unwrap();
+    log::info!("Subject: {}", cert.tbs_certificate.subject);
+    log::info!("  Issuer: {}", cert.tbs_certificate.issuer);
+}
+*/
+
+/// Android host unit tests
+///
+/// `atest --host lib_desktop_hwsec_keymint_legacy_client_test`
+#[cfg(test)]
+#[cfg(not(target_os = "trusty"))]
+mod tests {
+    use super::*;
+    use legacy::*;
+
+    #[derive(Default)]
+    struct MockKeyMintNonsecureInterface {
+        uds_certs: Vec<Vec<u8>>,
+    }
+
+    impl MockKeyMintNonsecureInterface {
+        fn handle_message(
+            &mut self,
+            msg: TrustyPerformOpReq,
+        ) -> Result<TrustyPerformOpRsp, KeyMintClientError> {
+            match msg {
+                TrustyPerformOpReq::AppendUdsCertificate(req) => {
+                    self.uds_certs.push(req.cert_data.clone());
+                    Ok(TrustyPerformOpRsp::AppendUdsCertificate(AppendUdsCertificateResponse {}))
+                }
+                TrustyPerformOpReq::ClearUdsCertificate(..) => {
+                    self.uds_certs.clear();
+                    Ok(TrustyPerformOpRsp::ClearUdsCertificate(ClearUdsCertificateResponse {}))
+                }
+                _ => unimplemented!(),
+            }
+        }
+    }
+
+    impl KeyMintInterface for MockKeyMintNonsecureInterface {
+        type Error = KeyMintClientError;
+
+        fn transmit(&mut self, request: &[u8]) -> Result<Vec<u8>, Self::Error> {
+            let msg = legacy::deserialize_trusty_req(request)
+                .expect("failed to deserialize nonsecure request");
+            let response = self.handle_message(msg).expect("failed to process nonsecure message");
+            let response = legacy::serialize_trusty_rsp(response)
+                .expect("failed to serialize nonsecure response");
+
+            Ok(response)
+        }
+    }
+
+    #[test]
+    fn mock_append_uds_certificate() {
+        let iface = MockKeyMintNonsecureInterface::default();
+        let mut client = KeyMintNonsecureLegacyClient(iface);
+        let cert = &[12u8; 2000];
+        client.append_uds_certificate(cert).unwrap();
+        assert!(!client.0.uds_certs.is_empty());
+    }
+
+    #[test]
+    fn mock_clear_uds_certificate() {
+        let iface = MockKeyMintNonsecureInterface::default();
+        let mut client = KeyMintNonsecureLegacyClient(iface);
+        client.clear_uds_certificate().unwrap();
+        assert!(client.0.uds_certs.is_empty());
+    }
+
+    struct MockKeyMintSecureInterface;
+
+    impl MockKeyMintSecureInterface {
+        fn handle_message(
+            &self,
+            msg: TrustyPerformSecureOpReq,
+        ) -> Result<TrustyPerformSecureOpRsp, KeyMintClientError> {
+            match msg {
+                TrustyPerformSecureOpReq::GetAuthTokenKey(_) => {
+                    unimplemented!()
+                }
+                TrustyPerformSecureOpReq::GetDeviceInfo(_) => {
+                    Ok(TrustyPerformSecureOpRsp::GetDeviceInfo(GetDeviceInfoResponse {
+                        device_ids: self.get_device_ids(),
+                    }))
+                }
+                TrustyPerformSecureOpReq::GetUdsCerts(_) => {
+                    Ok(TrustyPerformSecureOpRsp::GetUdsCerts(GetUdsCertsResponse {
+                        uds_certs: self.get_uds_certs(),
+                    }))
+                }
+                TrustyPerformSecureOpReq::SetAttestationIds(_req) => {
+                    Ok(TrustyPerformSecureOpRsp::SetAttestationIds(SetAttestationIdsResponse {}))
+                }
+            }
+        }
+
+        fn get_device_ids(&self) -> Vec<u8> {
+            let brand = String::new();
+            let manufacturer = String::new();
+            let product = String::new();
+            let model = String::new();
+            let device = String::new();
+            let bootloader_state = "unlocked";
+            let vbmeta_digest = Value::Bytes(vec![0x11, 0x22]);
+            let vb_state = "green";
+            let security_level = "strongbox";
+            let fused = false;
+
+            let os_version = "os version";
+            let boot_patch_level = "";
+            let os_patch_level = "";
+            let vendor_patch_level = "";
+
+            use kmr_wire::cbor::cbor;
+            let info = cbor!({
+                "brand" => brand,
+                "fused" => i32::from(fused),
+                "model" => model,
+                "device" => device,
+                "product" => product,
+                "vb_state" => vb_state,
+                "os_version" => os_version,
+                "manufacturer" => manufacturer,
+                "vbmeta_digest" => vbmeta_digest,
+                "security_level" => security_level,
+                "boot_patch_level" => boot_patch_level,
+                "bootloader_state" => bootloader_state,
+                "system_patch_level" => os_patch_level,
+                "vendor_patch_level" => vendor_patch_level,
+            })
+            .unwrap();
+            kmr_ta::rkp::serialize_cbor(&info).unwrap()
+        }
+
+        fn get_uds_certs(&self) -> Vec<u8> {
+            // The data below is CBOR and contains 2 certificates.
+            //
+            // A1                                    # map(1)
+            //   70                                  # text(16)
+            //     47534D49526B70536563703338347231  # "GSMIRkpSecp384r1"
+            //   82                                  # array(2)
+            //     59 0306                           # bytes(774)
+            let uds_certs = vec![
+                0xA1, 0x70, 0x47, 0x53, 0x4D, 0x49, 0x52, 0x6B, 0x70, 0x53, 0x65, 0x63, 0x70, 0x33,
+                0x38, 0x34, 0x72, 0x31, 0x82, 0x59, 0x03, 0x06, 0x30, 0x82, 0x03, 0x02, 0x30, 0x82,
+                0x01, 0xEA, 0xA0, 0x03, 0x02, 0x01, 0x02, 0x02, 0x16, 0x01, 0x98, 0x76, 0x74, 0x9C,
+                0xC9, 0xBA, 0xAF, 0x16, 0x91, 0x76, 0x4F, 0x1F, 0x1E, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x49, 0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01,
+                0x01, 0x0B, 0x05, 0x00, 0x30, 0x81, 0x85, 0x31, 0x20, 0x30, 0x1E, 0x06, 0x03, 0x55,
+                0x04, 0x03, 0x13, 0x17, 0x50, 0x72, 0x69, 0x76, 0x61, 0x63, 0x79, 0x20, 0x43, 0x41,
+                0x20, 0x49, 0x6E, 0x74, 0x65, 0x72, 0x6D, 0x65, 0x64, 0x69, 0x61, 0x74, 0x65, 0x31,
+                0x12, 0x30, 0x10, 0x06, 0x03, 0x55, 0x04, 0x0B, 0x13, 0x09, 0x43, 0x68, 0x72, 0x6F,
+                0x6D, 0x65, 0x20, 0x4F, 0x53, 0x31, 0x13, 0x30, 0x11, 0x06, 0x03, 0x55, 0x04, 0x0A,
+                0x13, 0x0A, 0x47, 0x6F, 0x6F, 0x67, 0x6C, 0x65, 0x20, 0x49, 0x6E, 0x63, 0x31, 0x16,
+                0x30, 0x14, 0x06, 0x03, 0x55, 0x04, 0x07, 0x13, 0x0D, 0x4D, 0x6F, 0x75, 0x6E, 0x74,
+                0x61, 0x69, 0x6E, 0x20, 0x56, 0x69, 0x65, 0x77, 0x31, 0x13, 0x30, 0x11, 0x06, 0x03,
+                0x55, 0x04, 0x08, 0x13, 0x0A, 0x43, 0x61, 0x6C, 0x69, 0x66, 0x6F, 0x72, 0x6E, 0x69,
+                0x61, 0x31, 0x0B, 0x30, 0x09, 0x06, 0x03, 0x55, 0x04, 0x06, 0x13, 0x02, 0x55, 0x53,
+                0x30, 0x1E, 0x17, 0x0D, 0x32, 0x35, 0x30, 0x38, 0x30, 0x35, 0x30, 0x32, 0x31, 0x32,
+                0x32, 0x36, 0x5A, 0x17, 0x0D, 0x34, 0x35, 0x30, 0x38, 0x30, 0x35, 0x30, 0x32, 0x31,
+                0x32, 0x32, 0x36, 0x5A, 0x30, 0x33, 0x31, 0x31, 0x30, 0x2F, 0x06, 0x03, 0x55, 0x04,
+                0x05, 0x13, 0x28, 0x37, 0x38, 0x64, 0x39, 0x35, 0x65, 0x62, 0x33, 0x64, 0x64, 0x64,
+                0x36, 0x34, 0x33, 0x36, 0x39, 0x39, 0x61, 0x66, 0x61, 0x30, 0x38, 0x39, 0x65, 0x30,
+                0x65, 0x66, 0x32, 0x34, 0x63, 0x62, 0x32, 0x38, 0x39, 0x34, 0x33, 0x31, 0x32, 0x63,
+                0x63, 0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
+                0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
+                0x6F, 0x65, 0x07, 0xEC, 0xC7, 0x70, 0x79, 0x0D, 0xBB, 0x45, 0x2C, 0x04, 0x2B, 0x7B,
+                0x75, 0x90, 0xD1, 0xBE, 0x6A, 0x62, 0xCC, 0xF8, 0x7C, 0x91, 0xC3, 0x30, 0x2D, 0x26,
+                0xA6, 0x8A, 0x98, 0x39, 0x8D, 0x7F, 0x68, 0xAC, 0x73, 0x1F, 0x0D, 0x6C, 0xB7, 0x26,
+                0xC6, 0x65, 0x9C, 0xA8, 0xB6, 0xB7, 0xA9, 0x66, 0x26, 0x90, 0x8E, 0xA5, 0xC4, 0x50,
+                0x97, 0xB7, 0x66, 0x45, 0xDA, 0x8D, 0xE6, 0x7F, 0xA3, 0x81, 0x83, 0x30, 0x81, 0x80,
+                0x30, 0x1D, 0x06, 0x03, 0x55, 0x1D, 0x0E, 0x04, 0x16, 0x04, 0x14, 0x78, 0xD9, 0x5E,
+                0xB3, 0xDD, 0xD6, 0x43, 0x69, 0x9A, 0xFA, 0x08, 0x9E, 0x0E, 0xF2, 0x4C, 0xB2, 0x89,
+                0x43, 0x12, 0xCC, 0x30, 0x2B, 0x06, 0x03, 0x55, 0x1D, 0x23, 0x04, 0x24, 0x30, 0x22,
+                0x80, 0x20, 0xF4, 0x20, 0xB6, 0xD9, 0xD8, 0x62, 0xF6, 0x8B, 0x09, 0x15, 0xCE, 0x8B,
+                0x57, 0xA4, 0xFC, 0x57, 0x4E, 0xB8, 0xC1, 0x7C, 0xA5, 0xF9, 0xE6, 0x56, 0xDB, 0xD0,
+                0x52, 0x94, 0x29, 0xBD, 0x6D, 0x7F, 0x30, 0x0E, 0x06, 0x03, 0x55, 0x1D, 0x0F, 0x01,
+                0x01, 0xFF, 0x04, 0x04, 0x03, 0x02, 0x02, 0x04, 0x30, 0x0F, 0x06, 0x03, 0x55, 0x1D,
+                0x13, 0x01, 0x01, 0xFF, 0x04, 0x05, 0x30, 0x03, 0x01, 0x01, 0xFF, 0x30, 0x11, 0x06,
+                0x03, 0x55, 0x1D, 0x20, 0x04, 0x0A, 0x30, 0x08, 0x30, 0x06, 0x06, 0x04, 0x55, 0x1D,
+                0x20, 0x00, 0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01,
+                0x0B, 0x05, 0x00, 0x03, 0x82, 0x01, 0x01, 0x00, 0x92, 0x66, 0x23, 0x42, 0x18, 0x0E,
+                0xCD, 0x7F, 0xD0, 0x56, 0x84, 0x3E, 0x5F, 0xAA, 0x98, 0xB8, 0xF8, 0x33, 0xFE, 0x23,
+                0xE9, 0x0F, 0xB9, 0x1E, 0xF6, 0xC5, 0xB9, 0xEA, 0x05, 0xF3, 0x78, 0x33, 0x09, 0x68,
+                0x70, 0x68, 0x9D, 0x06, 0x48, 0xF6, 0xF9, 0xA7, 0xF9, 0x90, 0x85, 0x0E, 0x05, 0xA4,
+                0x43, 0x14, 0x6F, 0x3F, 0xBB, 0x13, 0x9C, 0x66, 0x22, 0x6D, 0x3D, 0x19, 0xD2, 0x65,
+                0x4D, 0x86, 0x5E, 0x52, 0x54, 0x74, 0x45, 0x22, 0xA4, 0xDB, 0x7F, 0x4A, 0x16, 0x96,
+                0x78, 0x5E, 0x51, 0x0A, 0xB8, 0xD6, 0xC1, 0xB1, 0xE5, 0xF1, 0x9E, 0x4B, 0x65, 0x9A,
+                0x76, 0xC5, 0x62, 0xA1, 0x23, 0x75, 0xB7, 0x54, 0x8A, 0x80, 0xEB, 0x2B, 0x6E, 0x43,
+                0x37, 0xD3, 0x32, 0x2F, 0x75, 0xA3, 0x81, 0x7C, 0x68, 0x16, 0x3C, 0x4D, 0x9A, 0x5B,
+                0x1C, 0xEE, 0xC7, 0xBA, 0x3A, 0x22, 0xF4, 0x14, 0x53, 0x05, 0x58, 0xD6, 0xE1, 0xA1,
+                0xF4, 0x8E, 0x84, 0x42, 0xA0, 0xD3, 0x0B, 0xC8, 0xBC, 0x19, 0x98, 0xC0, 0xD5, 0xC0,
+                0x7C, 0xDE, 0x6A, 0x2B, 0x32, 0xAF, 0x3E, 0x0E, 0x23, 0x24, 0xBF, 0xEC, 0xDA, 0x11,
+                0x71, 0xAA, 0x59, 0xD4, 0x4E, 0xCB, 0xB2, 0xD8, 0xB0, 0x05, 0xFF, 0x57, 0xD9, 0xA5,
+                0x3C, 0x7D, 0xA7, 0xBA, 0x1F, 0xBE, 0x30, 0x0A, 0xDD, 0xA2, 0xA9, 0xC7, 0x56, 0x56,
+                0x57, 0xC1, 0x78, 0x6E, 0x61, 0x56, 0xC9, 0xC0, 0x0C, 0xA4, 0xA2, 0xF7, 0x28, 0x7D,
+                0x58, 0x01, 0xF6, 0xCF, 0xB1, 0x70, 0xC9, 0x5F, 0x4D, 0xC2, 0xE2, 0x62, 0x2D, 0x35,
+                0xFC, 0x1F, 0xF3, 0x4B, 0x1A, 0xD0, 0x26, 0xBF, 0x6F, 0x63, 0x9C, 0xC6, 0xEB, 0x1C,
+                0x44, 0x73, 0x63, 0xF1, 0xAC, 0x8E, 0xFF, 0x48, 0x18, 0xB1, 0x57, 0x6B, 0x18, 0x4F,
+                0xB8, 0xA9, 0xF0, 0x5C, 0x65, 0xC8, 0x11, 0xC1, 0x0A, 0x63, 0x5C, 0x99, 0x59, 0x03,
+                0x06, 0x30, 0x82, 0x03, 0x02, 0x30, 0x82, 0x01, 0xEA, 0xA0, 0x03, 0x02, 0x01, 0x02,
+                0x02, 0x16, 0x01, 0x98, 0x76, 0x74, 0x9C, 0xC9, 0xBA, 0xAF, 0x16, 0x91, 0x76, 0x4F,
+                0x1F, 0x1E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x49, 0x30, 0x0D, 0x06, 0x09,
+                0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B, 0x05, 0x00, 0x30, 0x81, 0x85,
+                0x31, 0x20, 0x30, 0x1E, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13, 0x17, 0x50, 0x72, 0x69,
+                0x76, 0x61, 0x63, 0x79, 0x20, 0x43, 0x41, 0x20, 0x49, 0x6E, 0x74, 0x65, 0x72, 0x6D,
+                0x65, 0x64, 0x69, 0x61, 0x74, 0x65, 0x31, 0x12, 0x30, 0x10, 0x06, 0x03, 0x55, 0x04,
+                0x0B, 0x13, 0x09, 0x43, 0x68, 0x72, 0x6F, 0x6D, 0x65, 0x20, 0x4F, 0x53, 0x31, 0x13,
+                0x30, 0x11, 0x06, 0x03, 0x55, 0x04, 0x0A, 0x13, 0x0A, 0x47, 0x6F, 0x6F, 0x67, 0x6C,
+                0x65, 0x20, 0x49, 0x6E, 0x63, 0x31, 0x16, 0x30, 0x14, 0x06, 0x03, 0x55, 0x04, 0x07,
+                0x13, 0x0D, 0x4D, 0x6F, 0x75, 0x6E, 0x74, 0x61, 0x69, 0x6E, 0x20, 0x56, 0x69, 0x65,
+                0x77, 0x31, 0x13, 0x30, 0x11, 0x06, 0x03, 0x55, 0x04, 0x08, 0x13, 0x0A, 0x43, 0x61,
+                0x6C, 0x69, 0x66, 0x6F, 0x72, 0x6E, 0x69, 0x61, 0x31, 0x0B, 0x30, 0x09, 0x06, 0x03,
+                0x55, 0x04, 0x06, 0x13, 0x02, 0x55, 0x53, 0x30, 0x1E, 0x17, 0x0D, 0x32, 0x35, 0x30,
+                0x38, 0x30, 0x35, 0x30, 0x32, 0x31, 0x32, 0x32, 0x36, 0x5A, 0x17, 0x0D, 0x34, 0x35,
+                0x30, 0x38, 0x30, 0x35, 0x30, 0x32, 0x31, 0x32, 0x32, 0x36, 0x5A, 0x30, 0x33, 0x31,
+                0x31, 0x30, 0x2F, 0x06, 0x03, 0x55, 0x04, 0x05, 0x13, 0x28, 0x37, 0x38, 0x64, 0x39,
+                0x35, 0x65, 0x62, 0x33, 0x64, 0x64, 0x64, 0x36, 0x34, 0x33, 0x36, 0x39, 0x39, 0x61,
+                0x66, 0x61, 0x30, 0x38, 0x39, 0x65, 0x30, 0x65, 0x66, 0x32, 0x34, 0x63, 0x62, 0x32,
+                0x38, 0x39, 0x34, 0x33, 0x31, 0x32, 0x63, 0x63, 0x30, 0x59, 0x30, 0x13, 0x06, 0x07,
+                0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D,
+                0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04, 0x6F, 0x65, 0x07, 0xEC, 0xC7, 0x70, 0x79,
+                0x0D, 0xBB, 0x45, 0x2C, 0x04, 0x2B, 0x7B, 0x75, 0x90, 0xD1, 0xBE, 0x6A, 0x62, 0xCC,
+                0xF8, 0x7C, 0x91, 0xC3, 0x30, 0x2D, 0x26, 0xA6, 0x8A, 0x98, 0x39, 0x8D, 0x7F, 0x68,
+                0xAC, 0x73, 0x1F, 0x0D, 0x6C, 0xB7, 0x26, 0xC6, 0x65, 0x9C, 0xA8, 0xB6, 0xB7, 0xA9,
+                0x66, 0x26, 0x90, 0x8E, 0xA5, 0xC4, 0x50, 0x97, 0xB7, 0x66, 0x45, 0xDA, 0x8D, 0xE6,
+                0x7F, 0xA3, 0x81, 0x83, 0x30, 0x81, 0x80, 0x30, 0x1D, 0x06, 0x03, 0x55, 0x1D, 0x0E,
+                0x04, 0x16, 0x04, 0x14, 0x78, 0xD9, 0x5E, 0xB3, 0xDD, 0xD6, 0x43, 0x69, 0x9A, 0xFA,
+                0x08, 0x9E, 0x0E, 0xF2, 0x4C, 0xB2, 0x89, 0x43, 0x12, 0xCC, 0x30, 0x2B, 0x06, 0x03,
+                0x55, 0x1D, 0x23, 0x04, 0x24, 0x30, 0x22, 0x80, 0x20, 0xF4, 0x20, 0xB6, 0xD9, 0xD8,
+                0x62, 0xF6, 0x8B, 0x09, 0x15, 0xCE, 0x8B, 0x57, 0xA4, 0xFC, 0x57, 0x4E, 0xB8, 0xC1,
+                0x7C, 0xA5, 0xF9, 0xE6, 0x56, 0xDB, 0xD0, 0x52, 0x94, 0x29, 0xBD, 0x6D, 0x7F, 0x30,
+                0x0E, 0x06, 0x03, 0x55, 0x1D, 0x0F, 0x01, 0x01, 0xFF, 0x04, 0x04, 0x03, 0x02, 0x02,
+                0x04, 0x30, 0x0F, 0x06, 0x03, 0x55, 0x1D, 0x13, 0x01, 0x01, 0xFF, 0x04, 0x05, 0x30,
+                0x03, 0x01, 0x01, 0xFF, 0x30, 0x11, 0x06, 0x03, 0x55, 0x1D, 0x20, 0x04, 0x0A, 0x30,
+                0x08, 0x30, 0x06, 0x06, 0x04, 0x55, 0x1D, 0x20, 0x00, 0x30, 0x0D, 0x06, 0x09, 0x2A,
+                0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B, 0x05, 0x00, 0x03, 0x82, 0x01, 0x01,
+                0x00, 0x92, 0x66, 0x23, 0x42, 0x18, 0x0E, 0xCD, 0x7F, 0xD0, 0x56, 0x84, 0x3E, 0x5F,
+                0xAA, 0x98, 0xB8, 0xF8, 0x33, 0xFE, 0x23, 0xE9, 0x0F, 0xB9, 0x1E, 0xF6, 0xC5, 0xB9,
+                0xEA, 0x05, 0xF3, 0x78, 0x33, 0x09, 0x68, 0x70, 0x68, 0x9D, 0x06, 0x48, 0xF6, 0xF9,
+                0xA7, 0xF9, 0x90, 0x85, 0x0E, 0x05, 0xA4, 0x43, 0x14, 0x6F, 0x3F, 0xBB, 0x13, 0x9C,
+                0x66, 0x22, 0x6D, 0x3D, 0x19, 0xD2, 0x65, 0x4D, 0x86, 0x5E, 0x52, 0x54, 0x74, 0x45,
+                0x22, 0xA4, 0xDB, 0x7F, 0x4A, 0x16, 0x96, 0x78, 0x5E, 0x51, 0x0A, 0xB8, 0xD6, 0xC1,
+                0xB1, 0xE5, 0xF1, 0x9E, 0x4B, 0x65, 0x9A, 0x76, 0xC5, 0x62, 0xA1, 0x23, 0x75, 0xB7,
+                0x54, 0x8A, 0x80, 0xEB, 0x2B, 0x6E, 0x43, 0x37, 0xD3, 0x32, 0x2F, 0x75, 0xA3, 0x81,
+                0x7C, 0x68, 0x16, 0x3C, 0x4D, 0x9A, 0x5B, 0x1C, 0xEE, 0xC7, 0xBA, 0x3A, 0x22, 0xF4,
+                0x14, 0x53, 0x05, 0x58, 0xD6, 0xE1, 0xA1, 0xF4, 0x8E, 0x84, 0x42, 0xA0, 0xD3, 0x0B,
+                0xC8, 0xBC, 0x19, 0x98, 0xC0, 0xD5, 0xC0, 0x7C, 0xDE, 0x6A, 0x2B, 0x32, 0xAF, 0x3E,
+                0x0E, 0x23, 0x24, 0xBF, 0xEC, 0xDA, 0x11, 0x71, 0xAA, 0x59, 0xD4, 0x4E, 0xCB, 0xB2,
+                0xD8, 0xB0, 0x05, 0xFF, 0x57, 0xD9, 0xA5, 0x3C, 0x7D, 0xA7, 0xBA, 0x1F, 0xBE, 0x30,
+                0x0A, 0xDD, 0xA2, 0xA9, 0xC7, 0x56, 0x56, 0x57, 0xC1, 0x78, 0x6E, 0x61, 0x56, 0xC9,
+                0xC0, 0x0C, 0xA4, 0xA2, 0xF7, 0x28, 0x7D, 0x58, 0x01, 0xF6, 0xCF, 0xB1, 0x70, 0xC9,
+                0x5F, 0x4D, 0xC2, 0xE2, 0x62, 0x2D, 0x35, 0xFC, 0x1F, 0xF3, 0x4B, 0x1A, 0xD0, 0x26,
+                0xBF, 0x6F, 0x63, 0x9C, 0xC6, 0xEB, 0x1C, 0x44, 0x73, 0x63, 0xF1, 0xAC, 0x8E, 0xFF,
+                0x48, 0x18, 0xB1, 0x57, 0x6B, 0x18, 0x4F, 0xB8, 0xA9, 0xF0, 0x5C, 0x65, 0xC8, 0x11,
+                0xC1, 0x0A, 0x63, 0x5C, 0x99,
+            ];
+
+            uds_certs
+        }
+    }
+
+    impl KeyMintInterface for MockKeyMintSecureInterface {
+        type Error = KeyMintClientError;
+
+        fn transmit(&mut self, request: &[u8]) -> Result<Vec<u8>, Self::Error> {
+            let msg = legacy::deserialize_trusty_secure_req(request)
+                .expect("failed to deserialize trusty secure request");
+            let response = self.handle_message(msg).expect("failed to handle secure message");
+            let response = legacy::serialize_trusty_secure_rsp(response)
+                .expect("failed serialize trusty secure response");
+
+            Ok(response)
+        }
+    }
+
+    #[test]
+    fn mock_get_device_info() {
+        let mut client = KeyMintSecureLegacyClient(MockKeyMintSecureInterface);
+        let res = client.get_device_info().unwrap();
+        log::info!("{:?}", res);
+    }
+
+    #[test]
+    fn mock_get_uds_certs() {
+        let mut client = KeyMintSecureLegacyClient(MockKeyMintSecureInterface);
+        let _res = client.get_uds_certs().unwrap();
+
+        // TODO(mvertescher): Migrate to use openssl
+        /*
+        for cert in &res {
+            debug_print_certificate(cert);
+        }
+
+        for (parent, child) in res.iter().zip(res.iter().skip(1)) {
+            debug_print_certificate(parent);
+            debug_print_certificate(child);
+            // TODO(mvertescher): Verify child certificate
+        }
+        */
+    }
+
+    #[test]
+    fn mock_set_attestation_ids() {
+        log::info!("set attestation ids mock test");
+        let mut client = KeyMintSecureLegacyClient(MockKeyMintSecureInterface);
+
+        let ids = SetAttestationIdsRequest {
+            brand: "BRAND".as_bytes().to_vec(),
+            device: "DEVICE".as_bytes().to_vec(),
+            product: "PRODUCT".as_bytes().to_vec(),
+            serial: "SERIAL".as_bytes().to_vec(),
+            imei: "".as_bytes().to_vec(),
+            meid: "".as_bytes().to_vec(),
+            manufacturer: "MANUFACTURER".as_bytes().to_vec(),
+            model: "MODEL".as_bytes().to_vec(),
+        };
+
+        client.set_attestation_ids(ids).unwrap();
+    }
+}
+
+/// Trusty unit tests
+///
+/// `adb shell trusty-ut-ctrl -D VSOCK:200:1 com.android.trusty.rust.keymint_legacy_client.test`
+#[cfg(test)]
+#[cfg(target_os = "trusty")]
+mod tests {
+    use super::*;
+
+    test::init!();
+
+    #[test]
+    fn get_device_info() {
+        let res = KeyMintSecureLegacyClient::new();
+        if res.is_err() {
+            log::error!("failed to created keymint client: {:?}\n", res);
+            return;
+        }
+        let mut client = res.unwrap();
+        let res = client.get_device_info();
+        if res.is_err() {
+            log::error!("failed to get device info: {:?}\n", res);
+            return;
+        }
+        log::info!("get device info response: {:02x?}", res);
+    }
+
+    #[test]
+    fn get_uds_certs() {
+        let res = KeyMintSecureLegacyClient::new();
+        if res.is_err() {
+            log::error!("failed to created keymint client: {:?}\n", res);
+            return;
+        }
+        let mut client = res.unwrap();
+        let res = client.get_uds_certs();
+        if res.is_err() {
+            log::error!("failed to get uds certs: {:?}\n", res);
+            return;
+        }
+        // TODO(mvertescher): Migrate to use openssl
+        /*
+        let certs = res.unwrap();
+        log::info!("num certs: {}", certs.len());
+        for cert in &certs {
+            debug_print_certificate(cert);
+        }
+        */
+    }
+
+    #[test]
+    fn set_attestation_ids() {
+        let res = KeyMintSecureLegacyClient::new();
+        if res.is_err() {
+            log::error!("failed to created keymint client: {:?}\n", res);
+            return;
+        }
+
+        let ids = SetAttestationIdsRequest {
+            brand: "google".as_bytes().to_vec(),
+            device: "brya".as_bytes().to_vec(),
+            product: "Brya".as_bytes().to_vec(),
+            serial: "0123456789".as_bytes().to_vec(),
+            imei: "".as_bytes().to_vec(),
+            meid: "".as_bytes().to_vec(),
+            manufacturer: "Google".as_bytes().to_vec(),
+            model: "Google".as_bytes().to_vec(),
+        };
+
+        let mut client = res.unwrap();
+        let res = client.set_attestation_ids(ids);
+        if res.is_err() {
+            log::error!("failed to set attestation ids: {:?}\n", res);
+            return;
+        }
+    }
+}
