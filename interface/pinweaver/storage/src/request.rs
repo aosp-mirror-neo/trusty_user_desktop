@@ -15,7 +15,7 @@
  */
 //! v1 storage request
 
-use super::{LargeSecretInfo, LeafContents, LeafId, LeafSet, TreeParams};
+use super::{LargeSecretInfo, LeafContents, LeafId, LeafSet, Path, TreeParams};
 use crate::{
     util::{serde_enums, serde_fields, serde_zerocopy, SerdeOption},
     TreeHash,
@@ -62,6 +62,9 @@ serde_enums! {
 
         /// Remove many leaves in PinWeaver.
         RemoveBulk(LeafSet) = 3,
+
+        /// Handle log replay operations.
+        LogReplay(Path) = 4,
     }
 
     /// Whether to allow an insert with the same leaf ID as in the

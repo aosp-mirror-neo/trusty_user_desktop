@@ -1,7 +1,7 @@
 //! PinWeaver response-only types.
 
 use super::{
-    request, Hash, Secret, TimeDiff, Timestamp, TreeParams, UnimportedLeafDataSizeError,
+    request, Hash, LogEntry, Secret, TimeDiff, Timestamp, TreeParams, UnimportedLeafDataSizeError,
     WithUnimportedLeafData, PROTOCOL_VERSION,
 };
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, Unaligned, LE, U16, U32};
@@ -213,6 +213,42 @@ pub struct TryAuthHeader {
 
 impl ResponsePart for TryAuthHeader {
     type RequestData = request::TryAuth;
+}
+
+/// Reset auth response data.
+pub type ResetAuth = WithUnimportedLeafData<ResetAuthHeader>;
+
+/// The portion reset auth response data before the unimported leaf.
+#[derive(Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct ResetAuthHeader {}
+
+impl ResponsePart for ResetAuthHeader {
+    type RequestData = request::ResetAuth;
+}
+
+/// Get log response.
+#[derive(Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct GetLog {
+    /// The log entries.
+    pub entries: [LogEntry],
+}
+
+impl ResponseData for GetLog {
+    type RequestData = request::GetLog;
+}
+
+/// Log replay response data.
+pub type LogReplay = WithUnimportedLeafData<LogReplayHeader>;
+
+/// The portion of log replay response data before the unimported leaf.
+#[derive(Debug, FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct LogReplayHeader {}
+
+impl ResponsePart for LogReplayHeader {
+    type RequestData = request::LogReplay;
 }
 
 /// Info about the PinWeaver system.
