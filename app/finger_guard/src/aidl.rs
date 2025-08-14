@@ -93,3 +93,71 @@ pub fn make_finish_enroll_session_response(mac: &crypto::Hmac) -> FinishEnrollSe
     mac.export(&mut response);
     response
 }
+
+#[cfg(test)]
+mod test {
+    use super::{
+        make_finish_enroll_session_response, make_handshake_response,
+        make_prepare_auth_session_response, make_prepare_enroll_session_response,
+        make_session_response,
+    };
+    use crate::crypto;
+    use std::array;
+    use zerocopy::FromBytes;
+
+    // In general all of these tests deliberately make their input data non-zero. Otherwise it's
+    // difficult to distinguish between fields which were correctly populated and ones which were
+    // simply default-initialized.
+
+    #[test]
+    fn test_make_handshake_response() {
+        let public_key: Vec<u8> = (1..=32).collect();
+        let hmac_bytes: Vec<u8> = (1..=32).map(|x| x * 2).collect();
+        let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
+        let response = make_handshake_response(public_key.clone(), &hmac);
+        assert_eq!(response.serverPublicKey, public_key);
+        assert_eq!(response.pkMac, hmac_bytes);
+    }
+
+    #[test]
+    fn test_make_session_response() {
+        let nonce_bytes: [u8; 32] = array::from_fn(|x| x as u8);
+        let nonce = crypto::Nonce::read_from_bytes(&nonce_bytes).unwrap();
+        let wrapped_tpm_seed: Vec<u8> = (1..=32).map(|x| x * 2).collect();
+        let iv: Vec<u8> = (1..=12).map(|x| x * 3).collect();
+        let tag: Vec<u8> = (1..=16).map(|x| x * 4).collect();
+        let response =
+            make_session_response(&nonce, wrapped_tpm_seed.clone(), iv.clone(), tag.clone());
+        assert_eq!(response.nonce, nonce_bytes);
+        assert_eq!(response.wrappedTpmSeed, wrapped_tpm_seed);
+        assert_eq!(response.iv, iv);
+        assert_eq!(response.tag, tag);
+    }
+
+    #[test]
+    fn test_make_prepare_auth_session_response() {
+        let nonce_bytes: [u8; 32] = array::from_fn(|x| x as u8);
+        let nonce = crypto::Nonce::read_from_bytes(&nonce_bytes).unwrap();
+        let hmac_bytes: Vec<u8> = (1..=32).map(|x| x * 2).collect();
+        let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
+        let response = make_prepare_auth_session_response(&nonce, &hmac);
+        assert_eq!(response.nonce, nonce_bytes);
+        assert_eq!(response.mac, hmac_bytes);
+    }
+
+    #[test]
+    fn test_make_prepare_enroll_session_response() {
+        let hmac_bytes: Vec<u8> = (1..=32).collect();
+        let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
+        let response = make_prepare_enroll_session_response(&hmac);
+        assert_eq!(response.mac, hmac_bytes);
+    }
+
+    #[test]
+    fn test_make_finish_enroll_session_response() {
+        let hmac_bytes: Vec<u8> = (1..=32).collect();
+        let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
+        let response = make_finish_enroll_session_response(&hmac);
+        assert_eq!(response.mac, hmac_bytes);
+    }
+}
