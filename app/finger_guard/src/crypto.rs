@@ -119,6 +119,28 @@ impl HmacSignable for Nonce {
     }
 }
 
+// Define a type for encryption IVs.
+blob_newtype!(Iv, 12);
+impl Iv {
+    /// Securely generate a new IV.
+    pub fn generate() -> Self {
+        Self { bytes: rng::generate_random_buffer::<{ Self::SIZE }>() }
+    }
+}
+impl ExportToAidl<SessionResponse> for Iv {
+    fn export(&self, out: &mut SessionResponse) {
+        out.iv = self.bytes.to_vec();
+    }
+}
+
+// Define a type for tags used in AES-256 encryption.
+blob_newtype!(Aes256Tag, 16);
+impl ExportToAidl<SessionResponse> for Aes256Tag {
+    fn export(&self, out: &mut SessionResponse) {
+        out.tag = self.bytes.to_vec();
+    }
+}
+
 // Define a new type for a secret. Note that while most of the blobs (e.g. nonces, keys) are
 // secrets, those ones have additional semantic intent: nonces should only be used once, keys
 // can be used to encrypt/decrypt data, and so on.
@@ -184,36 +206,37 @@ pub fn perform_ecdh(
 /// Encrypt a message using AES256-GCM with the given Hmac as a key.
 pub fn encrypt_aes256_gcm(
     key: &Hmac,
-    iv: &[u8],
+    iv: &Iv,
     aad: &[u8],
     data: &Secret,
-    tag: &mut [u8],
-) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+) -> Result<(Vec<u8>, Aes256Tag), openssl::error::ErrorStack> {
+    let mut tag = Aes256Tag { bytes: [0u8; Aes256Tag::SIZE] };
     openssl::symm::encrypt_aead(
         Cipher::aes_256_gcm(),
-        key.bytes.as_slice(),
-        Some(iv),
+        &key.bytes,
+        Some(&iv.bytes),
         aad,
         &data.bytes,
-        tag,
+        &mut tag.bytes,
     )
+    .map(|enc_data| (enc_data, tag))
 }
 
 /// Decrypt a message using AES256-GCM with the given Hmac as a key.
 pub fn decrypt_aes256_gcm(
     key: &Hmac,
-    iv: &[u8],
+    iv: &Iv,
     aad: &[u8],
     data: &[u8],
-    tag: &[u8],
+    tag: &Aes256Tag,
 ) -> ServiceResult<Secret> {
     let secret = openssl::symm::decrypt_aead(
         Cipher::aes_256_gcm(),
-        key.bytes.as_slice(),
-        Some(iv),
+        &key.bytes,
+        Some(&iv.bytes),
         aad,
         data,
-        tag,
+        &tag.bytes,
     )
     .wrap_openssl_err("decryption operation failed")?;
     let len = secret.len();
@@ -380,7 +403,8 @@ pub fn sensor_session_message_hmac(
 mod test {
     use super::{
         compute_hmac, decrypt_aes256_gcm, ec_keygen, ec_public_key_serialization,
-        encrypt_aes256_gcm, perform_ecdh, Hmac, HmacGenerator, HmacSignable, Key, Secret,
+        encrypt_aes256_gcm, perform_ecdh, Aes256Tag, Hmac, HmacGenerator, HmacSignable, Iv, Key,
+        Secret,
     };
     use crate::error::ServiceResult;
     use std::array;
@@ -494,11 +518,10 @@ mod test {
     fn test_encrypt_round_trip() {
         let key = Key { bytes: array::from_fn(|i| i as u8 + 1) };
         let hmac = compute_hmac!(&key, &TestBlob(b"something")).expect("HMAC computation failed");
-        let iv: [u8; 12] = array::from_fn(|i| i as u8);
+        let iv = Iv { bytes: array::from_fn(|i| i as u8) };
         let plaintext = Secret { bytes: array::from_fn(|i| i as u8) };
-        let mut tag = [0_u8; 16];
-        let ciphertext = encrypt_aes256_gcm(&hmac, &iv, b"some_aad", &plaintext, &mut tag)
-            .expect("encryption failed");
+        let (ciphertext, tag) =
+            encrypt_aes256_gcm(&hmac, &iv, b"some_aad", &plaintext).expect("encryption failed");
         assert_ne!(plaintext.bytes, ciphertext.as_slice());
         let decrypted = decrypt_aes256_gcm(&hmac, &iv, b"some_aad", &ciphertext, &tag)
             .expect("decryption failed");
@@ -509,21 +532,20 @@ mod test {
     fn test_decrypt_fails() {
         let key = Key { bytes: array::from_fn(|i| i as u8 + 1) };
         let hmac = compute_hmac!(&key, &TestBlob(b"something")).expect("HMAC computation failed");
-        let iv: [u8; 12] = array::from_fn(|i| i as u8);
+        let iv = Iv { bytes: array::from_fn(|i| i as u8) };
         let plaintext = Secret { bytes: array::from_fn(|i| i as u8) };
-        let mut tag = [0_u8; 16];
-        let ciphertext = encrypt_aes256_gcm(&hmac, &iv, b"some_aad", &plaintext, &mut tag)
-            .expect("encryption failed");
+        let (ciphertext, tag) =
+            encrypt_aes256_gcm(&hmac, &iv, b"some_aad", &plaintext).expect("encryption failed");
         decrypt_aes256_gcm(&Hmac { bytes: [0; 32] }, &iv, b"some_aad", &ciphertext, &tag)
             .err()
             .expect("decrypt worked with bad key");
-        decrypt_aes256_gcm(&hmac, &[0; 12], b"some_aad", &ciphertext, &tag)
+        decrypt_aes256_gcm(&hmac, &Iv { bytes: [0; 12] }, b"some_aad", &ciphertext, &tag)
             .err()
             .expect("decrypt worked with bad IV");
         decrypt_aes256_gcm(&hmac, &iv, b"bad_aad", &ciphertext, &tag)
             .err()
             .expect("decrypt worked with bad AAD");
-        decrypt_aes256_gcm(&hmac, &iv, b"some_aad", &ciphertext, &tag.map(|x| x + 1))
+        decrypt_aes256_gcm(&hmac, &iv, b"some_aad", &ciphertext, &Aes256Tag { bytes: [0; 16] })
             .err()
             .expect("decrypt worked with bad tag");
     }

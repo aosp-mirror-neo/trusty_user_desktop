@@ -58,14 +58,14 @@ pub fn make_handshake_response(
 pub fn make_session_response(
     nonce: &crypto::Nonce,
     wrapped_tpm_seed: Vec<u8>,
-    iv: Vec<u8>,
-    tag: Vec<u8>,
+    iv: &crypto::Iv,
+    tag: &crypto::Aes256Tag,
 ) -> SessionResponse {
     let mut response = SessionResponse::default();
     nonce.export(&mut response);
     response.wrappedTpmSeed = wrapped_tpm_seed;
-    response.iv = iv;
-    response.tag = tag;
+    iv.export(&mut response);
+    tag.export(&mut response);
     response
 }
 
@@ -124,14 +124,15 @@ mod test {
         let nonce_bytes: [u8; 32] = array::from_fn(|x| x as u8);
         let nonce = crypto::Nonce::read_from_bytes(&nonce_bytes).unwrap();
         let wrapped_tpm_seed: Vec<u8> = (1..=32).map(|x| x * 2).collect();
-        let iv: Vec<u8> = (1..=12).map(|x| x * 3).collect();
-        let tag: Vec<u8> = (1..=16).map(|x| x * 4).collect();
-        let response =
-            make_session_response(&nonce, wrapped_tpm_seed.clone(), iv.clone(), tag.clone());
+        let iv_bytes: [u8; 12] = array::from_fn(|x| x as u8 * 3);
+        let iv = crypto::Iv::read_from_bytes(&iv_bytes).unwrap();
+        let tag_bytes: [u8; 16] = array::from_fn(|x| x as u8 * 4);
+        let tag = crypto::Aes256Tag::read_from_bytes(&tag_bytes).unwrap();
+        let response = make_session_response(&nonce, wrapped_tpm_seed.clone(), &iv, &tag);
         assert_eq!(response.nonce, nonce_bytes);
         assert_eq!(response.wrappedTpmSeed, wrapped_tpm_seed);
-        assert_eq!(response.iv, iv);
-        assert_eq!(response.tag, tag);
+        assert_eq!(response.iv, iv_bytes);
+        assert_eq!(response.tag, tag_bytes);
     }
 
     #[test]
