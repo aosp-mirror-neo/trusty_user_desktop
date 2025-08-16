@@ -20,6 +20,7 @@ rust_defaults {
         "libzerocopy",
     ],
     proc_macros: ["libpaste"],
+    host_supported: true,
 }
 
 rust_library {
@@ -36,5 +37,4 @@ rust_test {
     defaults: ["libdesktop_hwsec_tpm_commands_defaults"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
-    host_supported: true,
 }

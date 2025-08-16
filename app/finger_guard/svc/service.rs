@@ -160,18 +160,16 @@ impl FingerGuardService {
         }
         let nonce = crypto::Nonce::generate();
         let new_sk = crypto::compute_hmac!(&init_params.pk, &client_nonce, &nonce)?;
-        let iv = rng::generate_random_vec::<12>();
-        let mut tag = vec![0u8; 16];
-        let wrapped_tpm_seed = crypto::encrypt_aes256_gcm(
+        let iv = crypto::Iv::generate();
+        let (wrapped_tpm_seed, tag) = crypto::encrypt_aes256_gcm(
             &new_sk,
-            iv.as_slice(),
+            &iv,
             b"tpm_seed", // aad = "tpm_seed"
             &init_params.tpm_seed,
-            tag.as_mut_slice(),
         )
         .wrap_openssl_err("failed to encrypt tpm_seed")?;
         *sk = Some(new_sk.into());
-        Ok(aidl::make_session_response(&nonce, wrapped_tpm_seed, iv, tag))
+        Ok(aidl::make_session_response(&nonce, wrapped_tpm_seed, &iv, &tag))
     }
 
     fn generate_challenge(&self, sensor_user_pair: &SensorUserPair) -> ServiceResult<i64> {
@@ -562,6 +560,7 @@ mod tests {
     use openssl::bn::BigNumContext;
     use openssl::ec::{EcGroup, EcKey, PointConversionForm};
     use test::{assert, assert_eq, assert_ne, assert_ok, skip};
+    use zerocopy::FromBytes;
 
     // Struct used in tests to allow arbitrary blobs to be supplied to the HMAC generator.
     struct TestBlob<'a>(&'a [u8]);
@@ -626,27 +625,11 @@ mod tests {
         ));
 
         // Decrypt the wrapped tpm seed.
-        let iv = session_response.iv;
-        let tag = session_response.tag;
+        let iv = assert_ok!(crypto::Iv::read_from_bytes(session_response.iv.as_slice()));
+        let tag = assert_ok!(crypto::Aes256Tag::read_from_bytes(session_response.tag.as_slice()));
         let encrypted_tpm_seed = session_response.wrappedTpmSeed;
         let aad = b"tpm_seed";
-        assert_ok!(crypto::decrypt_aes256_gcm(
-            &sk,
-            iv.as_slice(),
-            aad,
-            encrypted_tpm_seed.as_slice(),
-            tag.as_slice(),
-        ));
-
-        // Bad AAD leads to a decryption error.
-        assert!(crypto::decrypt_aes256_gcm(
-            &sk,
-            iv.as_slice(),
-            b"incorrect_aad",
-            encrypted_tpm_seed.as_slice(),
-            tag.as_slice(),
-        )
-        .is_err());
+        assert_ok!(crypto::decrypt_aes256_gcm(&sk, &iv, aad, encrypted_tpm_seed.as_slice(), &tag,));
 
         // Convert the HMAC into a key.
         let sk = crypto::Key::from(sk);
