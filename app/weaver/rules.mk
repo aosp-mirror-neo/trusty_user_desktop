@@ -28,8 +28,10 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,libc) \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,thiserror) \
+	frameworks/native/libs/binder/trusty/rust \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
+	trusty/user/desktop/interface/pinweaver \
 
 MODULE_RUST_USE_CLIPPY := true
 MODULE_RUST_TESTS := false #TODO set true

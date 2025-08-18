@@ -16,12 +16,20 @@
 
 //! Error types of weaver TA
 
+use binder::Status;
+use binder::StatusCode;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum WeaverTAError {
     #[error("Bad weaver message {0}")]
     BadMessage(String),
+    #[error("{0}: {1:?}")]
+    PinweaverConnectionError(String, StatusCode),
+    #[error("{0}: {1:?}")]
+    PinweaverError(String, Status),
+    #[error("{0}")]
+    PinweaverUnexpectedResult(String),
     #[error("{0}: {1:?}")]
     TipcError(String, tipc::TipcError),
 }
