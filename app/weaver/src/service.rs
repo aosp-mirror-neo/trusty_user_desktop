@@ -13,9 +13,11 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-use crate::message::BinaryMessageParser;
-use crate::message::WeaverMessageParser;
-use crate::message::{ResponseStatus, WeaverHalRequest, WeaverHalResponse};
+
+use crate::message::{
+    BinaryMessageParser, ResponseStatus, WeaverHalRequest, WeaverHalResponse, WeaverMessageParser,
+};
+use crate::weaver::{connect_to_pinweaver, PinWeaverImpl, Weaver};
 use crate::WeaverTAError;
 use alloc::rc::Rc;
 use log::error;
@@ -37,8 +39,10 @@ const WEAVER_TIPC_PORT: &str = "com.android.trusty.weaver.desktop";
 const WEAVER_MAX_BUFFER_LENGTH: usize = 4096;
 const CONNECTION_COUNT: usize = 1;
 
-struct WeaverHalTA<T: WeaverMessageParser> {
-    message_parser: T,
+// Will use BinaryMessageParser (M) for message parsing and pinweaver for weaver implementation (W)
+struct WeaverHalTA<M: WeaverMessageParser, W: Weaver> {
+    message_parser: M,
+    weaver_impl: W,
 }
 
 /// Raw tipc message to satisfy deserialize/Serialize requirement
@@ -64,19 +68,13 @@ struct Context {
     _uuid: Uuid,
 }
 
-// Default Constructor for parsing messages will use BinaryMessageParser
-impl Default for WeaverHalTA<BinaryMessageParser> {
-    fn default() -> Self {
-        WeaverHalTA::new(BinaryMessageParser::default())
-    }
-}
-impl<T: WeaverMessageParser> WeaverHalTA<T> {
-    fn new(message_parser: T) -> Self {
-        WeaverHalTA { message_parser }
+impl<M: WeaverMessageParser, W: Weaver> WeaverHalTA<M, W> {
+    fn new(message_parser: M, weaver_impl: W) -> Self {
+        WeaverHalTA { message_parser, weaver_impl }
     }
 }
 
-impl<T: WeaverMessageParser> Service for WeaverHalTA<T> {
+impl<M: WeaverMessageParser, W: Weaver> Service for WeaverHalTA<M, W> {
     type Message = TipcMessage;
     type Connection = Context;
     fn on_connect(
@@ -113,17 +111,23 @@ impl<T: WeaverMessageParser> Service for WeaverHalTA<T> {
         let response = match request {
             WeaverHalRequest::ReadRequest { slot_id, key } => {
                 trace!("Received a read message.");
-                read(slot_id, key)
+                self.weaver_impl.read(slot_id, &key).unwrap_or_else(|e| {
+                    error!("Unexpected error while performing weaver read: {:?}", e);
+                    WeaverHalResponse::ReadResponse {
+                        status: ResponseStatus::Failed,
+                        timeout: 0,
+                        value: Vec::new(),
+                    }
+                })
             }
             WeaverHalRequest::WriteRequest { slot_id, key, value } => {
                 trace!("Received a write message.");
-                write(slot_id, key, value)
+                self.weaver_impl.write(slot_id, &key, &value).unwrap_or_else(|e| {
+                    error!("Unexpected error while performing weaver write: {:?}", e);
+                    WeaverHalResponse::WriteResponse { status: ResponseStatus::Failed }
+                })
             }
-        }
-        .map_err(|e| {
-            error!("Unexpected error while processing message: {:?}", e);
-            TipcError::UnknownError
-        })?;
+        };
 
         // Serialize message to send
         let response = self.message_parser.serialize(response).map_err(|e| {
@@ -138,50 +142,18 @@ impl<T: WeaverMessageParser> Service for WeaverHalTA<T> {
     }
 }
 
-fn read(_slot_id: i32, _key: Vec<u8>) -> Result<WeaverHalResponse, WeaverTAError> {
-    /* TODO call pinweaver
-        tryAuthenticate(
-            LeafID(Leafset::WEAVER, slot_id),
-            key,
-        )
-    */
-
-    Ok(WeaverHalResponse::ReadResponse {
-        status: ResponseStatus::Failed,
-        timeout: 0,
-        value: Vec::new(),
-    })
-}
-
-fn write(
-    _slot_id: i32,
-    _key: Vec<u8>,
-    _value: Vec<u8>,
-) -> Result<WeaverHalResponse, WeaverTAError> {
-    /* TODO call pinweaver
-        insert(
-            LeafID(Leafset::WEAVER, slot_id),
-            key,
-            value,
-            DelayScheduleEntry(5, 60),
-            InsertMode::REPLACE_EXISTING,
-        )
-    */
-
-    Ok(WeaverHalResponse::WriteResponse { status: ResponseStatus::Ok })
-}
-
 // Create a dispatcher for weaver service
-type Weaver = WeaverHalTA<BinaryMessageParser>;
+type WeaverTA = WeaverHalTA<BinaryMessageParser, PinWeaverImpl>;
 service_dispatcher! {
     enum WeaverDispatcher{
         // Handles calls to the android weaver hal
-        Weaver,
+        WeaverTA,
     }
 }
 
-pub fn start_tipc_service() -> Result<(), WeaverTAError> {
-    let weaver_ta = Weaver::default();
+pub(crate) fn start_tipc_service() -> Result<(), WeaverTAError> {
+    let pinweaver = connect_to_pinweaver()?;
+    let weaver_ta = WeaverHalTA::new(BinaryMessageParser::default(), pinweaver);
 
     trace!("Weaver ta created.");
 
