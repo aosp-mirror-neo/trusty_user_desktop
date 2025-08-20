@@ -17,7 +17,6 @@
 //! Utilities and traits for reading and writing types from Trusty Storage.
 
 use finger_guard::error::{ServiceError, ServiceResult};
-use finger_guard::identifiers;
 use storage::{OpenMode, Port, Session};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -78,10 +77,6 @@ pub trait PersistedState: FromBytes + IntoBytes + Immutable {
         Ok(())
     }
 }
-
-// These identifier types support persistence to storage.
-impl PersistedState for identifiers::AuthenticatorId {}
-impl PersistedState for identifiers::SecureUserId {}
 
 /// Indicates that the type is pesisted to one single file.
 ///
