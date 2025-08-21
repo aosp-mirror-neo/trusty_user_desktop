@@ -136,63 +136,33 @@ impl AuthRateLimiter {
 
 #[cfg(test)]
 mod test {
-    use super::PERMANENT_DELAY;
-    use super::{AuthRateLimiter, DelaySchedule, LockoutStatus};
-    use crate::error::ServiceResult;
-    use crate::time::{Clock, Instant};
-    use std::sync::Mutex;
+    use super::{AuthRateLimiter, DelaySchedule, LockoutStatus, PERMANENT_DELAY};
+    use crate::fake::SimulatedClock;
     use std::time::Duration;
-    /// A mock clock implementation for testing.
-    pub struct MockClock {
-        // Mutex provides internal mutability and Sync.
-        current_time: Mutex<Instant>,
-    }
-
-    impl MockClock {
-        /// Creates a new MockClock.
-        pub const fn new() -> Self {
-            MockClock { current_time: Mutex::new(Instant::MIN) }
-        }
-
-        /// Advances the mock clock by a specified duration.
-        pub fn advance_time(&self, duration: Duration) {
-            let mut now = self.current_time.lock().unwrap();
-            *now = *now + duration;
-        }
-    }
-
-    impl Clock for MockClock {
-        fn now(&self) -> ServiceResult<Instant> {
-            Ok(*self.current_time.lock().unwrap())
-        }
-    }
-    static MOCK_CLOCK: MockClock = MockClock::new();
-    // A lock ensures some tests that would get exclusive mock clock access to avoid data race
-    // against each other. It is a hack before "serial_test" crate is imported.
-    static CLOCK_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_auth_rate_limiter_new() {
+        let clock = SimulatedClock::new();
         let time_window = Duration::from_secs(3600);
         let lockout_policy = [DelaySchedule { attempt_count: 1, duration: PERMANENT_DELAY }];
-        let _ = AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec()).unwrap();
+        let _ = AuthRateLimiter::new(clock, time_window, lockout_policy.to_vec()).unwrap();
     }
 
     #[test]
     fn test_rate_limiter_timeout() {
-        let _clock_lock = CLOCK_LOCK.lock().unwrap();
+        let clock = SimulatedClock::new();
         let time_window = Duration::from_secs(3600);
         let lockout_policy = [DelaySchedule { attempt_count: 1, duration: PERMANENT_DELAY }];
         let mut rate_limiter =
-            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec()).unwrap();
-        MOCK_CLOCK.advance_time(time_window);
+            AuthRateLimiter::new(clock, time_window, lockout_policy.to_vec()).unwrap();
+        clock.advance_time(time_window);
         // Past the timeout window, the rate limiter is permanently locked out.
         assert!(matches!(rate_limiter.increment_attempt_counter(), Err(LockoutStatus::Permanent)));
     }
 
     #[test]
     fn test_rate_limiter_timed_lockout() {
-        let _clock_lock = CLOCK_LOCK.lock().unwrap();
+        let clock = SimulatedClock::new();
         let lockout_policy = [
             DelaySchedule { attempt_count: 1, duration: Duration::from_secs(30) },
             DelaySchedule { attempt_count: 2, duration: Duration::from_secs(60) },
@@ -202,7 +172,7 @@ mod test {
         const DURATION_30S: Duration = Duration::from_secs(30);
         const DURATION_60S: Duration = Duration::from_secs(60);
         let mut rate_limiter =
-            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec()).unwrap();
+            AuthRateLimiter::new(clock, time_window, lockout_policy.to_vec()).unwrap();
         // 1st attempt is allowed immediately.
         assert!(matches!(rate_limiter.increment_attempt_counter(), Ok(1)));
         // 2nd attempt needs to wait for 30 seconds.
@@ -211,7 +181,7 @@ mod test {
             Err(LockoutStatus::Timed(DURATION_30S)),
         ));
         // Wait 30 seconds and try again.
-        MOCK_CLOCK.advance_time(DURATION_30S);
+        clock.advance_time(DURATION_30S);
         assert!(matches!(rate_limiter.increment_attempt_counter(), Ok(2)));
         // 3rd attempt needs to wait for 60 seconds.
         assert!(matches!(
@@ -219,13 +189,13 @@ mod test {
             Err(LockoutStatus::Timed(DURATION_60S)),
         ));
         // Wait 30 seconds and try again.
-        MOCK_CLOCK.advance_time(DURATION_30S);
+        clock.advance_time(DURATION_30S);
         assert!(matches!(
             rate_limiter.increment_attempt_counter(),
             Err(LockoutStatus::Timed(DURATION_30S)),
         ));
         // Wait another 30 seconds and try again.
-        MOCK_CLOCK.advance_time(DURATION_30S);
+        clock.advance_time(DURATION_30S);
         assert!(matches!(rate_limiter.increment_attempt_counter(), Ok(3)));
         // Now permanently locked out if increment the counter one more time.
         assert!(matches!(rate_limiter.increment_attempt_counter(), Err(LockoutStatus::Permanent)));
@@ -233,12 +203,12 @@ mod test {
 
     #[test]
     fn test_rate_limiter_reset_counter() {
-        let _clock_lock = CLOCK_LOCK.lock().unwrap();
+        let clock = SimulatedClock::new();
         let n = 5;
         let lockout_policy = [DelaySchedule { attempt_count: n, duration: PERMANENT_DELAY }];
         let time_window = Duration::from_secs(3600);
         let mut rate_limiter =
-            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec()).unwrap();
+            AuthRateLimiter::new(clock, time_window, lockout_policy.to_vec()).unwrap();
         // Initial n attempts are allowed immediately.
         for _ in 0..n {
             assert!(rate_limiter.increment_attempt_counter().is_ok());
@@ -251,12 +221,12 @@ mod test {
 
     #[test]
     fn test_rate_limiter_reset_does_nothing_after_permanent_lockout() {
-        let _clock_lock = CLOCK_LOCK.lock().unwrap();
+        let clock = SimulatedClock::new();
         let n = 5;
         let lockout_policy = [DelaySchedule { attempt_count: n, duration: PERMANENT_DELAY }];
         let time_window = Duration::from_secs(3600);
         let mut rate_limiter =
-            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec()).unwrap();
+            AuthRateLimiter::new(clock, time_window, lockout_policy.to_vec()).unwrap();
         // Initial n attempts are allowed immediately.
         for _ in 0..n {
             assert!(rate_limiter.increment_attempt_counter().is_ok());

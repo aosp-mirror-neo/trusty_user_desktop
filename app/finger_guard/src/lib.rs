@@ -29,3 +29,6 @@ pub mod identifiers;
 pub mod lockout;
 pub mod rng;
 pub mod time;
+
+#[cfg(test)]
+mod fake;
