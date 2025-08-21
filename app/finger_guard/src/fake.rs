@@ -15,20 +15,27 @@
  */
 
 //! Fake implementations of some traits for use in testing.
-use crate::error::ServiceResult;
+use crate::crypto::Key;
+use crate::error::{ServiceError, ServiceResult};
+use crate::identifiers::{AuthenticatorId, SecureUserId};
+use crate::service::{InitParams, TrustyEnvironment};
 use crate::time::{Clock, Instant};
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::Duration;
+use zerocopy::{FromBytes, Immutable, IntoBytes};
+
+// The simulated clock and trusty structures in here protect all of their internal simulated state
+// with mutexes. This is for two reasons:
+//   * these traits are expected to be thread-safe
+//   * we need to be able to manipulate internal state to control the simulation
+// The mutex provides both the safety and interior mutability.
 
 /// A simulated clock implementation for testing. It provides additional functions to allow the
 /// test code to control the current time that it will report.
 pub struct SimulatedClock {
-    /// The current time is protected by a mutex both because clocks need to be threadsafe but also
-    /// because we require interior mutability to allow the test to manipulate the time while the
-    /// code under test is holding a reference.
     current_time: Mutex<Instant>,
 }
-
 impl SimulatedClock {
     /// Creates a new simulated clock.
     ///
@@ -49,5 +56,87 @@ impl SimulatedClock {
 impl Clock for SimulatedClock {
     fn now(&self) -> ServiceResult<Instant> {
         Ok(*self.current_time.lock().unwrap())
+    }
+}
+
+/// A fake trusty environment.
+///
+/// Instead of a real clock and real files this environment uses a simulated clock and stores the
+/// key and file contents in memory.
+pub struct SimulatedTrusty {
+    clock: &'static SimulatedClock,
+    auth_token_key: Mutex<Vec<u8>>,
+    files: Mutex<BTreeMap<String, Vec<u8>>>,
+}
+impl SimulatedTrusty {
+    /// Create a new simulated trusty environment.
+    ///
+    /// The default environement includes a clock and no stored internal contents. Tests that want
+    /// to set up some additional initial state can do so using helpers provided.
+    pub fn new() -> Self {
+        Self {
+            clock: SimulatedClock::new(),
+            auth_token_key: Default::default(),
+            files: Default::default(),
+        }
+    }
+
+    /// Set the auth token key.
+    pub fn set_auth_token_key(&self, key: &Key) {
+        let mut stored_key = self.auth_token_key.lock().unwrap();
+        *stored_key = key.as_bytes().to_vec();
+    }
+
+    fn load_bytes<T: FromBytes>(&self, filename: &str) -> ServiceResult<T> {
+        let files = self.files.lock().unwrap();
+        match files.get(filename) {
+            Some(bytes) => Ok(T::read_from_bytes(bytes).unwrap()),
+            _ => Err(ServiceError::TrustyFile(
+                "not found",
+                filename.to_owned(),
+                Box::new("not found"),
+            )),
+        }
+    }
+    fn save_bytes<T: IntoBytes + Immutable>(
+        &self,
+        object: &T,
+        filename: &str,
+    ) -> ServiceResult<()> {
+        let mut files = self.files.lock().unwrap();
+        files.insert(filename.to_owned(), object.as_bytes().to_vec());
+        Ok(())
+    }
+}
+impl TrustyEnvironment for SimulatedTrusty {
+    fn clock(&self) -> &dyn Clock {
+        self.clock
+    }
+    fn get_auth_token_key(&self) -> ServiceResult<Key> {
+        let key = self.auth_token_key.lock().unwrap();
+        Key::read_from_bytes(key.as_slice())
+            .map_err(|_| ServiceError::StateUnavailable("no auth token key"))
+    }
+    fn load_init_params(&self) -> ServiceResult<InitParams> {
+        self.load_bytes::<InitParams>(InitParams::FILE_NAME)
+    }
+    fn save_init_params(&self, init_params: &InitParams) -> ServiceResult<()> {
+        self.save_bytes(init_params, InitParams::FILE_NAME)
+    }
+    fn load_authenticator_id(&self, filename: &str) -> ServiceResult<AuthenticatorId> {
+        self.load_bytes::<AuthenticatorId>(filename)
+    }
+    fn save_authenticator_id(
+        &self,
+        auth_id: &AuthenticatorId,
+        filename: &str,
+    ) -> ServiceResult<()> {
+        self.save_bytes(auth_id, filename)
+    }
+    fn load_user_id(&self, filename: &str) -> ServiceResult<SecureUserId> {
+        self.load_bytes::<SecureUserId>(filename)
+    }
+    fn save_user_id(&self, user_id: &SecureUserId, filename: &str) -> ServiceResult<()> {
+        self.save_bytes(user_id, filename)
     }
 }

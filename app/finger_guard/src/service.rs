@@ -49,25 +49,30 @@ pub struct InitParams {
     pk: crypto::Key,
     tpm_seed: crypto::Secret,
 }
+impl InitParams {
+    /// The name of the file where init parameters should be stored.
+    pub const FILE_NAME: &str = "finger_guard_init_params";
+}
 
 /// An interface for all of the interactions that the service has with the trusty environment.
 pub trait TrustyEnvironment: Send + Sync + 'static {
     /// Get a reference to the trusty clock.
     fn clock(&self) -> &dyn Clock;
     /// Look up the auth token key from keymint.
-    fn get_auth_token_key() -> ServiceResult<crypto::Key>;
+    fn get_auth_token_key(&self) -> ServiceResult<crypto::Key>;
     /// Load the init parameters.
-    fn load_init_params() -> ServiceResult<InitParams>;
+    fn load_init_params(&self) -> ServiceResult<InitParams>;
     /// Save the init parameters.
-    fn save_init_params(init_params: &InitParams) -> ServiceResult<()>;
+    fn save_init_params(&self, init_params: &InitParams) -> ServiceResult<()>;
     /// Load an authenticator ID.
-    fn load_authenticator_id(filename: &str) -> ServiceResult<AuthenticatorId>;
+    fn load_authenticator_id(&self, filename: &str) -> ServiceResult<AuthenticatorId>;
     /// Save an authenticator ID.
-    fn save_authenticator_id(auth_id: &AuthenticatorId, filename: &str) -> ServiceResult<()>;
+    fn save_authenticator_id(&self, auth_id: &AuthenticatorId, filename: &str)
+        -> ServiceResult<()>;
     /// Load a secure user ID.
-    fn load_user_id(filename: &str) -> ServiceResult<SecureUserId>;
+    fn load_user_id(&self, filename: &str) -> ServiceResult<SecureUserId>;
     /// Save a secure user ID.
-    fn save_user_id(user_id: &SecureUserId, filename: &str) -> ServiceResult<()>;
+    fn save_user_id(&self, user_id: &SecureUserId, filename: &str) -> ServiceResult<()>;
 }
 
 #[derive(Clone, PartialOrd, Ord, Eq, PartialEq)]
@@ -120,7 +125,8 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     pub fn new(trusty: T) -> Self {
         Self {
             init_params: Mutex::new(
-                T::load_init_params()
+                trusty
+                    .load_init_params()
                     .inspect_err(|e| error!("failed to load init_params: {e:?}"))
                     .ok(),
             ),
@@ -133,7 +139,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     }
 
     fn get_auth_token_key(&self) -> ServiceResult<&crypto::Key> {
-        self.auth_token_key.get_or_try_init(|| T::get_auth_token_key())
+        self.auth_token_key.get_or_try_init(|| self.trusty.get_auth_token_key())
     }
 
     fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<HandshakeResponse> {
@@ -153,7 +159,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let mac = crypto::compute_hmac!(&pk, &HandshakeMessage)?;
         // save pk and tpm_seed to storage.
         let new_init_params = InitParams { pk, tpm_seed };
-        T::save_init_params(&new_init_params)?;
+        self.trusty.save_init_params(&new_init_params)?;
         *init_params = Some(new_init_params);
         Ok(aidl::make_handshake_response(server_public_key_bytes, &mac))
     }
@@ -258,7 +264,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
         let sid_file = sensor_state_index.secure_user_id_file_name();
         let secure_user_id = SecureUserId::from(hat.userId);
-        T::save_user_id(&secure_user_id, &sid_file)?;
+        self.trusty.save_user_id(&secure_user_id, &sid_file)?;
         // Start a new enroll session.
         let nonce = crypto::Nonce::import(nonce)?;
         let hmac = crypto::sensor_session_message_hmac(
@@ -310,7 +316,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             // Generate and save a new AuthenticatorId.
             let authenticator_id = AuthenticatorId::generate_random();
             let file_name = sensor_state_index.authenticator_id_file_name();
-            T::save_authenticator_id(&authenticator_id, &file_name)?;
+            self.trusty.save_authenticator_id(&authenticator_id, &file_name)?;
             let response = aidl::make_finish_enroll_session_response(&hmac);
             Ok(response)
         } else {
@@ -399,8 +405,8 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             let auth_token_key = self.get_auth_token_key()?;
             let aid_file_name = sensor_state_index.authenticator_id_file_name();
             let sid_file_name = sensor_state_index.secure_user_id_file_name();
-            let authenticator_id = T::load_authenticator_id(&aid_file_name)?;
-            let secure_user_id = T::load_user_id(&sid_file_name)?;
+            let authenticator_id = self.trusty.load_authenticator_id(&aid_file_name)?;
+            let secure_user_id = self.trusty.load_user_id(&sid_file_name)?;
             let hat = UnsignedHat::new(
                 challenge,
                 secure_user_id,
@@ -424,7 +430,9 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let file_name = index.authenticator_id_file_name();
         // Treat read failure as there is no authenticator id and use the default
         // value of 0.
-        let authenticator_id = T::load_authenticator_id(&file_name)
+        let authenticator_id = self
+            .trusty
+            .load_authenticator_id(&file_name)
             .inspect_err(|e| error!("failed to read authenticator id: {e:?}"))
             .unwrap_or_default();
         Ok(authenticator_id)
@@ -437,7 +445,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let authenticator_id = AuthenticatorId::generate_random();
         let index = SensorStateIndex::from(sensor_user_pair);
         let file_name = index.authenticator_id_file_name();
-        T::save_authenticator_id(&authenticator_id, &file_name)?;
+        self.trusty.save_authenticator_id(&authenticator_id, &file_name)?;
         Ok(authenticator_id)
     }
 }
@@ -553,5 +561,31 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
         _hat: &HardwareAuthToken,
     ) -> binder::Result<()> {
         Err(binder::StatusCode::FAILED_TRANSACTION.into())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::FingerGuardService;
+    use crate::crypto;
+    use crate::fake;
+    use std::array;
+    use zerocopy::{FromBytes, IntoBytes};
+
+    #[test]
+    fn test_no_auth_token_key() {
+        let trusty = fake::SimulatedTrusty::new();
+        let service = FingerGuardService::new(trusty);
+        assert!(service.get_auth_token_key().is_err());
+    }
+
+    #[test]
+    fn test_auth_token_key() {
+        let key_bytes: [u8; 32] = array::from_fn(|x| x as u8);
+        let trusty = fake::SimulatedTrusty::new();
+        trusty.set_auth_token_key(&crypto::Key::read_from_bytes(&key_bytes).unwrap());
+        let service = FingerGuardService::new(trusty);
+        let out_key = service.get_auth_token_key().unwrap();
+        assert_eq!(out_key.as_bytes(), key_bytes);
     }
 }
