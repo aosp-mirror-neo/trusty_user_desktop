@@ -17,6 +17,7 @@
 //! Data structures representing time-related abstractions for finger_guard.
 
 use crate::aidl::ExportToAidl;
+use crate::error::ServiceResult;
 use crate::hat::SignedHat;
 use std::ops::{Add, Sub};
 use std::time::Duration;
@@ -73,9 +74,9 @@ impl Sub for Instant {
 }
 
 /// A trait that provides a way to get the current time.
-pub trait Clock {
-    /// returns the current time.
-    fn now(&self) -> Instant;
+pub trait Clock: Send + Sync {
+    /// Returns the current time.
+    fn now(&self) -> ServiceResult<Instant>;
 }
 
 #[cfg(test)]

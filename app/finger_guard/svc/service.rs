@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crate::clock;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
     AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
@@ -30,12 +29,11 @@ use finger_guard::error::{ServiceError, ServiceResult};
 use finger_guard::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
 use finger_guard::identifiers::{AuthenticatorId, SecureUserId, SensorStateIndex};
 use finger_guard::rng;
-use finger_guard::time::Instant;
+use finger_guard::time::{Clock, Instant};
 use log::error;
 use once_cell::sync::OnceCell;
 use std::collections::BTreeMap;
 use std::default::Default;
-use std::marker::PhantomData;
 use std::mem;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -52,6 +50,8 @@ pub struct InitParams {
 
 /// An interface for all of the interactions that the service has with the trusty environment.
 pub trait TrustyEnvironment: Send + Sync + 'static {
+    /// Get a reference to the trusty clock.
+    fn clock(&self) -> &dyn Clock;
     /// Look up the auth token key from keymint.
     fn get_auth_token_key() -> ServiceResult<crypto::Key>;
     /// Load the init parameters.
@@ -102,7 +102,7 @@ pub struct FingerGuardService<T> {
     sensor_session: Mutex<SensorSession>,
     auth_token_key: OnceCell<crypto::Key>,
     enrollment_challenges: Mutex<BTreeMap<EnrollmentChallenge, Instant>>,
-    trusty: PhantomData<T>,
+    trusty: T,
 }
 
 /// The initial message signed by the private key during the handshake.
@@ -114,7 +114,7 @@ impl HmacSignable for HandshakeMessage {
 }
 
 impl<T: TrustyEnvironment> FingerGuardService<T> {
-    pub fn new() -> Self {
+    pub fn new(trusty: T) -> Self {
         Self {
             init_params: Mutex::new(
                 T::load_init_params()
@@ -125,7 +125,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             sensor_session: Mutex::new(SensorSession::default()),
             auth_token_key: OnceCell::new(),
             enrollment_challenges: Mutex::new(BTreeMap::new()),
-            trusty: PhantomData,
+            trusty,
         }
     }
 
@@ -192,7 +192,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         })?;
         let ssi = SensorStateIndex::from(sensor_user_pair);
         let challenge = rng::generate_random_int!(i64);
-        let valid_until = clock::now()? + Duration::from_secs(60);
+        let valid_until = self.trusty.clock().now()? + Duration::from_secs(60);
         let ec = EnrollmentChallenge { ssi, challenge };
         enrollment_challenges.insert(ec, valid_until);
         Ok(challenge)
@@ -208,7 +208,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         })?;
         let ssi = SensorStateIndex::from(sensor_user_pair);
         let ec = EnrollmentChallenge { ssi, challenge };
-        let now = clock::now()?;
+        let now = self.trusty.clock().now()?;
         enrollment_challenges.remove(&ec).map_or(Ok(EnrollmentChallenge::EMPTY), |valid_until| {
             if now < valid_until {
                 Ok(ec.challenge())
@@ -404,7 +404,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
                 secure_user_id,
                 authenticator_id,
                 AuthenticatorType::FINGERPRINT,
-                clock::now()?,
+                self.trusty.clock().now()?,
             );
             let hat = hat.sign(&auth_token_key)?;
             Ok(hat)

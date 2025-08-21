@@ -16,6 +16,7 @@
 
 //! Lockout related types.
 
+use crate::error::ServiceResult;
 use crate::time::{Clock, Instant};
 use std::time::Duration;
 
@@ -28,6 +29,9 @@ pub enum LockoutStatus {
     /// Temporary lockout with a duration.
     #[error("Timed lockout: {0:?}")]
     Timed(Duration),
+    /// Unknown lockout, this usually means we could not determine the current time.
+    #[error("Lockout state unknown")]
+    Unknown,
 }
 
 /// PERMANENT_DELAY indicates an infinite delay and the lockout is permanent.
@@ -60,23 +64,24 @@ impl AuthRateLimiter {
         clock: &'static impl Clock,
         timeout_window: Duration,
         delay_policy: Vec<DelaySchedule>,
-    ) -> Self {
-        Self {
+    ) -> ServiceResult<Self> {
+        Ok(Self {
             attempt_counter: 0,
             next_attempt_locked_until: Instant::MIN,
-            permanent_lockout_at: clock.now() + timeout_window,
+            permanent_lockout_at: clock.now()? + timeout_window,
             clock,
             delay_policy,
-        }
+        })
     }
     // Returns the current lockout status, based on the current time.
     fn get_lockout_status(&self) -> Option<LockoutStatus> {
-        if (self.permanent_lockout_at <= self.clock.now())
-            || (self.next_attempt_locked_until == Instant::MAX)
-        {
+        let now = match self.clock.now() {
+            Ok(instant) => instant,
+            Err(_) => return Some(LockoutStatus::Unknown),
+        };
+        if (self.permanent_lockout_at <= now) || (self.next_attempt_locked_until == Instant::MAX) {
             return Some(LockoutStatus::Permanent);
         }
-        let now = self.clock.now();
         if self.next_attempt_locked_until <= now {
             None
         } else {
@@ -87,6 +92,10 @@ impl AuthRateLimiter {
     /// indicating the lockout status. Should be used before authorizating a sensor session for
     /// authentication.
     pub fn increment_attempt_counter(&mut self) -> Result<u32, LockoutStatus> {
+        let now = match self.clock.now() {
+            Ok(instant) => instant,
+            Err(_) => return Err(LockoutStatus::Unknown),
+        };
         match self.get_lockout_status() {
             None => {
                 self.attempt_counter += 1;
@@ -100,19 +109,16 @@ impl AuthRateLimiter {
                     .max_by_key(|ds| ds.attempt_count);
                 self.next_attempt_locked_until = delay_schedule.map_or(Instant::MIN, |s| match s {
                     DelaySchedule { attempt_count: _, duration: PERMANENT_DELAY } => Instant::MAX,
-                    DelaySchedule { attempt_count: _, ref duration } => {
-                        self.clock.now() + *duration
-                    }
+                    DelaySchedule { attempt_count: _, ref duration } => now + *duration,
                 });
                 Ok(self.attempt_counter)
             }
             Some(status) => {
                 // A permanent lockout is triggered by the new attempt => Effectively put the rate
                 // limiter into the permanent lockout state by timing out immediately.
-                if self.next_attempt_locked_until == Instant::MAX
-                    && self.clock.now() < self.permanent_lockout_at
+                if self.next_attempt_locked_until == Instant::MAX && now < self.permanent_lockout_at
                 {
-                    self.permanent_lockout_at = self.clock.now();
+                    self.permanent_lockout_at = now;
                 }
                 Err(status)
             }
@@ -132,6 +138,7 @@ impl AuthRateLimiter {
 mod test {
     use super::PERMANENT_DELAY;
     use super::{AuthRateLimiter, DelaySchedule, LockoutStatus};
+    use crate::error::ServiceResult;
     use crate::time::{Clock, Instant};
     use std::sync::Mutex;
     use std::time::Duration;
@@ -155,8 +162,8 @@ mod test {
     }
 
     impl Clock for MockClock {
-        fn now(&self) -> Instant {
-            *self.current_time.lock().unwrap()
+        fn now(&self) -> ServiceResult<Instant> {
+            Ok(*self.current_time.lock().unwrap())
         }
     }
     static MOCK_CLOCK: MockClock = MockClock::new();
@@ -168,7 +175,7 @@ mod test {
     fn test_auth_rate_limiter_new() {
         let time_window = Duration::from_secs(3600);
         let lockout_policy = [DelaySchedule { attempt_count: 1, duration: PERMANENT_DELAY }];
-        let _ = AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec());
+        let _ = AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec()).unwrap();
     }
 
     #[test]
@@ -177,7 +184,7 @@ mod test {
         let time_window = Duration::from_secs(3600);
         let lockout_policy = [DelaySchedule { attempt_count: 1, duration: PERMANENT_DELAY }];
         let mut rate_limiter =
-            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec());
+            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec()).unwrap();
         MOCK_CLOCK.advance_time(time_window);
         // Past the timeout window, the rate limiter is permanently locked out.
         assert!(matches!(rate_limiter.increment_attempt_counter(), Err(LockoutStatus::Permanent)));
@@ -195,7 +202,7 @@ mod test {
         const DURATION_30S: Duration = Duration::from_secs(30);
         const DURATION_60S: Duration = Duration::from_secs(60);
         let mut rate_limiter =
-            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec());
+            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec()).unwrap();
         // 1st attempt is allowed immediately.
         assert!(matches!(rate_limiter.increment_attempt_counter(), Ok(1)));
         // 2nd attempt needs to wait for 30 seconds.
@@ -231,7 +238,7 @@ mod test {
         let lockout_policy = [DelaySchedule { attempt_count: n, duration: PERMANENT_DELAY }];
         let time_window = Duration::from_secs(3600);
         let mut rate_limiter =
-            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec());
+            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec()).unwrap();
         // Initial n attempts are allowed immediately.
         for _ in 0..n {
             assert!(rate_limiter.increment_attempt_counter().is_ok());
@@ -249,7 +256,7 @@ mod test {
         let lockout_policy = [DelaySchedule { attempt_count: n, duration: PERMANENT_DELAY }];
         let time_window = Duration::from_secs(3600);
         let mut rate_limiter =
-            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec());
+            AuthRateLimiter::new(&MOCK_CLOCK, time_window, lockout_policy.to_vec()).unwrap();
         // Initial n attempts are allowed immediately.
         for _ in 0..n {
             assert!(rate_limiter.increment_attempt_counter().is_ok());

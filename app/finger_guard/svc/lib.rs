@@ -44,7 +44,7 @@ pub fn init_and_start_loop() -> tipc::Result<()> {
 
     let mut dispatcher =
         FingerGuardDispatcher::<PORT_COUNT>::new().expect("Could not create dispatcher");
-    let service = FingerGuardService::<Trusty>::new();
+    let service = FingerGuardService::new(Trusty);
     let binder_service = BnFingerGuard::new_binder(service, BinderFeatures::default());
     let rpc_service = RpcServer::new_per_session(move |_uuid| Some(binder_service.as_binder()));
 

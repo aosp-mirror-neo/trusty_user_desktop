@@ -16,12 +16,14 @@
 
 //! Provides an implementation of all of the service depenedencies on Trusty.
 
+use crate::clock;
 use crate::keymint;
 use crate::service::{InitParams, TrustyEnvironment};
 use crate::storage::{PersistedState, SingleFileState};
 use finger_guard::crypto;
 use finger_guard::error::ServiceResult;
 use finger_guard::identifiers::{AuthenticatorId, SecureUserId};
+use finger_guard::time::Clock;
 
 // Init params are persisted to a single fixed file.
 impl PersistedState for InitParams {}
@@ -36,6 +38,9 @@ impl PersistedState for SecureUserId {}
 /// An implementation of the trusty environment.
 pub struct Trusty;
 impl TrustyEnvironment for Trusty {
+    fn clock(&self) -> &dyn Clock {
+        clock::TRUSTY_CLOCK
+    }
     fn get_auth_token_key() -> ServiceResult<crypto::Key> {
         keymint::get_auth_token_key()
     }
