@@ -16,11 +16,13 @@
 
 mod clock;
 mod keymint;
-mod service;
 mod storage;
 mod trusty;
 
-use crate::service::FingerGuardService;
+#[cfg(test)]
+mod tests;
+
+use finger_guard::service::FingerGuardService;
 use crate::trusty::Trusty;
 use binder::BinderFeatures;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::IFingerGuard::BnFingerGuard;

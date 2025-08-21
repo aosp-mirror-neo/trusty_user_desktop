@@ -18,11 +18,11 @@
 
 use crate::clock;
 use crate::keymint;
-use crate::service::{InitParams, TrustyEnvironment};
 use crate::storage::{PersistedState, SingleFileState};
 use finger_guard::crypto;
 use finger_guard::error::ServiceResult;
 use finger_guard::identifiers::{AuthenticatorId, SecureUserId};
+use finger_guard::service::{InitParams, TrustyEnvironment};
 use finger_guard::time::Clock;
 
 // Init params are persisted to a single fixed file.
