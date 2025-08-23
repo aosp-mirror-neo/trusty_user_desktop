@@ -16,11 +16,13 @@
 
 mod clock;
 mod keymint;
-mod service;
 mod storage;
 mod trusty;
 
-use crate::service::FingerGuardService;
+#[cfg(test)]
+mod tests;
+
+use finger_guard::service::FingerGuardService;
 use crate::trusty::Trusty;
 use binder::BinderFeatures;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::IFingerGuard::BnFingerGuard;
@@ -44,7 +46,7 @@ pub fn init_and_start_loop() -> tipc::Result<()> {
 
     let mut dispatcher =
         FingerGuardDispatcher::<PORT_COUNT>::new().expect("Could not create dispatcher");
-    let service = FingerGuardService::<Trusty>::new();
+    let service = FingerGuardService::new(Trusty);
     let binder_service = BnFingerGuard::new_binder(service, BinderFeatures::default());
     let rpc_service = RpcServer::new_per_session(move |_uuid| Some(binder_service.as_binder()));
 

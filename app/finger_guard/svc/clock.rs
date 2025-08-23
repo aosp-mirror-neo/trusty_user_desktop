@@ -20,7 +20,7 @@ use finger_guard::error::{ServiceError, ServiceResult};
 use finger_guard::time;
 
 /// Returns nanoseconds since boot, including time spent in sleep.
-pub fn now() -> ServiceResult<time::Instant> {
+fn now() -> ServiceResult<time::Instant> {
     let mut time_ns = 0;
     //Safety: trivial, external syscall gets valid raw pointer to a `i64`.
     let rc = unsafe { trusty_sys::gettime(0, 0, &mut time_ns) };
@@ -30,3 +30,12 @@ pub fn now() -> ServiceResult<time::Instant> {
         Ok(time::Instant::from_nanos(time_ns))
     }
 }
+
+/// Defines a global clock implementation using now.
+struct TrustyClock;
+impl time::Clock for TrustyClock {
+    fn now(&self) -> ServiceResult<time::Instant> {
+        now()
+    }
+}
+pub static TRUSTY_CLOCK: &dyn time::Clock = &TrustyClock;

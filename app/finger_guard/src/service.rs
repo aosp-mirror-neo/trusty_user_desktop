@@ -14,7 +14,15 @@
  * limitations under the License.
  */
 
-use crate::clock;
+//! Implementation of the IFingerGuard service interface.
+
+use crate::aidl;
+use crate::crypto::{self, HmacSignable, MapOpenSslErrExt};
+use crate::error::{ServiceError, ServiceResult};
+use crate::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
+use crate::identifiers::{AuthenticatorId, SecureUserId, SensorStateIndex};
+use crate::rng;
+use crate::time::{Clock, Instant};
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
     AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
@@ -24,18 +32,10 @@ use android_desktop_security_finger_guard::aidl::android::desktop::security::fin
     SessionResponse::SessionResponse,
 };
 use binder::Interface;
-use finger_guard::aidl;
-use finger_guard::crypto::{self, HmacSignable, MapOpenSslErrExt};
-use finger_guard::error::{ServiceError, ServiceResult};
-use finger_guard::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
-use finger_guard::identifiers::{AuthenticatorId, SecureUserId, SensorStateIndex};
-use finger_guard::rng;
-use finger_guard::time::Instant;
 use log::error;
 use once_cell::sync::OnceCell;
 use std::collections::BTreeMap;
 use std::default::Default;
-use std::marker::PhantomData;
 use std::mem;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -49,23 +49,30 @@ pub struct InitParams {
     pk: crypto::Key,
     tpm_seed: crypto::Secret,
 }
+impl InitParams {
+    /// The name of the file where init parameters should be stored.
+    pub const FILE_NAME: &str = "finger_guard_init_params";
+}
 
 /// An interface for all of the interactions that the service has with the trusty environment.
 pub trait TrustyEnvironment: Send + Sync + 'static {
+    /// Get a reference to the trusty clock.
+    fn clock(&self) -> &dyn Clock;
     /// Look up the auth token key from keymint.
-    fn get_auth_token_key() -> ServiceResult<crypto::Key>;
+    fn get_auth_token_key(&self) -> ServiceResult<crypto::Key>;
     /// Load the init parameters.
-    fn load_init_params() -> ServiceResult<InitParams>;
+    fn load_init_params(&self) -> ServiceResult<InitParams>;
     /// Save the init parameters.
-    fn save_init_params(init_params: &InitParams) -> ServiceResult<()>;
+    fn save_init_params(&self, init_params: &InitParams) -> ServiceResult<()>;
     /// Load an authenticator ID.
-    fn load_authenticator_id(filename: &str) -> ServiceResult<AuthenticatorId>;
+    fn load_authenticator_id(&self, filename: &str) -> ServiceResult<AuthenticatorId>;
     /// Save an authenticator ID.
-    fn save_authenticator_id(auth_id: &AuthenticatorId, filename: &str) -> ServiceResult<()>;
+    fn save_authenticator_id(&self, auth_id: &AuthenticatorId, filename: &str)
+        -> ServiceResult<()>;
     /// Load a secure user ID.
-    fn load_user_id(filename: &str) -> ServiceResult<SecureUserId>;
+    fn load_user_id(&self, filename: &str) -> ServiceResult<SecureUserId>;
     /// Save a secure user ID.
-    fn save_user_id(user_id: &SecureUserId, filename: &str) -> ServiceResult<()>;
+    fn save_user_id(&self, user_id: &SecureUserId, filename: &str) -> ServiceResult<()>;
 }
 
 #[derive(Clone, PartialOrd, Ord, Eq, PartialEq)]
@@ -102,7 +109,7 @@ pub struct FingerGuardService<T> {
     sensor_session: Mutex<SensorSession>,
     auth_token_key: OnceCell<crypto::Key>,
     enrollment_challenges: Mutex<BTreeMap<EnrollmentChallenge, Instant>>,
-    trusty: PhantomData<T>,
+    trusty: T,
 }
 
 /// The initial message signed by the private key during the handshake.
@@ -114,10 +121,12 @@ impl HmacSignable for HandshakeMessage {
 }
 
 impl<T: TrustyEnvironment> FingerGuardService<T> {
-    pub fn new() -> Self {
+    /// Construct a new instance of the finger guard service using the given Trusty environment.
+    pub fn new(trusty: T) -> Self {
         Self {
             init_params: Mutex::new(
-                T::load_init_params()
+                trusty
+                    .load_init_params()
                     .inspect_err(|e| error!("failed to load init_params: {e:?}"))
                     .ok(),
             ),
@@ -125,12 +134,12 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             sensor_session: Mutex::new(SensorSession::default()),
             auth_token_key: OnceCell::new(),
             enrollment_challenges: Mutex::new(BTreeMap::new()),
-            trusty: PhantomData,
+            trusty,
         }
     }
 
     fn get_auth_token_key(&self) -> ServiceResult<&crypto::Key> {
-        self.auth_token_key.get_or_try_init(|| T::get_auth_token_key())
+        self.auth_token_key.get_or_try_init(|| self.trusty.get_auth_token_key())
     }
 
     fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<HandshakeResponse> {
@@ -138,7 +147,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             .init_params
             .try_lock()
             .map_err(|_| ServiceError::LockAcquire { name: "init_params", mode: "write" })?;
-        if let Some(_) = *init_params {
+        if init_params.is_some() {
             return Err(ServiceError::StateAlreadyExists("init_params"));
         }
         let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
@@ -150,7 +159,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let mac = crypto::compute_hmac!(&pk, &HandshakeMessage)?;
         // save pk and tpm_seed to storage.
         let new_init_params = InitParams { pk, tpm_seed };
-        T::save_init_params(&new_init_params)?;
+        self.trusty.save_init_params(&new_init_params)?;
         *init_params = Some(new_init_params);
         Ok(aidl::make_handshake_response(server_public_key_bytes, &mac))
     }
@@ -169,7 +178,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             .sk
             .try_lock()
             .map_err(|_| ServiceError::LockAcquire { name: "sk", mode: "write" })?;
-        if let Some(_) = *sk {
+        if sk.is_some() {
             return Err(ServiceError::StateAlreadyExists("sk"));
         }
         let nonce = crypto::Nonce::generate();
@@ -192,7 +201,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         })?;
         let ssi = SensorStateIndex::from(sensor_user_pair);
         let challenge = rng::generate_random_int!(i64);
-        let valid_until = clock::now()? + Duration::from_secs(60);
+        let valid_until = self.trusty.clock().now()? + Duration::from_secs(60);
         let ec = EnrollmentChallenge { ssi, challenge };
         enrollment_challenges.insert(ec, valid_until);
         Ok(challenge)
@@ -208,7 +217,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         })?;
         let ssi = SensorStateIndex::from(sensor_user_pair);
         let ec = EnrollmentChallenge { ssi, challenge };
-        let now = clock::now()?;
+        let now = self.trusty.clock().now()?;
         enrollment_challenges.remove(&ec).map_or(Ok(EnrollmentChallenge::EMPTY), |valid_until| {
             if now < valid_until {
                 Ok(ec.challenge())
@@ -241,8 +250,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         }
 
         // revoke_challenge returns the given challenge when it is valid.
-        let challenge =
-            FingerGuardService::revoke_challenge(&self, sensor_user_pair, hat.challenge)?;
+        let challenge = self.revoke_challenge(sensor_user_pair, hat.challenge)?;
         if challenge == EnrollmentChallenge::EMPTY || challenge != hat.challenge {
             return Err(ServiceError::StateUnavailable("enrollment challenge"));
         }
@@ -256,11 +264,11 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
         let sid_file = sensor_state_index.secure_user_id_file_name();
         let secure_user_id = SecureUserId::from(hat.userId);
-        T::save_user_id(&secure_user_id, &sid_file)?;
+        self.trusty.save_user_id(&secure_user_id, &sid_file)?;
         // Start a new enroll session.
         let nonce = crypto::Nonce::import(nonce)?;
         let hmac = crypto::sensor_session_message_hmac(
-            &sk,
+            sk,
             &nonce,
             crypto::MessageSender::FingerGuard,
             crypto::SensorSessionType::Enroll,
@@ -299,7 +307,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         if result.enrolled {
             let nonce = crypto::Nonce::import(nonce)?;
             let hmac = crypto::sensor_session_message_hmac(
-                &sk,
+                sk,
                 &nonce,
                 crypto::MessageSender::FingerGuard,
                 crypto::SensorSessionType::EnrollFinish,
@@ -308,7 +316,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             // Generate and save a new AuthenticatorId.
             let authenticator_id = AuthenticatorId::generate_random();
             let file_name = sensor_state_index.authenticator_id_file_name();
-            T::save_authenticator_id(&authenticator_id, &file_name)?;
+            self.trusty.save_authenticator_id(&authenticator_id, &file_name)?;
             let response = aidl::make_finish_enroll_session_response(&hmac);
             Ok(response)
         } else {
@@ -341,7 +349,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
         let nonce = crypto::Nonce::import(nonce)?;
         let hmac = crypto::sensor_session_message_hmac(
-            &sk,
+            sk,
             &nonce,
             crypto::MessageSender::FingerGuard,
             crypto::SensorSessionType::Auth,
@@ -381,8 +389,8 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         // If the authentication succeeds, validate the mac is indeed from the sensor.
         if result.authenticated {
             let hmac = crypto::sensor_session_message_hmac(
-                &sk,
-                &nonce,
+                sk,
+                nonce,
                 crypto::MessageSender::Fpmcu,
                 crypto::SensorSessionType::Auth,
                 &sensor_state_index,
@@ -397,16 +405,16 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             let auth_token_key = self.get_auth_token_key()?;
             let aid_file_name = sensor_state_index.authenticator_id_file_name();
             let sid_file_name = sensor_state_index.secure_user_id_file_name();
-            let authenticator_id = T::load_authenticator_id(&aid_file_name)?;
-            let secure_user_id = T::load_user_id(&sid_file_name)?;
+            let authenticator_id = self.trusty.load_authenticator_id(&aid_file_name)?;
+            let secure_user_id = self.trusty.load_user_id(&sid_file_name)?;
             let hat = UnsignedHat::new(
                 challenge,
                 secure_user_id,
                 authenticator_id,
                 AuthenticatorType::FINGERPRINT,
-                clock::now()?,
+                self.trusty.clock().now()?,
             );
-            let hat = hat.sign(&auth_token_key)?;
+            let hat = hat.sign(auth_token_key)?;
             Ok(hat)
             // TODO(b/401303592): Clear sensor lockout state.
         } else {
@@ -422,7 +430,9 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let file_name = index.authenticator_id_file_name();
         // Treat read failure as there is no authenticator id and use the default
         // value of 0.
-        let authenticator_id = T::load_authenticator_id(&file_name)
+        let authenticator_id = self
+            .trusty
+            .load_authenticator_id(&file_name)
             .inspect_err(|e| error!("failed to read authenticator id: {e:?}"))
             .unwrap_or_default();
         Ok(authenticator_id)
@@ -435,7 +445,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let authenticator_id = AuthenticatorId::generate_random();
         let index = SensorStateIndex::from(sensor_user_pair);
         let file_name = index.authenticator_id_file_name();
-        T::save_authenticator_id(&authenticator_id, &file_name)?;
+        self.trusty.save_authenticator_id(&authenticator_id, &file_name)?;
         Ok(authenticator_id)
     }
 }
@@ -460,16 +470,16 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
     fn initHandshake(&self, client_public_key: &[u8]) -> binder::Result<HandshakeResponse> {
         service_result_to_binder_result(
             "initHandshake",
-            Self::init_handshake(&self, client_public_key),
+            Self::init_handshake(self, client_public_key),
         )
     }
     fn newSession(&self, client_nonce: &[u8]) -> binder::Result<SessionResponse> {
-        service_result_to_binder_result("newSession", Self::new_session(&self, client_nonce))
+        service_result_to_binder_result("newSession", Self::new_session(self, client_nonce))
     }
     fn generateChallenge(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
         service_result_to_binder_result(
             "generateChallenge",
-            Self::generate_challenge(&self, sensor_user_pair),
+            Self::generate_challenge(self, sensor_user_pair),
         )
     }
     fn revokeChallenge(
@@ -479,7 +489,7 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
     ) -> binder::Result<i64> {
         service_result_to_binder_result(
             "revokeChallenge",
-            Self::revoke_challenge(&self, sensor_user_pair, challenge),
+            Self::revoke_challenge(self, sensor_user_pair, challenge),
         )
     }
     fn prepareEnrollSession(
@@ -490,7 +500,7 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
     ) -> binder::Result<PrepareEnrollSessionResponse> {
         service_result_to_binder_result(
             "prepareEnrollSession",
-            Self::prepare_enroll_session(&self, sensor_user_pair, hat, nonce),
+            Self::prepare_enroll_session(self, sensor_user_pair, hat, nonce),
         )
     }
     fn finishEnrollSession(
@@ -501,7 +511,7 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
     ) -> binder::Result<FinishEnrollSessionResponse> {
         service_result_to_binder_result(
             "finishEnrollSession",
-            Self::finish_enroll_session(&self, sensor_user_pair, result, nonce),
+            Self::finish_enroll_session(self, sensor_user_pair, result, nonce),
         )
     }
     fn prepareAuthSession(
@@ -512,7 +522,7 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
     ) -> binder::Result<PrepareAuthSessionResponse> {
         service_result_to_binder_result(
             "prepareAuthSession",
-            Self::prepare_auth_session(&self, sensor_user_pair, challenge, nonce),
+            Self::prepare_auth_session(self, sensor_user_pair, challenge, nonce),
         )
     }
     fn finishAuthSession(
@@ -522,19 +532,19 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
     ) -> binder::Result<HardwareAuthToken> {
         service_result_to_binder_result(
             "finishAuthSession",
-            Self::finish_auth_session(&self, sensor_user_pair, result),
+            Self::finish_auth_session(self, sensor_user_pair, result),
         )
     }
     fn getAuthenticatorId(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
         service_result_to_binder_result(
             "getAuthenticatorId",
-            Self::read_authenticator_id(&self, sensor_user_pair).map(|id| id.into()),
+            Self::read_authenticator_id(self, sensor_user_pair).map(|id| id.into()),
         )
     }
     fn newAuthenticatorId(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
         service_result_to_binder_result(
             "newAuthenticatorId",
-            Self::generate_authenticator_id(&self, sensor_user_pair).map(|id| id.into()),
+            Self::generate_authenticator_id(self, sensor_user_pair).map(|id| id.into()),
         )
     }
     // TODO(b/401303592): implement
@@ -555,232 +565,27 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::keymint;
-    use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
-        AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
-        SensorUserPair::SensorUserPair,
-    };
-    use finger_guard::crypto::{self, NIST_P256_CURVE_NAME};
-    use finger_guard::error::ServiceResult;
-    use finger_guard::hat::{AuthenticatorType, UnsignedHat};
-    use finger_guard::identifiers::{AuthenticatorId, SecureUserId};
-    use finger_guard::rng;
-    use finger_guard::time::Instant;
-    use openssl::bn::BigNumContext;
-    use openssl::ec::{EcGroup, EcKey, PointConversionForm};
-    use test::{assert, assert_eq, assert_ne, assert_ok, skip};
-    use zerocopy::FromBytes;
-
-    // Struct used in tests to allow arbitrary blobs to be supplied to the HMAC generator.
-    struct TestBlob<'a>(&'a [u8]);
-    impl<'a> crypto::HmacSignable for TestBlob<'a> {
-        fn update(
-            &self,
-            mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>,
-        ) -> ServiceResult<()> {
-            add_bytes(self.0)
-        }
-    }
-
-    test::init!();
+mod test {
+    use super::FingerGuardService;
+    use crate::crypto;
+    use crate::fake;
+    use std::array;
+    use zerocopy::{FromBytes, IntoBytes};
 
     #[test]
-    fn connect_server() {
-        let _ = assert_ok!(finger_guard_api::connect_finger_guard());
+    fn test_no_auth_token_key() {
+        let trusty = fake::SimulatedTrusty::new();
+        let service = FingerGuardService::new(trusty);
+        assert!(service.get_auth_token_key().is_err());
     }
 
     #[test]
-    fn everything_with_a_shared_session() {
-        let auth_token_key = assert_ok!(keymint::get_auth_token_key());
-
-        // Prepare the client key pair.
-        let group = assert_ok!(EcGroup::from_curve_name(NIST_P256_CURVE_NAME));
-        let mut ctx = assert_ok!(BigNumContext::new());
-        let client_private_key = assert_ok!(EcKey::generate(&group));
-        let client_public_key_bytes = assert_ok!(client_private_key.public_key().to_bytes(
-            &group,
-            PointConversionForm::UNCOMPRESSED,
-            &mut ctx
-        ));
-
-        // ECDH with the server. If the service has already done a handshake then it's not
-        // possible to run this test, skip it and move on.
-        let service = assert_ok!(finger_guard_api::connect_finger_guard());
-        let handshake = match service.initHandshake(client_public_key_bytes.as_slice()) {
-            Err(status) if status.transaction_error() == binder::StatusCode::ALREADY_EXISTS => {
-                skip!("service already bound to a controller")
-            }
-            result => assert_ok!(result),
-        };
-        let server_public_key_bytes = handshake.serverPublicKey;
-
-        // Derive PK from the client side.
-        let pk = assert_ok!(crypto::perform_ecdh(client_private_key, &server_public_key_bytes));
-
-        // Check the computed MAC matches the one in the response.
-        let hmac = assert_ok!(crypto::compute_hmac!(&pk, &TestBlob(b"tofu")));
-        assert!(hmac == handshake.pkMac.as_slice());
-
-        // Generate the client nonce.
-        let client_nonce = rng::generate_random_vec::<32>();
-
-        // Start a new session with the server.
-        let service = assert_ok!(finger_guard_api::connect_finger_guard());
-        let session_response = assert_ok!(service.newSession(client_nonce.as_slice()));
-        let sk = assert_ok!(crypto::compute_hmac!(
-            &pk,
-            &TestBlob(&client_nonce),
-            &TestBlob(&session_response.nonce)
-        ));
-
-        // Decrypt the wrapped tpm seed.
-        let iv = assert_ok!(crypto::Iv::read_from_bytes(session_response.iv.as_slice()));
-        let tag = assert_ok!(crypto::Aes256Tag::read_from_bytes(session_response.tag.as_slice()));
-        let encrypted_tpm_seed = session_response.wrappedTpmSeed;
-        let aad = b"tpm_seed";
-        assert_ok!(crypto::decrypt_aes256_gcm(&sk, &iv, aad, encrypted_tpm_seed.as_slice(), &tag,));
-
-        // Convert the HMAC into a key.
-        let sk = crypto::Key::from(sk);
-
-        // Ensure newSession only allows one successful invocation per boot.
-        assert!(service.newSession(vec![0u8; 32].as_slice()).is_err());
-
-        let sensor_id = 1_i32;
-        let user_id = 1_i32;
-        let sup = SensorUserPair { sensorId: sensor_id, userId: user_id };
-        let secure_user_id_int = 0x1337BEEF_i64;
-        let secure_user_id = SecureUserId::from(secure_user_id_int);
-
-        // ---- Start Enrollment Test ----
-        let hat = UnsignedHat::new(
-            assert_ok!(service.generateChallenge(&sup)),
-            secure_user_id,
-            AuthenticatorId::generate_random(),
-            AuthenticatorType::FINGERPRINT,
-            Instant::from_nanos(0),
-        );
-        let hat = assert_ok!(hat.sign(&auth_token_key));
-        let nonce = rng::generate_random_vec::<32>();
-        let session_resp = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
-        let hmac = assert_ok!(crypto::compute_hmac!(
-            &sk,
-            &TestBlob(&nonce),
-            &TestBlob(&user_id.to_be_bytes()),
-            &TestBlob(b"finger_guardenroll")
-        ));
-        assert!(hmac == session_resp.mac.as_slice());
-
-        let old_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
-        let nonce = rng::generate_random_vec::<32>();
-        let enrollment_result = EnrollmentResult { enrolled: true };
-        let finish_resp = assert_ok!(service.finishEnrollSession(&sup, &enrollment_result, &nonce));
-        // Ensure the authenticator id updates after enrollment.
-        let new_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
-        assert_ne!(new_auth_id, old_auth_id);
-        let hmac = assert_ok!(crypto::compute_hmac!(
-            &sk,
-            &TestBlob(&nonce),
-            &TestBlob(&user_id.to_be_bytes()),
-            &TestBlob(b"finger_guardenroll_finish")
-        ));
-        assert!(hmac == finish_resp.mac.as_slice());
-
-        // Test enrollment session cancellation.
-        let hat = UnsignedHat::new(
-            assert_ok!(service.generateChallenge(&sup)),
-            secure_user_id,
-            AuthenticatorId::generate_random(),
-            AuthenticatorType::FINGERPRINT,
-            Instant::from_nanos(0),
-        );
-        let hat = assert_ok!(hat.sign(&auth_token_key));
-        let nonce = rng::generate_random_vec::<32>();
-        let _ = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
-        let cancel_result = EnrollmentResult { enrolled: false };
-        let _ = assert_ok!(service.finishEnrollSession(&sup, &cancel_result, &nonce));
-        // ---- End Enrollment Test ----
-
-        // ---- Start Authentication Test ----
-        let challenge = 0xc4a11e49e_i64;
-        let nonce = rng::generate_random_vec::<32>();
-        let session_resp = assert_ok!(service.prepareAuthSession(&sup, challenge, &nonce));
-        let hmac = assert_ok!(crypto::compute_hmac!(
-            &sk,
-            &TestBlob(&nonce),
-            &TestBlob(&user_id.to_be_bytes()),
-            &TestBlob(b"finger_guardauth")
-        ));
-        assert!(hmac == session_resp.mac.as_slice());
-
-        let hmac = assert_ok!(crypto::compute_hmac!(
-            &sk,
-            &TestBlob(&nonce),
-            &TestBlob(&user_id.to_be_bytes()),
-            &TestBlob(b"fpmcuauth")
-        ));
-        let auth_result = AuthenticationResult::from(hmac);
-        let valid_hat = assert_ok!(service.finishAuthSession(&sup, &auth_result));
-        assert_eq!(valid_hat.challenge, challenge);
-        assert_eq!(valid_hat.userId, secure_user_id_int);
-        assert_eq!(valid_hat.authenticatorId, new_auth_id);
-        assert_ne!(valid_hat.timestamp, 0);
-        assert!(
-            crypto::compute_hmac!(&auth_token_key, &valid_hat).unwrap() == valid_hat.mac.as_slice()
-        );
-
-        // ---- End Authentication Test ----
-    }
-
-    #[test]
-    fn get_authenticator_id() {
-        let service = assert_ok!(finger_guard_api::connect_finger_guard());
-        let sup = SensorUserPair { sensorId: 0, userId: 0 };
-        assert_eq!(service.getAuthenticatorId(&sup), Ok(0));
-    }
-
-    #[test]
-    fn new_authenticator_id() {
-        let service = assert_ok!(finger_guard_api::connect_finger_guard());
-        let sup = SensorUserPair { sensorId: 1, userId: 1 };
-        let new_id = assert_ok!(service.newAuthenticatorId(&sup));
-        assert_ne!(new_id, 0_i64);
-    }
-
-    #[test]
-    fn new_and_get_authenticator_id() {
-        let service = assert_ok!(finger_guard_api::connect_finger_guard());
-        let sup = SensorUserPair { sensorId: 1, userId: 1 };
-        let new_id = assert_ok!(service.newAuthenticatorId(&sup));
-        let got_id = assert_ok!(service.getAuthenticatorId(&sup));
-        assert_eq!(new_id, got_id);
-    }
-
-    #[test]
-    fn generate_and_revoke_challenge() {
-        let service = assert_ok!(finger_guard_api::connect_finger_guard());
-        let sup = SensorUserPair { sensorId: 1, userId: 1 };
-        // Generate multiple challenges and revoke them individually.
-        let c1 = assert_ok!(service.generateChallenge(&sup));
-        assert_ne!(c1, 0_i64);
-        let c2 = assert_ok!(service.generateChallenge(&sup));
-        assert_ne!(c2, 0_i64);
-        assert_ne!(c1, c2);
-        // Revoke once, return the same challenge.
-        let revoked_c1 = assert_ok!(service.revokeChallenge(&sup, c1));
-        assert_eq!(c1, revoked_c1);
-        let revoked_c2 = assert_ok!(service.revokeChallenge(&sup, c2));
-        assert_eq!(c2, revoked_c2);
-        // Revoke the 1st challenge twice, return zero.
-        assert_eq!(service.revokeChallenge(&sup, c1), Ok(0));
-    }
-
-    #[test]
-    fn revoke_invalid_challenge() {
-        let service = assert_ok!(finger_guard_api::connect_finger_guard());
-        let sup = SensorUserPair { sensorId: 2, userId: 2 };
-        let invalid_challenge = 1234_i64;
-        assert_eq!(service.revokeChallenge(&sup, invalid_challenge), Ok(0));
+    fn test_auth_token_key() {
+        let key_bytes: [u8; 32] = array::from_fn(|x| x as u8);
+        let trusty = fake::SimulatedTrusty::new();
+        trusty.set_auth_token_key(&crypto::Key::read_from_bytes(&key_bytes).unwrap());
+        let service = FingerGuardService::new(trusty);
+        let out_key = service.get_auth_token_key().unwrap();
+        assert_eq!(out_key.as_bytes(), key_bytes);
     }
 }

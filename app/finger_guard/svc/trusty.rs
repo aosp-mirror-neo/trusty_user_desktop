@@ -16,17 +16,19 @@
 
 //! Provides an implementation of all of the service depenedencies on Trusty.
 
+use crate::clock;
 use crate::keymint;
-use crate::service::{InitParams, TrustyEnvironment};
 use crate::storage::{PersistedState, SingleFileState};
 use finger_guard::crypto;
 use finger_guard::error::ServiceResult;
 use finger_guard::identifiers::{AuthenticatorId, SecureUserId};
+use finger_guard::service::{InitParams, TrustyEnvironment};
+use finger_guard::time::Clock;
 
 // Init params are persisted to a single fixed file.
 impl PersistedState for InitParams {}
 impl SingleFileState for InitParams {
-    const FILE_NAME: &str = "finger_guard_init_params";
+    const FILE_NAME: &str = InitParams::FILE_NAME;
 }
 
 // These identifier types support persistence to arbitrary files.
@@ -36,25 +38,32 @@ impl PersistedState for SecureUserId {}
 /// An implementation of the trusty environment.
 pub struct Trusty;
 impl TrustyEnvironment for Trusty {
-    fn get_auth_token_key() -> ServiceResult<crypto::Key> {
+    fn clock(&self) -> &dyn Clock {
+        clock::TRUSTY_CLOCK
+    }
+    fn get_auth_token_key(&self) -> ServiceResult<crypto::Key> {
         keymint::get_auth_token_key()
     }
-    fn load_init_params() -> ServiceResult<InitParams> {
+    fn load_init_params(&self) -> ServiceResult<InitParams> {
         InitParams::load()
     }
-    fn save_init_params(init_params: &InitParams) -> ServiceResult<()> {
+    fn save_init_params(&self, init_params: &InitParams) -> ServiceResult<()> {
         init_params.save()
     }
-    fn load_authenticator_id(filename: &str) -> ServiceResult<AuthenticatorId> {
+    fn load_authenticator_id(&self, filename: &str) -> ServiceResult<AuthenticatorId> {
         AuthenticatorId::load_from(filename)
     }
-    fn save_authenticator_id(auth_id: &AuthenticatorId, filename: &str) -> ServiceResult<()> {
+    fn save_authenticator_id(
+        &self,
+        auth_id: &AuthenticatorId,
+        filename: &str,
+    ) -> ServiceResult<()> {
         auth_id.save_to(filename)
     }
-    fn load_user_id(filename: &str) -> ServiceResult<SecureUserId> {
+    fn load_user_id(&self, filename: &str) -> ServiceResult<SecureUserId> {
         SecureUserId::load_from(filename)
     }
-    fn save_user_id(user_id: &SecureUserId, filename: &str) -> ServiceResult<()> {
+    fn save_user_id(&self, user_id: &SecureUserId, filename: &str) -> ServiceResult<()> {
         user_id.save_to(filename)
     }
 }
