@@ -16,7 +16,7 @@
 
 //! Lockout related types.
 
-use crate::error::ServiceResult;
+use crate::error::{ServiceError, ServiceResult};
 use crate::time::{Clock, Instant};
 use std::time::Duration;
 
@@ -34,9 +34,24 @@ pub enum LockoutStatus {
     Unknown,
 }
 
+/// Extend Result with a function that can map LockoutStatus as errors to service errors.
+pub trait MapLockoutStatusErrExt<T> {
+    /// Transform Self (a result with a LockoutStatus) into a ServiceResult with the given
+    /// error message.
+    fn wrap_lockout_status_err(self) -> ServiceResult<T>;
+}
+impl<T> MapLockoutStatusErrExt<T> for Result<T, LockoutStatus> {
+    fn wrap_lockout_status_err(self) -> ServiceResult<T> {
+        self.map_err(|e| ServiceError::AuthLockoutError(Box::new(e)))
+    }
+}
+
 /// PERMANENT_DELAY indicates an infinite delay and the lockout is permanent.
 /// It is the biggest duration value that trusty time::Instant could allow.
 pub const PERMANENT_DELAY: Duration = Duration::from_nanos(i64::MAX as u64);
+
+/// Default timeout window for fingerprint: 24 hours.
+pub const DEFAULT_AUTH_TIMEOUT_WINDOW: Duration = Duration::from_secs(3600 * 24);
 
 /// DelaySchedule indicates the delay must be waited for next attempt when the attempt count is met.
 #[derive(Clone)]
@@ -44,6 +59,10 @@ pub struct DelaySchedule {
     attempt_count: u32,
     duration: Duration,
 }
+
+/// Default delay policy: permanent lockout after 5 attempts.
+pub const DEFAULT_DELAY_POLICY: [DelaySchedule; 1] =
+    [DelaySchedule { attempt_count: 5, duration: PERMANENT_DELAY }];
 
 /// AuthRateLimiter manages the auth attempt counter and related lockout status.
 pub struct AuthRateLimiter {
@@ -61,7 +80,7 @@ impl AuthRateLimiter {
     /// The DelaySchedule array contains increasing delays for repeatedly auth attempts, including
     /// permanent delay that lock out new attempts as well.
     pub fn new(
-        clock: &'static impl Clock,
+        clock: &'static dyn Clock,
         timeout_window: Duration,
         delay_policy: Vec<DelaySchedule>,
     ) -> ServiceResult<Self> {

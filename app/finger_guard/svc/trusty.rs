@@ -38,7 +38,7 @@ impl PersistedState for SecureUserId {}
 /// An implementation of the trusty environment.
 pub struct Trusty;
 impl TrustyEnvironment for Trusty {
-    fn clock(&self) -> &dyn Clock {
+    fn clock(&self) -> &'static dyn Clock {
         clock::TRUSTY_CLOCK
     }
     fn get_auth_token_key(&self) -> ServiceResult<crypto::Key> {

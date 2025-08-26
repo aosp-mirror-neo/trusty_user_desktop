@@ -113,7 +113,7 @@ impl SimulatedTrusty {
     }
 }
 impl TrustyEnvironment for SimulatedTrusty {
-    fn clock(&self) -> &dyn Clock {
+    fn clock(&self) -> &'static dyn Clock {
         self.clock
     }
     fn get_auth_token_key(&self) -> ServiceResult<Key> {
