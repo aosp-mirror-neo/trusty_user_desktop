@@ -568,13 +568,73 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
 mod test {
     use super::FingerGuardService;
     use crate::crypto;
-    use crate::fake;
+    use crate::error::ServiceResult;
+    use crate::fake::{SimulatedClock, SimulatedTrusty};
+    use crate::hat::{AuthenticatorType, UnsignedHat};
+    use crate::identifiers::{AuthenticatorId, SecureUserId};
+    use crate::rng;
+    use crate::service::{InitParams, TrustyEnvironment};
+    use crate::time::Instant;
+    use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
+        AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
+        SensorUserPair::SensorUserPair,
+    };
     use std::array;
     use zerocopy::{FromBytes, IntoBytes};
 
+    // Setup a service with a random auth_token_key and carried out a simulated
+    // session establishment with the service, returns the simulated clock, the service, the auth
+    // token key, and the session key.
+    fn service_setup(
+    ) -> (&'static SimulatedClock, FingerGuardService<SimulatedTrusty>, crypto::Key, crypto::Key)
+    {
+        let auth_token_key_bytes = rng::generate_random_vec::<32>();
+        let auth_token_key = crypto::Key::read_from_bytes(&auth_token_key_bytes).unwrap();
+        let init_params = InitParams {
+            pk: crypto::Key::read_from_bytes(&array::from_fn::<_, 32, _>(|x| x as u8 + 1)).unwrap(),
+            tpm_seed: crypto::Secret::read_from_bytes(&array::from_fn::<_, 32, _>(|x| x as u8 + 2))
+                .unwrap(),
+        };
+        let trusty = SimulatedTrusty::new();
+        trusty.set_auth_token_key(&auth_token_key);
+        trusty.save_init_params(&init_params).unwrap();
+        let clock = trusty.simulated_clock();
+        let service = FingerGuardService::new(trusty);
+
+        let client_nonce_bytes = rng::generate_random_vec::<32>();
+        let client_nonce = crypto::Nonce::import(&client_nonce_bytes).unwrap();
+        let session_response = service.new_session(client_nonce_bytes.as_slice()).unwrap();
+        let server_nonce = crypto::Nonce::import(&session_response.nonce).unwrap();
+        let sk = crypto::compute_hmac!(&init_params.pk, &client_nonce, &server_nonce).unwrap();
+
+        // Decrypt the wrapped tpm seed, AEAD ensures the decryption succeeds and outputs only
+        // the correct plaintext.
+        let iv = crypto::Iv::read_from_bytes(session_response.iv.as_slice()).unwrap();
+        let tag = crypto::Aes256Tag::read_from_bytes(session_response.tag.as_slice()).unwrap();
+        let encrypted_tpm_seed = session_response.wrappedTpmSeed;
+        let aad = b"tpm_seed";
+        let _ =
+            crypto::decrypt_aes256_gcm(&sk, &iv, aad, encrypted_tpm_seed.as_slice(), &tag).unwrap();
+
+        // Convert the HMAC into a key.
+        let sk = crypto::Key::from(sk);
+        (clock, service, auth_token_key, sk)
+    }
+
+    // Struct used in tests to allow arbitrary blobs to be supplied to the HMAC generator.
+    struct TestBlob<'a>(&'a [u8]);
+    impl<'a> crypto::HmacSignable for TestBlob<'a> {
+        fn update(
+            &self,
+            mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>,
+        ) -> ServiceResult<()> {
+            add_bytes(self.0)
+        }
+    }
+
     #[test]
     fn test_no_auth_token_key() {
-        let trusty = fake::SimulatedTrusty::new();
+        let trusty = SimulatedTrusty::new();
         let service = FingerGuardService::new(trusty);
         assert!(service.get_auth_token_key().is_err());
     }
@@ -582,10 +642,190 @@ mod test {
     #[test]
     fn test_auth_token_key() {
         let key_bytes: [u8; 32] = array::from_fn(|x| x as u8);
-        let trusty = fake::SimulatedTrusty::new();
+        let trusty = SimulatedTrusty::new();
         trusty.set_auth_token_key(&crypto::Key::read_from_bytes(&key_bytes).unwrap());
         let service = FingerGuardService::new(trusty);
         let out_key = service.get_auth_token_key().unwrap();
         assert_eq!(out_key.as_bytes(), key_bytes);
+    }
+
+    #[test]
+    fn test_service_setup() {
+        let _ = service_setup();
+    }
+
+    #[test]
+    fn test_enrollment_challenges() {
+        let (_, service, _, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        // Generate multiple challenges and revoke them individually.
+        let c1 = service.generate_challenge(&sup).unwrap();
+        assert_ne!(c1, 0_i64);
+        let c2 = service.generate_challenge(&sup).unwrap();
+        assert_ne!(c2, 0_i64);
+        assert_ne!(c1, c2);
+        // Revoke once, return the same challenge.
+        let revoked_c1 = service.revoke_challenge(&sup, c1).unwrap();
+        assert_eq!(c1, revoked_c1);
+        let revoked_c2 = service.revoke_challenge(&sup, c2).unwrap();
+        assert_eq!(c2, revoked_c2);
+        // Revoke the 1st challenge twice, return zero.
+        assert_eq!(service.revoke_challenge(&sup, c1).unwrap(), 0);
+        // Revoke some randome challenge, return zero.
+        assert_eq!(service.revoke_challenge(&sup, 1234_i64).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_authenticator_id() {
+        let (_, service, _, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let id = service.generate_authenticator_id(&sup).unwrap();
+        assert_ne!(i64::from(id), 0);
+        let got_id = service.read_authenticator_id(&sup).unwrap();
+        assert_eq!(id, got_id);
+    }
+
+    #[test]
+    fn test_prepare_enrollment() {
+        let (_, service, auth_token_key, sk) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let session_resp = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let hmac = crypto::compute_hmac!(
+            &sk,
+            &TestBlob(&nonce),
+            &TestBlob(&sup.userId.to_be_bytes()),
+            &TestBlob(b"finger_guardenroll")
+        )
+        .unwrap();
+        assert!(hmac == session_resp.mac.as_slice());
+    }
+
+    #[test]
+    fn test_finish_enrollment() {
+        // Setup: prepare_enroll_session should succeed.
+        let (_, service, auth_token_key, sk) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+
+        // Test: finish_enroll_session should succeed.
+        let nonce = rng::generate_random_vec::<32>();
+        let enrollment_result = EnrollmentResult { enrolled: true };
+        let finish_resp = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+
+        // Verify: check response hmac should match the computation.
+        let hmac = crypto::compute_hmac!(
+            &sk,
+            &TestBlob(&nonce),
+            &TestBlob(&sup.userId.to_be_bytes()),
+            &TestBlob(b"finger_guardenroll_finish")
+        )
+        .unwrap();
+        assert!(hmac == finish_resp.mac.as_slice());
+        // Ensure the authenticator id updates after enrollment.
+        let new_auth_id = service.read_authenticator_id(&sup).unwrap();
+        assert_ne!(i64::from(new_auth_id), 0);
+    }
+
+    #[test]
+    fn test_prepare_authentication() {
+        // Setup: complete an enroll session: prepare then finish.
+        let (_, service, auth_token_key, sk) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let enrollment_result = EnrollmentResult { enrolled: true };
+        let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+
+        // Test: prepare_auth_session should succeed.
+        let challenge = 0xc4a11e49e_i64;
+        let nonce = rng::generate_random_vec::<32>();
+        let prepare_resp = service.prepare_auth_session(&sup, challenge, &nonce).unwrap();
+
+        // Verify: check that response hmac should match the computation.
+        let hmac = crypto::compute_hmac!(
+            &sk,
+            &TestBlob(&nonce),
+            &TestBlob(&sup.userId.to_be_bytes()),
+            &TestBlob(b"finger_guardauth")
+        )
+        .unwrap();
+        assert!(hmac == prepare_resp.mac.as_slice());
+    }
+
+    #[test]
+    fn test_finish_authentication() {
+        // Setup: prepare and finish an enroll session then prepare an auth session.
+        let (_, service, auth_token_key, sk) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let secure_user_id = 0x1337BEEF_i64;
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(secure_user_id),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let enrollment_result = EnrollmentResult { enrolled: true };
+        let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        let auth_id = service.read_authenticator_id(&sup).unwrap();
+        let challenge = 0xc4a11e49e_i64;
+        let nonce = rng::generate_random_vec::<32>();
+        let prepare_resp = service.prepare_auth_session(&sup, challenge, &nonce).unwrap();
+
+        // Test: finish_auth_session with a good auth result should succeed.
+        let hmac = crypto::compute_hmac!(
+            &sk,
+            &TestBlob(&prepare_resp.nonce),
+            &TestBlob(&sup.userId.to_be_bytes()),
+            &TestBlob(b"fpmcuauth")
+        )
+        .unwrap();
+        let auth_result = AuthenticationResult::from(hmac);
+        let valid_hat = service.finish_auth_session(&sup, &auth_result).unwrap();
+
+        // Verify: validate the produced HAT.
+        // `challenge` should be the challenge passed to prepare_auth_session().
+        // `userId` should be the secure user id passed to prepare_enroll_session().
+        // `authenticatorId` should match the one returned by read_authenticator_id().
+        // `timestamp` should match the clock now.
+        // `mac` should match the HAT's MAC computation.
+        assert_eq!(valid_hat.challenge, challenge);
+        assert_eq!(valid_hat.userId, secure_user_id);
+        assert_eq!(valid_hat.authenticatorId, auth_id.into());
+        assert_eq!(valid_hat.timestamp, 0);
+        assert!(
+            crypto::compute_hmac!(&auth_token_key, &valid_hat).unwrap() == valid_hat.mac.as_slice()
+        );
     }
 }
