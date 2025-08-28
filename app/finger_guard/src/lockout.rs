@@ -92,8 +92,8 @@ impl AuthRateLimiter {
             delay_policy,
         })
     }
-    // Returns the current lockout status, based on the current time.
-    fn get_lockout_status(&self) -> Option<LockoutStatus> {
+    /// Returns the current lockout status, based on the current time.
+    pub fn get_lockout_status(&self) -> Option<LockoutStatus> {
         let now = match self.clock.now() {
             Ok(instant) => instant,
             Err(_) => return Some(LockoutStatus::Unknown),

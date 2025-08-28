@@ -80,9 +80,14 @@ pub const EMPTY_HAT: HardwareAuthToken = HardwareAuthToken {
 /// 0 for None, and 0xFFFFFFFF for Any. Individual type must be
 /// powers of 2: 1 for password; 2 for fingerprint.
 /// In practice, we never see more than 1 type to be set.
+#[derive(PartialEq, Debug)]
 pub struct AuthenticatorType(u32);
 
 impl AuthenticatorType {
+    /// None authenticator.
+    pub const NONE: Self = Self(0);
+    /// A password authenticator.
+    pub const PASSWORD: Self = Self(1);
     /// A fingerprint authenticator.
     pub const FINGERPRINT: Self = Self(2);
 }
@@ -90,6 +95,14 @@ impl AuthenticatorType {
 impl ExportToAidl<SignedHat> for AuthenticatorType {
     fn export(&self, out: &mut SignedHat) {
         out.authenticatorType = self.0 as i32;
+    }
+}
+
+// This is implemented as the inverse of ExportToAidl. It is not a typical usage of From trait: it
+// is not lossless and it operates on the borrowed object.
+impl From<&SignedHat> for AuthenticatorType {
+    fn from(hat: &SignedHat) -> Self {
+        Self(hat.authenticatorType as u32)
     }
 }
 

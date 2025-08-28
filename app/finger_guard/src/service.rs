@@ -481,6 +481,88 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         self.trusty.save_authenticator_id(&authenticator_id, &file_name)?;
         Ok(authenticator_id)
     }
+
+    fn get_lockout_status(
+        &self,
+        sensor_user_pair: &SensorUserPair,
+    ) -> ServiceResult<LockoutStatus> {
+        let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
+        // Get the auth rate limiter and clear the counter.
+        let auth_rate_limiters = self
+            .auth_rate_limiters
+            .try_lock()
+            .map_err(|_| ServiceError::LockAcquire { name: "auth_rate_limiters", mode: "read" })?;
+        let Some(arl) = auth_rate_limiters.get(&sensor_state_index) else {
+            // When the rate limiter is not found, either there is no previous enrollment,
+            // or the TA is freshly rebooted and requiring a knowledge factor authentiction.
+            // Either case, return PermanentLockout.
+            return Ok(LockoutStatus::PermanentLockout(true));
+        };
+        let status = match arl.get_lockout_status() {
+            None => LockoutStatus::Available(true),
+            // If the clock is not available, the rate limiter fail closed
+            Some(lockout::LockoutStatus::Unknown) => LockoutStatus::PermanentLockout(true),
+            Some(lockout::LockoutStatus::Permanent) => LockoutStatus::PermanentLockout(true),
+            Some(lockout::LockoutStatus::Timed(duration)) => LockoutStatus::TimedLockoutMillis(
+                i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+            ),
+        };
+        Ok(status)
+    }
+
+    fn reset_lockout(
+        &self,
+        sensor_user_pair: &SensorUserPair,
+        hat: &HardwareAuthToken,
+    ) -> ServiceResult<()> {
+        // Check |hat| is recently minted, at most one minutes old.
+        static SHELF_LIFE: Duration = Duration::from_secs(60);
+        let now = self.trusty.clock().now()?;
+        let hat_minted_at = Instant::from(hat);
+        if now > hat_minted_at + SHELF_LIFE {
+            return Err(ServiceError::InvalidArg("Stale hardware auth token"));
+        }
+        // TODO(b/401303592): Check |hat| contains a unique challenge. Reject any retried HAT
+        // before HMAC computation. Consider maintaining a cache of challenges seen in the past
+        // minute since older-than-one-minute HATs is rejected anyway.
+        let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
+        // Validate |hat|.
+        let auth_token_key = self.get_auth_token_key()?;
+        let mac = crypto::compute_hmac!(&auth_token_key, hat)?;
+        if mac != hat.mac.as_slice() {
+            return Err(ServiceError::BadMac("hardware auth token"));
+        }
+        // Decide the reset behavior based on the |hat|'s authenticator type:
+        //     1. Password.
+        //        A knowledge factor (i.e. stronger factor) has been used. Both the
+        //        attempt counter and the timeout time needs reset --> a new rate limiter is
+        //        created.
+        //     2. Fingerprint (or another biometrics authenticator type value in the future).
+        //        Only reset the attempt counter. --> an existing rate limiter is required, and
+        //        only reset its attempt counter.
+        let mut auth_rate_limiters = self
+            .auth_rate_limiters
+            .try_lock()
+            .map_err(|_| ServiceError::LockAcquire { name: "auth_rate_limiters", mode: "write" })?;
+        let auth_type = AuthenticatorType::from(hat);
+        match auth_type {
+            AuthenticatorType::PASSWORD => {
+                auth_rate_limiters.insert(sensor_state_index, self.create_default_arl()?);
+            }
+            AuthenticatorType::FINGERPRINT => {
+                let arl = auth_rate_limiters
+                    .get_mut(&sensor_state_index)
+                    .ok_or(ServiceError::StateUnavailable("auth rate limiter"))?;
+                arl.reset_attempt_counter();
+            }
+            _ => {
+                return Err(ServiceError::InvalidArg(
+                    "Invalid hardware auth token authenticator type",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 // Generically convert a service result into a binder result.
@@ -580,20 +662,21 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
             Self::generate_authenticator_id(self, sensor_user_pair).map(|id| id.into()),
         )
     }
-    // TODO(b/401303592): implement
-    fn getLockoutStatus(
-        &self,
-        _sensor_user_pair: &SensorUserPair,
-    ) -> binder::Result<LockoutStatus> {
-        Err(binder::StatusCode::FAILED_TRANSACTION.into())
+    fn getLockoutStatus(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<LockoutStatus> {
+        service_result_to_binder_result(
+            "getLockoutStatus",
+            Self::get_lockout_status(self, sensor_user_pair),
+        )
     }
-    // TODO(b/401303592): implement
     fn resetLockout(
         &self,
-        _sensor_user_pair: &SensorUserPair,
-        _hat: &HardwareAuthToken,
+        sensor_user_pair: &SensorUserPair,
+        hat: &HardwareAuthToken,
     ) -> binder::Result<()> {
-        Err(binder::StatusCode::FAILED_TRANSACTION.into())
+        service_result_to_binder_result(
+            "resetLockoutStatus",
+            Self::reset_lockout(self, sensor_user_pair, hat),
+        )
     }
 }
 
@@ -608,12 +691,13 @@ mod test {
     use crate::lockout;
     use crate::rng;
     use crate::service::{InitParams, TrustyEnvironment};
-    use crate::time::Instant;
+    use crate::time::{Clock, Instant};
     use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
         AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
-        SensorUserPair::SensorUserPair,
+        LockoutStatus::LockoutStatus, SensorUserPair::SensorUserPair,
     };
     use std::array;
+    use std::time::Duration;
     use zerocopy::{FromBytes, IntoBytes};
 
     // Setup a service with a random auth_token_key and carried out a simulated
@@ -986,5 +1070,191 @@ mod test {
                 )
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn test_get_lockout_status_default_to_permanent_lockout() {
+        let (_, service, _, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        assert!(matches!(
+            service.get_lockout_status(&sup).unwrap(),
+            LockoutStatus::PermanentLockout(_)
+        ));
+    }
+
+    #[test]
+    fn test_fingerprint_hat_reset_fails_without_rate_limiter_setup() {
+        let (_, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        assert!(service.reset_lockout(&sup, &hat).is_err());
+    }
+
+    #[test]
+    fn test_reset_lockout_with_password_hat() {
+        let (_, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::PASSWORD,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        assert!(service.reset_lockout(&sup, &hat).is_ok());
+        assert!(matches!(service.get_lockout_status(&sup).unwrap(), LockoutStatus::Available(_)));
+    }
+
+    #[test]
+    fn test_reset_lockout_with_stale_hat() {
+        let (clock, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::PASSWORD,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        clock.advance_time(Duration::from_secs(61));
+        // Reject reset because hat is more than 1 minute old
+        assert!(service.reset_lockout(&sup, &hat).is_err());
+    }
+
+    #[test]
+    fn test_reset_lockout_with_fingerprint_hat() {
+        // Setup: reset the lockout status with a password HAT, then fail 4 auth attempts in a raw,
+        // and reset the lockout status with a fingerprint HAT.
+        let (_, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::PASSWORD,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        service.reset_lockout(&sup, &hat).unwrap();
+        let challenge = 0xc4a11e49e_i64;
+        for _ in 0..4 {
+            let _ = service
+                .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+                .unwrap();
+            let _ = service
+                .finish_auth_session(
+                    &sup,
+                    &AuthenticationResult { authenticated: false, mac: vec![] },
+                )
+                .unwrap();
+        }
+        let hat = UnsignedHat::new(
+            challenge,
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        assert!(service.reset_lockout(&sup, &hat).is_ok());
+
+        // Test: another 4 failed auth attempts should be allowed.
+        for _ in 0..4 {
+            let _ = service
+                .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+                .unwrap();
+            let _ = service
+                .finish_auth_session(
+                    &sup,
+                    &AuthenticationResult { authenticated: false, mac: vec![] },
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_reset_timeout_with_password_hat() {
+        // Setup: reset the lockout status with a password HAT so a rate limiter is initialized.
+        let (clock, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::PASSWORD,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        assert!(service.reset_lockout(&sup, &hat).is_ok());
+        assert!(matches!(service.get_lockout_status(&sup).unwrap(), LockoutStatus::Available(_)));
+        // Advance time to timeout the rate limiter.
+        clock.advance_time(lockout::DEFAULT_AUTH_TIMEOUT_WINDOW);
+        assert!(matches!(
+            service.get_lockout_status(&sup).unwrap(),
+            LockoutStatus::PermanentLockout(_)
+        ));
+
+        // Test: reset the lockout status again, with a password HAT just created.
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::PASSWORD,
+            clock.now().unwrap(),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        assert!(service.reset_lockout(&sup, &hat).is_ok());
+
+        // Verify: the lockout status is back to available.
+        assert!(matches!(service.get_lockout_status(&sup).unwrap(), LockoutStatus::Available(_)));
+    }
+
+    #[test]
+    fn test_reset_timeout_with_fingerprint_hat() {
+        // Setup: reset the lockout status with a password HAT so a rate limiter is initialized.
+        let (clock, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::PASSWORD,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        assert!(service.reset_lockout(&sup, &hat).is_ok());
+        assert!(matches!(service.get_lockout_status(&sup).unwrap(), LockoutStatus::Available(_)));
+        // Advance time to timeout the rate limiter.
+        clock.advance_time(lockout::DEFAULT_AUTH_TIMEOUT_WINDOW);
+        assert!(matches!(
+            service.get_lockout_status(&sup).unwrap(),
+            LockoutStatus::PermanentLockout(_)
+        ));
+
+        // Test: reset the lockout status again, with a fingerprint HAT just created.
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            clock.now().unwrap(),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        assert!(service.reset_lockout(&sup, &hat).is_ok());
+
+        // Verify: the lockout status remains permanently locked out.
+        assert!(matches!(
+            service.get_lockout_status(&sup).unwrap(),
+            LockoutStatus::PermanentLockout(_)
+        ));
     }
 }
