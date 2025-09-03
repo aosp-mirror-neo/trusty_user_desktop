@@ -68,8 +68,7 @@ impl Weaver for PinWeaverImpl {
                 // Convert timeout to uint
                 let timeout = u64::try_from(timeout).map_err(|_| {
                     WeaverTAError::PinweaverUnexpectedResult(format!(
-                        "Invalid timeout value {} given",
-                        timeout
+                        "Invalid timeout value {timeout} given"
                     ))
                 })?;
 

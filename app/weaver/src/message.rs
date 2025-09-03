@@ -115,8 +115,7 @@ impl WeaverMessageParser for BinaryMessageParser {
             }
             _ => {
                 return Err(WeaverTAError::BadMessage(format!(
-                    "Invalid operation type: {}",
-                    operation_type
+                    "Invalid operation type: {operation_type}"
                 )))
             }
         };

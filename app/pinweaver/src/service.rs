@@ -231,7 +231,7 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
 
         // Get GSC root
         let (gsc_root, _) = self.gsc.sys_info().map_err(|err| {
-            error!("gsc.sys_info() failed: {:?}", err);
+            error!("gsc.sys_info() failed: {err:?}");
             binder_error::gsc()
         })?;
         if storage_root.0 == gsc_root.0 {
@@ -242,7 +242,7 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
         // Get the GSC log.
         let mut buffer = Vec::new();
         let entries = self.gsc.get_log(Some(Hash(storage_root.0)), &mut buffer).map_err(|err| {
-            error!("gsc.get_log() failed: {:?}", err);
+            error!("gsc.get_log() failed: {err:?}");
             binder_error::gsc()
         })?;
 
@@ -382,7 +382,7 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
                 &mut buffer,
             )
             .map_err(|err| {
-                error!("gsc log replay failed: {:?}", err);
+                error!("gsc log replay failed: {err:?}");
                 binder_error::gsc()
             })?;
 
@@ -416,13 +416,13 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
 
         let mut key = Secret([0u8; 32]);
         rand_bytes(&mut key.0).map_err(|err| {
-            error!("failed to generate key: {:?}", err);
+            error!("failed to generate key: {err:?}");
             binder_error::pinweaver(c"failed to generate key")
         })?;
 
         let mut iv = LargeSecretIv([0u8; 12]);
         rand_bytes(&mut iv.0).map_err(|err| {
-            error!("failed to generate iv: {:?}", err);
+            error!("failed to generate iv: {err:?}");
             binder_error::pinweaver(c"failed to generate iv")
         })?;
 
@@ -439,7 +439,7 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
                 auth_tag.0.deref_mut().as_mut(),
             )
             .map_err(|err| {
-                error!("failed to encrypt large secret: {:?}", err);
+                error!("failed to encrypt large secret: {err:?}");
                 binder_error::pinweaver(c"failed to generate key")
             })?,
         );
@@ -461,7 +461,7 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
             large_secret_info.auth_tag.0.as_bytes(),
         )
         .map_err(|err| {
-            error!("failed to encrypt large secret: {:?}", err);
+            error!("failed to encrypt large secret: {err:?}");
             binder_error::pinweaver(c"failed to generate key")
         })
     }
@@ -475,7 +475,7 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
                 height: DEFAULT_TREE_HEIGHT,
             })
             .map_err(|err| {
-                error!("gsc reset tree failed: {:?}", err);
+                error!("gsc reset tree failed: {err:?}");
                 binder_error::gsc()
             })?;
 
@@ -489,7 +489,7 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
                 },
             }))
             .map_err(|err| {
-                error!("storage reset tree failed: {:?}", err);
+                error!("storage reset tree failed: {err:?}");
                 binder_error::from_tipc(err)
             })?;
         if let StorageResponse::ResetTree(resp) = ret {
@@ -501,7 +501,7 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
                 Err(binder_error::pinweaver(c"reset_tree: unexpected response"))
             }
         } else {
-            error!("reset_tree: got unexpected response: {:?}", ret);
+            error!("reset_tree: got unexpected response: {ret:?}");
             Err(binder_error::pinweaver(c"reset_tree: unexpected response"))
         }
     }
@@ -530,7 +530,7 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
                 gsc_path_hashes.as_slice(),
             )
             .map_err(|err| {
-                error!("gsc remove leaf failed: {:?}", err);
+                error!("gsc remove leaf failed: {err:?}");
                 binder_error::gsc()
             })?;
 
@@ -581,7 +581,7 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
                 gsc_path_hashes.as_slice(),
             )
             .map_err(|err| {
-                error!("gsc remove leaf failed: {:?}", err);
+                error!("gsc remove leaf failed: {err:?}");
                 binder_error::gsc()
             })?;
 
@@ -711,7 +711,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
                 return Err(binder_error::leaf_exists());
             }
             _ => {
-                error!("start_insert: unexpected response: {:?}", ret);
+                error!("start_insert: unexpected response: {ret:?}");
                 return Err(binder_error::pinweaver(c"unexpected response"));
             }
         };
@@ -746,7 +746,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
                 &mut resp_buffer,
             )
             .map_err(|err| {
-                error!("gsc insert leaf failed: {:?}", err);
+                error!("gsc insert leaf failed: {err:?}");
                 binder_error::gsc()
             })?;
         let new_leaf_hmac = gsc_to_storage::hmac(&leaf_data.hmac);
@@ -785,10 +785,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
                 return Ok(());
             }
             (op_data, replacing_path) => {
-                error!(
-                    "unexpected (op_data, replacing_path): ({:?}, {:?})",
-                    op_data, replacing_path
-                );
+                error!("unexpected (op_data, replacing_path): ({op_data:?}, {replacing_path:?})");
                 return Err(binder_error::pinweaver(c"unexpected op_data"));
             }
         };
@@ -829,7 +826,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
                 return Err(binder_error::leaf_not_found());
             }
             _ => {
-                error!("start_try_auth: unexpected response: {:?}", ret);
+                error!("start_try_auth: unexpected response: {ret:?}");
                 return Err(binder_error::pinweaver(c"unexpected response"));
             }
         };
@@ -850,7 +847,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
                 &mut resp_buffer,
             )
             .map_err(|err| {
-                error!("gsc try auth failed: {:?}", err);
+                error!("gsc try auth failed: {err:?}");
                 binder_error::gsc()
             })?;
         if matches!(result_code, ResultCode::RateLimitReached) {
@@ -887,7 +884,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
             ResultCode::Success => {}
             ResultCode::LowentAuthFailed => return Err(binder_error::low_entropy_auth_failed()),
             _ => {
-                error!("unexpected result code: {:?}", result_code);
+                error!("unexpected result code: {result_code:?}");
                 return Err(binder_error::pinweaver(c"unexpected result code"));
             }
         }
@@ -931,7 +928,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
                 return Err(binder_error::leaf_not_found());
             }
             _ => {
-                error!("start_try_auth: unexpected response: {:?}", ret);
+                error!("start_try_auth: unexpected response: {ret:?}");
                 return Err(binder_error::pinweaver(c"unexpected response"));
             }
         };
@@ -952,7 +949,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
                 &mut resp_buffer,
             )
             .map_err(|err| {
-                error!("gsc reset auth failed: {:?}", err);
+                error!("gsc reset auth failed: {err:?}");
                 if matches!(err, TpmError::Response(GscError::ResultCode(code)) if code == ResultCode::ResetAuthFailed)
                 {
                     binder_error::auth_failed()

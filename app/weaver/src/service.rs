@@ -83,7 +83,7 @@ impl<M: WeaverMessageParser, W: Weaver> Service for WeaverHalTA<M, W> {
         _handle: &Handle,
         peer: &Uuid,
     ) -> tipc::Result<ConnectResult<Self::Connection>> {
-        info!("Accepted weaver hal connection from uuid {:?}.", peer);
+        info!("Accepted weaver hal connection from uuid {peer:?}.");
         Ok(ConnectResult::Accept(Context { _uuid: peer.clone() }))
     }
 
@@ -98,11 +98,11 @@ impl<M: WeaverMessageParser, W: Weaver> Service for WeaverHalTA<M, W> {
         // Parse Message
         let request = self.message_parser.deserialize(&msg.0).map_err(|e| match e {
             WeaverTAError::BadMessage(_) => {
-                error!("Could not parse message: {:?}", e);
+                error!("Could not parse message: {e:?}");
                 TipcError::InvalidData
             }
             _ => {
-                error!("Unexpected error while parsing message: {:?}", e);
+                error!("Unexpected error while parsing message: {e:?}");
                 TipcError::UnknownError
             }
         })?;
@@ -112,7 +112,7 @@ impl<M: WeaverMessageParser, W: Weaver> Service for WeaverHalTA<M, W> {
             WeaverHalRequest::ReadRequest { slot_id, key } => {
                 trace!("Received a read message.");
                 self.weaver_impl.read(slot_id, &key).unwrap_or_else(|e| {
-                    error!("Unexpected error while performing weaver read: {:?}", e);
+                    error!("Unexpected error while performing weaver read: {e:?}");
                     WeaverHalResponse::ReadResponse {
                         status: ResponseStatus::Failed,
                         timeout: 0,
@@ -123,7 +123,7 @@ impl<M: WeaverMessageParser, W: Weaver> Service for WeaverHalTA<M, W> {
             WeaverHalRequest::WriteRequest { slot_id, key, value } => {
                 trace!("Received a write message.");
                 self.weaver_impl.write(slot_id, &key, &value).unwrap_or_else(|e| {
-                    error!("Unexpected error while performing weaver write: {:?}", e);
+                    error!("Unexpected error while performing weaver write: {e:?}");
                     WeaverHalResponse::WriteResponse { status: ResponseStatus::Failed }
                 })
             }
@@ -131,7 +131,7 @@ impl<M: WeaverMessageParser, W: Weaver> Service for WeaverHalTA<M, W> {
 
         // Serialize message to send
         let response = self.message_parser.serialize(response).map_err(|e| {
-            error!("Unexpected error while serializing message: {:?}", e);
+            error!("Unexpected error while serializing message: {e:?}");
             TipcError::UnknownError
         })?;
 
@@ -161,7 +161,7 @@ pub(crate) fn start_tipc_service() -> Result<(), WeaverTAError> {
     let port_config = PortCfg::new(WEAVER_TIPC_PORT)
         .map_err(|e| {
             WeaverTAError::TipcError(
-                format!("Could not create configuration for '{}'", WEAVER_TIPC_PORT),
+                format!("Could not create configuration for '{WEAVER_TIPC_PORT}'"),
                 e,
             )
         })?
@@ -172,7 +172,7 @@ pub(crate) fn start_tipc_service() -> Result<(), WeaverTAError> {
         .map_err(|e| WeaverTAError::TipcError("Could not create dispatcher".to_string(), e))?;
     dispatcher.add_service(Rc::new(weaver_ta), port_config).map_err(|e| {
         WeaverTAError::TipcError(
-            format!("Could not add serice to dispatcher for port '{}'", WEAVER_TIPC_PORT),
+            format!("Could not add serice to dispatcher for port '{WEAVER_TIPC_PORT}'"),
             e,
         )
     })?;
@@ -187,7 +187,5 @@ pub(crate) fn start_tipc_service() -> Result<(), WeaverTAError> {
         WeaverTAError::TipcError("Manager for Weaver TA could not be created".to_string(), e)
     })?
     .run_event_loop()
-    .map_err(|e| {
-        WeaverTAError::TipcError(format!("Could not start event '{}'", WEAVER_TIPC_PORT), e)
-    })
+    .map_err(|e| WeaverTAError::TipcError(format!("Could not start event '{WEAVER_TIPC_PORT}'"), e))
 }
