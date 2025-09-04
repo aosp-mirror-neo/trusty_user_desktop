@@ -81,6 +81,10 @@ impl SimulatedTrusty {
         }
     }
 
+    pub fn simulated_clock(&self) -> &'static SimulatedClock {
+        self.clock
+    }
+
     /// Set the auth token key.
     pub fn set_auth_token_key(&self, key: &Key) {
         let mut stored_key = self.auth_token_key.lock().unwrap();

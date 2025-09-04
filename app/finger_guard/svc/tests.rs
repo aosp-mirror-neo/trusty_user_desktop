@@ -176,7 +176,7 @@ fn everything_with_a_shared_session() {
 
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
-        &TestBlob(&nonce),
+        &TestBlob(&session_resp.nonce),
         &TestBlob(&user_id.to_be_bytes()),
         &TestBlob(b"fpmcuauth")
     ));

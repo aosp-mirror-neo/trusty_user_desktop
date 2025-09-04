@@ -65,7 +65,7 @@ impl HmacSignable for SensorStateIndex {
 }
 
 /// Newtype that encapsulates an authenticator id.
-#[derive(Copy, Clone, Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
+#[derive(Copy, Clone, Default, Eq, PartialEq, Debug, FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
 pub struct AuthenticatorId(i64);
 

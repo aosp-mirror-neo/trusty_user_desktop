@@ -30,7 +30,7 @@ pub fn init_and_start_loop() -> Result<(), WeaverTAError> {
     info!("Started Weaver");
 
     start_tipc_service().map_err(|e| {
-        error!("Error when starting Weaver TA: {:?}", e);
+        error!("Error when starting Weaver TA: {e:?}");
         e
     })?;
 
