@@ -21,6 +21,7 @@ use crate::crypto::{self, HmacSignable, MapOpenSslErrExt};
 use crate::error::{ServiceError, ServiceResult};
 use crate::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
 use crate::identifiers::{AuthenticatorId, SecureUserId, SensorStateIndex};
+use crate::lockout::{self, AuthRateLimiter, MapLockoutStatusErrExt};
 use crate::rng;
 use crate::time::{Clock, Instant};
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
@@ -57,7 +58,7 @@ impl InitParams {
 /// An interface for all of the interactions that the service has with the trusty environment.
 pub trait TrustyEnvironment: Send + Sync + 'static {
     /// Get a reference to the trusty clock.
-    fn clock(&self) -> &dyn Clock;
+    fn clock(&self) -> &'static dyn Clock;
     /// Look up the auth token key from keymint.
     fn get_auth_token_key(&self) -> ServiceResult<crypto::Key>;
     /// Load the init parameters.
@@ -109,6 +110,7 @@ pub struct FingerGuardService<T> {
     sensor_session: Mutex<SensorSession>,
     auth_token_key: OnceCell<crypto::Key>,
     enrollment_challenges: Mutex<BTreeMap<EnrollmentChallenge, Instant>>,
+    auth_rate_limiters: Mutex<BTreeMap<SensorStateIndex, AuthRateLimiter>>,
     trusty: T,
 }
 
@@ -131,15 +133,24 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
                     .ok(),
             ),
             sk: Mutex::new(None),
-            sensor_session: Mutex::new(SensorSession::default()),
+            sensor_session: Default::default(),
             auth_token_key: OnceCell::new(),
-            enrollment_challenges: Mutex::new(BTreeMap::new()),
+            enrollment_challenges: Default::default(),
+            auth_rate_limiters: Default::default(),
             trusty,
         }
     }
 
     fn get_auth_token_key(&self) -> ServiceResult<&crypto::Key> {
         self.auth_token_key.get_or_try_init(|| self.trusty.get_auth_token_key())
+    }
+
+    fn create_default_arl(&self) -> ServiceResult<AuthRateLimiter> {
+        AuthRateLimiter::new(
+            self.trusty.clock(),
+            lockout::DEFAULT_AUTH_TIMEOUT_WINDOW,
+            lockout::DEFAULT_DELAY_POLICY.to_vec(),
+        )
     }
 
     fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<HandshakeResponse> {
@@ -227,7 +238,6 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         })
     }
 
-    // TODO(b/401303592): Clear sensor lockout with the HAT verification.
     fn prepare_enroll_session(
         &self,
         sensor_user_pair: &SensorUserPair,
@@ -317,6 +327,12 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             let authenticator_id = AuthenticatorId::generate_random();
             let file_name = sensor_state_index.authenticator_id_file_name();
             self.trusty.save_authenticator_id(&authenticator_id, &file_name)?;
+            // Create a new auth limiter and keep it in the memory.
+            let mut auth_rate_limiters = self.auth_rate_limiters.try_lock().map_err(|_| {
+                ServiceError::LockAcquire { name: "auth_rate_limiters", mode: "write" }
+            })?;
+            let arl = self.create_default_arl()?;
+            auth_rate_limiters.insert(sensor_state_index, arl);
             let response = aidl::make_finish_enroll_session_response(&hmac);
             Ok(response)
         } else {
@@ -344,9 +360,18 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         if !matches!(*sensor_session, SensorSession::Idle) {
             return Err(ServiceError::StateAlreadyExists("ongoing sensor session"));
         }
-
-        // Start a new auth session.
+        // Record the attempt with the auth rate limiter then start a new auth session.
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
+        let mut auth_rate_limiters = self
+            .auth_rate_limiters
+            .try_lock()
+            .map_err(|_| ServiceError::LockAcquire { name: "auth_rate_limiters", mode: "write" })?;
+        let arl = auth_rate_limiters
+            .get_mut(&sensor_state_index)
+            .ok_or(ServiceError::StateUnavailable("auth rate limiter"))?;
+        // If the attempt is not rate limited, the current attempt count is returned and
+        // ignored for now.
+        let _ = arl.increment_attempt_counter().wrap_lockout_status_err()?;
         let nonce = crypto::Nonce::import(nonce)?;
         let hmac = crypto::sensor_session_message_hmac(
             sk,
@@ -401,6 +426,15 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             if hmac != result.mac.as_slice() {
                 return Err(ServiceError::BadMac("authentication result"));
             }
+            // Get the auth rate limiter and clear the counter.
+            let mut auth_rate_limiters = self.auth_rate_limiters.try_lock().map_err(|_| {
+                ServiceError::LockAcquire { name: "auth_rate_limiters", mode: "write" }
+            })?;
+            let arl = auth_rate_limiters
+                .get_mut(&sensor_state_index)
+                .ok_or(ServiceError::StateUnavailable("auth rate limiter"))?;
+            arl.reset_attempt_counter();
+
             // Produce a valid HAT signed by the auth token key.
             let auth_token_key = self.get_auth_token_key()?;
             let aid_file_name = sensor_state_index.authenticator_id_file_name();
@@ -416,7 +450,6 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             );
             let hat = hat.sign(auth_token_key)?;
             Ok(hat)
-            // TODO(b/401303592): Clear sensor lockout state.
         } else {
             Ok(EMPTY_HAT)
         }
@@ -572,6 +605,7 @@ mod test {
     use crate::fake::{SimulatedClock, SimulatedTrusty};
     use crate::hat::{AuthenticatorType, UnsignedHat};
     use crate::identifiers::{AuthenticatorId, SecureUserId};
+    use crate::lockout;
     use crate::rng;
     use crate::service::{InitParams, TrustyEnvironment};
     use crate::time::Instant;
@@ -827,5 +861,130 @@ mod test {
         assert!(
             crypto::compute_hmac!(&auth_token_key, &valid_hat).unwrap() == valid_hat.mac.as_slice()
         );
+    }
+
+    #[test]
+    fn test_prepare_auth_session_timeout() {
+        // Setup: prepare and finish an enroll session, then advance the clock by the default
+        // timeout window.
+        let (simulated_clock, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let enrollment_result = EnrollmentResult { enrolled: true };
+        let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        simulated_clock.advance_time(lockout::DEFAULT_AUTH_TIMEOUT_WINDOW);
+
+        // Test: prepare_auth_session should fail.
+        let challenge = 0xc4a11e49e_i64;
+        let nonce = rng::generate_random_vec::<32>();
+        assert!(service.prepare_auth_session(&sup, challenge, &nonce).is_err());
+    }
+
+    #[test]
+    fn test_prepare_auth_session_lockout() {
+        // Setup: prepare and finish an enroll session, then fail 5 auth attempts in a raw.
+        let (_, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let enrollment_result = EnrollmentResult { enrolled: true };
+        let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        let challenge = 0xc4a11e49e_i64;
+        for _ in 0..5 {
+            let _ = service
+                .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+                .unwrap();
+            let _ = service
+                .finish_auth_session(
+                    &sup,
+                    &AuthenticationResult { authenticated: false, mac: vec![] },
+                )
+                .unwrap();
+        }
+
+        // Test: prepare_auth_session should fail.
+        assert!(service
+            .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+            .is_err());
+    }
+
+    #[test]
+    fn test_authentication_clear_attempt_counter() {
+        // Setup: prepare and finish an enroll session, then fail 4 auth attempts in a raw,
+        // and finally pass one auth attempt.
+        let (_, service, auth_token_key, sk) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        let enrollment_result = EnrollmentResult { enrolled: true };
+        let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        let challenge = 0xc4a11e49e_i64;
+        for _ in 0..4 {
+            let _ = service
+                .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+                .unwrap();
+            let _ = service
+                .finish_auth_session(
+                    &sup,
+                    &AuthenticationResult { authenticated: false, mac: vec![] },
+                )
+                .unwrap();
+        }
+        let prepare_resp = service
+            .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+            .unwrap();
+        let hmac = crypto::compute_hmac!(
+            &sk,
+            &TestBlob(&prepare_resp.nonce),
+            &TestBlob(&sup.userId.to_be_bytes()),
+            &TestBlob(b"fpmcuauth")
+        )
+        .unwrap();
+        let auth_result = AuthenticationResult::from(hmac);
+        let valid_hat = service.finish_auth_session(&sup, &auth_result).unwrap();
+        assert!(
+            crypto::compute_hmac!(&auth_token_key, &valid_hat).unwrap() == valid_hat.mac.as_slice()
+        );
+
+        // Test: another 4 failed auth attempts should be allowed.
+        for _ in 0..4 {
+            let _ = service
+                .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+                .unwrap();
+            let _ = service
+                .finish_auth_session(
+                    &sup,
+                    &AuthenticationResult { authenticated: false, mac: vec![] },
+                )
+                .unwrap();
+        }
     }
 }

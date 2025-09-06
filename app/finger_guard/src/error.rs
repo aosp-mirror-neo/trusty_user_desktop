@@ -37,6 +37,8 @@ pub enum ServiceError {
     TipcError(&'static str, Box<dyn std::fmt::Debug>),
     #[error("Trusty system api {0} returns an error code: {1}")]
     TrustySysRcError(&'static str, i64),
+    #[error("Auth lockout error: {0:?}")]
+    AuthLockoutError(Box<dyn std::error::Error>),
 
     // Errors from interacting with keymint.
     #[error("Keymint {cmd} returned an error code: {code}")]
