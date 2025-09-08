@@ -216,11 +216,8 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
 
     pub fn reconcile_storage_with_gsc(&self) -> binder::Result<bool> {
         // Get storage root
-        let resp = self
-            .storage
-            .request(&StorageRequest::GetStatus)
-            .map_err(binder_error::from_tipc)
-            .expect("failed to comminicate with pinweaverstoraged");
+        let resp =
+            self.storage.request(&StorageRequest::GetStatus).map_err(binder_error::from_tipc)?;
         let storage_root =
             if let StorageResponse::GetStatus(GetStatusResponse { root_hash, .. }) = resp {
                 root_hash
