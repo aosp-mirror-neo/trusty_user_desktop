@@ -77,13 +77,13 @@ pub trait TrustyEnvironment: Send + Sync + 'static {
 }
 
 #[derive(Clone, PartialOrd, Ord, Eq, PartialEq)]
-/// Encapsulates a challenge associated with a SensorStateIndex
-pub struct EnrollmentChallenge {
+/// Encapsulates a HardwareAuthToken's challenge associated with a SensorStateIndex.
+pub struct AuthTokenChallenge {
     ssi: SensorStateIndex,
     challenge: i64,
 }
 
-impl EnrollmentChallenge {
+impl AuthTokenChallenge {
     const EMPTY: i64 = 0;
     /// Converts the challenge to an i64.
     fn challenge(&self) -> i64 {
@@ -109,7 +109,8 @@ pub struct FingerGuardService<T> {
     sk: Mutex<Option<crypto::Key>>,
     sensor_session: Mutex<SensorSession>,
     auth_token_key: OnceCell<crypto::Key>,
-    enrollment_challenges: Mutex<BTreeMap<EnrollmentChallenge, Instant>>,
+    enrollment_challenges: Mutex<BTreeMap<AuthTokenChallenge, Instant>>,
+    used_reset_challenges: Mutex<BTreeMap<AuthTokenChallenge, Instant>>,
     auth_rate_limiters: Mutex<BTreeMap<SensorStateIndex, AuthRateLimiter>>,
     trusty: T,
 }
@@ -136,6 +137,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             sensor_session: Default::default(),
             auth_token_key: OnceCell::new(),
             enrollment_challenges: Default::default(),
+            used_reset_challenges: Default::default(),
             auth_rate_limiters: Default::default(),
             trusty,
         }
@@ -213,7 +215,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let ssi = SensorStateIndex::from(sensor_user_pair);
         let challenge = rng::generate_random_int!(i64);
         let valid_until = self.trusty.clock().now()? + Duration::from_secs(60);
-        let ec = EnrollmentChallenge { ssi, challenge };
+        let ec = AuthTokenChallenge { ssi, challenge };
         enrollment_challenges.insert(ec, valid_until);
         Ok(challenge)
     }
@@ -227,13 +229,13 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             ServiceError::LockAcquire { name: "enrollment_challenges", mode: "write" }
         })?;
         let ssi = SensorStateIndex::from(sensor_user_pair);
-        let ec = EnrollmentChallenge { ssi, challenge };
+        let ec = AuthTokenChallenge { ssi, challenge };
         let now = self.trusty.clock().now()?;
-        enrollment_challenges.remove(&ec).map_or(Ok(EnrollmentChallenge::EMPTY), |valid_until| {
+        enrollment_challenges.remove(&ec).map_or(Ok(AuthTokenChallenge::EMPTY), |valid_until| {
             if now < valid_until {
                 Ok(ec.challenge())
             } else {
-                Ok(EnrollmentChallenge::EMPTY)
+                Ok(AuthTokenChallenge::EMPTY)
             }
         })
     }
@@ -261,7 +263,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
 
         // revoke_challenge returns the given challenge when it is valid.
         let challenge = self.revoke_challenge(sensor_user_pair, hat.challenge)?;
-        if challenge == EnrollmentChallenge::EMPTY || challenge != hat.challenge {
+        if challenge == AuthTokenChallenge::EMPTY || challenge != hat.challenge {
             return Err(ServiceError::StateUnavailable("enrollment challenge"));
         }
         // Validate |hat|.
@@ -522,10 +524,19 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         if now > hat_minted_at + SHELF_LIFE {
             return Err(ServiceError::InvalidArg("Stale hardware auth token"));
         }
-        // TODO(b/401303592): Check |hat| contains a unique challenge. Reject any retried HAT
-        // before HMAC computation. Consider maintaining a cache of challenges seen in the past
-        // minute since older-than-one-minute HATs is rejected anyway.
+        // Check |hat| contains a unique challenge. Reject any retried HAT
+        // before HMAC computation.
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
+        let reset_challenge =
+            AuthTokenChallenge { ssi: sensor_state_index, challenge: hat.challenge };
+        let mut used_reset_challenges = self.used_reset_challenges.try_lock().map_err(|_| {
+            ServiceError::LockAcquire { name: "used_reset_challenges", mode: "write" }
+        })?;
+        used_reset_challenges.retain(|_, minted_at| now <= *minted_at + SHELF_LIFE);
+        if used_reset_challenges.contains_key(&reset_challenge) {
+            return Err(ServiceError::InvalidArg("Reused hardware auth token challenge"));
+        }
+        used_reset_challenges.insert(reset_challenge, hat_minted_at);
         // Validate |hat|.
         let auth_token_key = self.get_auth_token_key()?;
         let mac = crypto::compute_hmac!(&auth_token_key, hat)?;
@@ -1256,5 +1267,41 @@ mod test {
             service.get_lockout_status(&sup).unwrap(),
             LockoutStatus::PermanentLockout(_)
         ));
+    }
+
+    #[test]
+    fn test_reset_timeout_rejects_invalid_hat() {
+        let (_, service, _, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::PASSWORD,
+            Instant::from_nanos(0),
+        );
+        let fake_key = crypto::Key::read_from_bytes(&[0; 32]).unwrap();
+        let fake_hat = hat.sign(&fake_key).unwrap();
+        assert!(service.reset_lockout(&sup, &fake_hat).is_err());
+    }
+
+    #[test]
+    fn test_reset_timeout_rejects_reused_hat() {
+        // Setup: reset the lockout status with a password HAT so a rate limiter is initialized.
+        let (_, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::PASSWORD,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        assert!(service.reset_lockout(&sup, &hat).is_ok());
+        assert!(matches!(service.get_lockout_status(&sup).unwrap(), LockoutStatus::Available(_)));
+
+        // Test: expect failure to reset again with the same HAT.
+        assert!(service.reset_lockout(&sup, &hat).is_err());
     }
 }
