@@ -98,12 +98,13 @@ interface IFingerGuard {
      * (sensor, user) pair.
      */
     long newAuthenticatorId(in SensorUserPair sensorUserPair);
-    /*
-     * Returns the lockout info associated with the (sensor, user) pair.
+    /**
+     * Return the lockout info associated with the (sensor, user) pair.
      */
     LockoutStatus getLockoutStatus(in SensorUserPair sensorUserPair);
-    /*
-     * Resets the lockout state associated with the (sensor, user) pair.
+    /**
+     * Reset the lockout state associated with the (sensor, user) pair.
+     * The provided HAT must be minted within one minute.
      */
     void resetLockout(in SensorUserPair sensorUserPair, in HardwareAuthToken hat);
 }

@@ -18,16 +18,12 @@ package android.desktop.security.finger_guard;
 
 // Represents the authenticator status for each (sensor, user) pair.
 union LockoutStatus {
-    // Indicates the sensor is not locked out.
-    parcelable Available {}
+    // Indicates the sensor is not locked out. Must be set to true.
+    boolean available;
     // Indicates the senor is permanently locked out and requires reset.
-    parcelable PermanentLockout {}
-    // Indicates the senor is temporarily locked out with a timer.
-    parcelable TimedLockout {
-        // The time to be elapsed before the sensor becomes available.
-        long durationMillis;
-    }
-    Available available;
-    PermanentLockout permanentLockout;
-    TimedLockout timedLockout;
+    // Must be set to true.
+    boolean permanentLockout;
+    // Indicates the senor is temporarily locked out with a timer. The value
+    // is the milliseconds to be waited before the sensor becomes available.
+    long timedLockoutMillis;
 }

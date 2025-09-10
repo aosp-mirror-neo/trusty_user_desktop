@@ -47,6 +47,14 @@ impl ExportToAidl<SignedHat> for Instant {
     }
 }
 
+// This is implemented as the inverse of ExportToAidl. It is not a typical usage of From trait: it
+// is not lossless and it operates on the borrowed object.
+impl From<&SignedHat> for Instant {
+    fn from(hat: &SignedHat) -> Self {
+        Self { nanos: hat.timestamp * 1_000_000 }
+    }
+}
+
 impl Add<Duration> for Instant {
     type Output = Instant;
 
