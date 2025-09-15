@@ -16,6 +16,7 @@
 
 package android.desktop.security.finger_guard;
 
+@VintfStability
 parcelable PrepareEnrollSessionResponse {
     /**
      * The MAC is a 32 bytes HMAC-SHA256 with the session key over the

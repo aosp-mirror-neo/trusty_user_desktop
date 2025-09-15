@@ -16,6 +16,7 @@
 
 package android.desktop.security.finger_guard;
 
+@VintfStability
 parcelable PrepareAuthSessionResponse {
     // nonce for the mac in AuthenticationResult.
     byte[32] nonce;

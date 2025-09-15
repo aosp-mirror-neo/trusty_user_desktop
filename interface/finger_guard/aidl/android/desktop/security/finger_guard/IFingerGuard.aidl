@@ -27,6 +27,7 @@ import android.desktop.security.finger_guard.SensorUserPair;
 import android.desktop.security.finger_guard.SessionResponse;
 import android.desktop.security.finger_guard.HardwareAuthToken;
 
+@VintfStability
 interface IFingerGuard {
     /**
      * Return the HandshakeResponse.

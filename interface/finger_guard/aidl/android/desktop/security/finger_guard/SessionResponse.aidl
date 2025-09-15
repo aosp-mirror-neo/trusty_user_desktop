@@ -16,6 +16,7 @@
 
 package android.desktop.security.finger_guard;
 
+@VintfStability
 parcelable SessionResponse {
     byte[] nonce;
     byte[] wrappedTpmSeed;

@@ -19,6 +19,9 @@ MODULE := $(LOCAL_DIR)
 MODULE_AIDL_PACKAGE := android/desktop/security/finger_guard
 MODULE_CRATE_NAME := android_desktop_security_finger_guard
 
+MODULE_AIDL_FLAGS := \
+	--stability=vintf \
+
 MODULE_AIDLS := \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/AuthenticationResult.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/EnrollmentResult.aidl \

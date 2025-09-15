@@ -17,6 +17,7 @@
 package android.desktop.security.finger_guard;
 
 // Represents the authenticator status for each (sensor, user) pair.
+@VintfStability
 union LockoutStatus {
     // Indicates the sensor is not locked out. Must be set to true.
     boolean available;

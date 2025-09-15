@@ -29,7 +29,7 @@ rust_defaults {
         "libopenssl",
         "libthiserror",
         "libzerocopy",
-        "android.desktop.security.finger_guard-rust",
+        "android.desktop.security.finger_guard-V1-rust",
     ],
 }
 
