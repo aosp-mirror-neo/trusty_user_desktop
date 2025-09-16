@@ -33,9 +33,10 @@
 
 package android.desktop.security.finger_guard;
 @VintfStability
-parcelable SessionResponse {
+parcelable ClientSessionResponse {
   byte[] nonce;
   byte[] wrappedTpmSeed;
   byte[] iv;
   byte[] tag;
+  android.desktop.security.finger_guard.IClientSession clientSession;
 }

@@ -18,9 +18,10 @@
 
 use crate::crypto;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
-    FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
-    PrepareAuthSessionResponse::PrepareAuthSessionResponse,
-    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
+    ClientSessionResponse::ClientSessionResponse,
+    FinishEnrollSessionResponse::FinishEnrollSessionResponse, IClientSession::IClientSession,
+    InitResponse::InitResponse, PrepareAuthSessionResponse::PrepareAuthSessionResponse,
+    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse,
 };
 
 /// Trait that is implemented to support exporting data to a particular AIDL type.
@@ -44,26 +45,24 @@ pub trait ExportToAidl<T> {
 }
 
 /// Construct a handshake response.
-pub fn make_handshake_response(
-    server_public_key: Vec<u8>,
-    pk_mac: &crypto::Hmac,
-) -> HandshakeResponse {
-    let mut response =
-        HandshakeResponse { serverPublicKey: server_public_key, ..Default::default() };
+pub fn make_init_response(server_public_key: Vec<u8>, pk_mac: &crypto::Hmac) -> InitResponse {
+    let mut response = InitResponse { serverPublicKey: server_public_key, ..Default::default() };
     pk_mac.export(&mut response);
     response
 }
 
 /// Construct a session response.
-pub fn make_session_response(
+pub fn make_client_session_response(
     nonce: &crypto::Nonce,
     wrapped_tpm_seed: Vec<u8>,
     iv: &crypto::Iv,
     tag: &crypto::Aes256Tag,
-) -> SessionResponse {
-    let mut response = SessionResponse::default();
+    client_session: Option<binder::Strong<dyn IClientSession>>,
+) -> ClientSessionResponse {
+    let mut response = ClientSessionResponse::default();
     nonce.export(&mut response);
     response.wrappedTpmSeed = wrapped_tpm_seed;
+    response.clientSession = client_session;
     iv.export(&mut response);
     tag.export(&mut response);
     response
@@ -97,9 +96,8 @@ pub fn make_finish_enroll_session_response(mac: &crypto::Hmac) -> FinishEnrollSe
 #[cfg(test)]
 mod test {
     use super::{
-        make_finish_enroll_session_response, make_handshake_response,
+        make_client_session_response, make_finish_enroll_session_response, make_init_response,
         make_prepare_auth_session_response, make_prepare_enroll_session_response,
-        make_session_response,
     };
     use crate::crypto;
     use std::array;
@@ -110,17 +108,17 @@ mod test {
     // simply default-initialized.
 
     #[test]
-    fn test_make_handshake_response() {
+    fn test_make_init_response() {
         let public_key: Vec<u8> = (1..=32).collect();
         let hmac_bytes: Vec<u8> = (1..=32).map(|x| x * 2).collect();
         let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
-        let response = make_handshake_response(public_key.clone(), &hmac);
+        let response = make_init_response(public_key.clone(), &hmac);
         assert_eq!(response.serverPublicKey, public_key);
         assert_eq!(response.pkMac, hmac_bytes);
     }
 
     #[test]
-    fn test_make_session_response() {
+    fn test_make_client_session_response() {
         let nonce_bytes: [u8; 32] = array::from_fn(|x| x as u8);
         let nonce = crypto::Nonce::read_from_bytes(&nonce_bytes).unwrap();
         let wrapped_tpm_seed: Vec<u8> = (1..=32).map(|x| x * 2).collect();
@@ -128,7 +126,8 @@ mod test {
         let iv = crypto::Iv::read_from_bytes(&iv_bytes).unwrap();
         let tag_bytes: [u8; 16] = array::from_fn(|x| x as u8 * 4);
         let tag = crypto::Aes256Tag::read_from_bytes(&tag_bytes).unwrap();
-        let response = make_session_response(&nonce, wrapped_tpm_seed.clone(), &iv, &tag);
+        let response =
+            make_client_session_response(&nonce, wrapped_tpm_seed.clone(), &iv, &tag, None);
         assert_eq!(response.nonce, nonce_bytes);
         assert_eq!(response.wrappedTpmSeed, wrapped_tpm_seed);
         assert_eq!(response.iv, iv_bytes);

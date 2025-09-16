@@ -25,12 +25,12 @@ use crate::lockout::{self, AuthRateLimiter, MapLockoutStatusErrExt};
 use crate::rng;
 use crate::time::{Clock, Instant};
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
-    AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
-    FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
-    HardwareAuthToken::HardwareAuthToken, IFingerGuard::IFingerGuard, LockoutStatus::LockoutStatus,
+    AuthenticationResult::AuthenticationResult, ClientSessionResponse::ClientSessionResponse,
+    EnrollmentResult::EnrollmentResult, FinishEnrollSessionResponse::FinishEnrollSessionResponse,
+    HardwareAuthToken::HardwareAuthToken, IClientSession::IClientSession,
+    IFingerGuard::IFingerGuard, InitResponse::InitResponse, LockoutStatus::LockoutStatus,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SensorUserPair::SensorUserPair,
-    SessionResponse::SessionResponse,
 };
 use binder::Interface;
 use log::error;
@@ -336,13 +336,60 @@ impl<T: TrustyEnvironment> ClientSession<T> {
     }
 }
 
+impl<T: TrustyEnvironment> Interface for ClientSession<T> {}
+
+impl<T: TrustyEnvironment> IClientSession for ClientSession<T> {
+    fn prepareEnrollSession(
+        &self,
+        sensor_user_pair: &SensorUserPair,
+        hat: &HardwareAuthToken,
+        nonce: &[u8],
+    ) -> binder::Result<PrepareEnrollSessionResponse> {
+        service_result_to_binder_result(
+            "prepareEnrollSession",
+            Self::prepare_enroll_session(self, sensor_user_pair, hat, nonce),
+        )
+    }
+    fn finishEnrollSession(
+        &self,
+        sensor_user_pair: &SensorUserPair,
+        result: &EnrollmentResult,
+        nonce: &[u8],
+    ) -> binder::Result<FinishEnrollSessionResponse> {
+        service_result_to_binder_result(
+            "finishEnrollSession",
+            Self::finish_enroll_session(self, sensor_user_pair, result, nonce),
+        )
+    }
+    fn prepareAuthSession(
+        &self,
+        sensor_user_pair: &SensorUserPair,
+        challenge: i64,
+        nonce: &[u8],
+    ) -> binder::Result<PrepareAuthSessionResponse> {
+        service_result_to_binder_result(
+            "prepareAuthSession",
+            Self::prepare_auth_session(self, sensor_user_pair, challenge, nonce),
+        )
+    }
+    fn finishAuthSession(
+        &self,
+        sensor_user_pair: &SensorUserPair,
+        result: &AuthenticationResult,
+    ) -> binder::Result<HardwareAuthToken> {
+        service_result_to_binder_result(
+            "finishAuthSession",
+            Self::finish_auth_session(self, sensor_user_pair, result),
+        )
+    }
+}
+
 /// Implements the `IFingerGuard` AIDL interface for other Trusty apps to call.
 pub struct FingerGuardService<T> {
     state: Arc<ServiceState<T>>,
-    client_session: Mutex<Option<ClientSession<T>>>,
 }
 
-/// The initial message signed by the private key during the handshake.
+/// The initial message signed by the private key during the pk handshake.
 struct HandshakeMessage;
 impl HmacSignable for HandshakeMessage {
     fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
@@ -369,11 +416,10 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
                 auth_rate_limiters: Default::default(),
                 trusty,
             }),
-            client_session: Default::default(),
         }
     }
 
-    fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<HandshakeResponse> {
+    fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<InitResponse> {
         // Fetch the existing init params, or generate a fresh set of them if none exist. The
         // response will only be populated if the get_or_try_init does a new handshake.
         let mut response = None;
@@ -389,22 +435,18 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             let init_params = InitParams { pk, tpm_seed: crypto::Secret::generate() };
             self.state.trusty.save_init_params(&init_params)?;
             // If we get here we have saved a new handshake, create the response to return.
-            response = Some(aidl::make_handshake_response(server_public_key_bytes, &mac));
+            response = Some(aidl::make_init_response(server_public_key_bytes, &mac));
             Ok(init_params)
         })?;
         response.ok_or(ServiceError::StateAlreadyExists("init_params"))
     }
 
-    fn new_session(&self, client_nonce: &[u8]) -> ServiceResult<SessionResponse> {
+    fn create_client_session(&self, client_nonce: &[u8]) -> ServiceResult<ClientSessionResponse> {
         let client_nonce = crypto::Nonce::import(client_nonce)
             .map_err(|_| ServiceError::InvalidArg("client_nonce"))?;
         let Some(init_params) = self.state.init_params.get() else {
             return Err(ServiceError::StateUnavailable("init_params"));
         };
-        let mut client_session = lock_state!(self, client_session);
-        if client_session.is_some() {
-            return Err(ServiceError::StateAlreadyExists("client_session"));
-        }
         let nonce = crypto::Nonce::generate();
         let new_sk = crypto::compute_hmac!(&init_params.pk, &client_nonce, &nonce)?;
         let iv = crypto::Iv::generate();
@@ -415,8 +457,15 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             &init_params.tpm_seed,
         )
         .wrap_openssl_err("failed to encrypt tpm_seed")?;
-        *client_session = Some(ClientSession { state: Arc::clone(&self.state), sk: new_sk.into() });
-        Ok(aidl::make_session_response(&nonce, wrapped_tpm_seed, &iv, &tag))
+        let client_session = ClientSession { state: Arc::clone(&self.state), sk: new_sk.into() };
+        let session_response = aidl::make_client_session_response(
+            &nonce,
+            wrapped_tpm_seed,
+            &iv,
+            &tag,
+            Some(binder::Strong::new(Box::new(client_session))),
+        );
+        Ok(session_response)
     }
 
     fn generate_challenge(&self, sensor_user_pair: &SensorUserPair) -> ServiceResult<i64> {
@@ -445,57 +494,6 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
                 Ok(AuthTokenChallenge::EMPTY)
             }
         })
-    }
-
-    fn prepare_enroll_session(
-        &self,
-        sensor_user_pair: &SensorUserPair,
-        hat: &HardwareAuthToken,
-        nonce: &[u8],
-    ) -> ServiceResult<PrepareEnrollSessionResponse> {
-        let client_session = lock_state!(self, client_session);
-        let Some(ref client_session) = *client_session else {
-            return Err(ServiceError::StateUnavailable("client_session"));
-        };
-        client_session.prepare_enroll_session(sensor_user_pair, hat, nonce)
-    }
-
-    fn finish_enroll_session(
-        &self,
-        sensor_user_pair: &SensorUserPair,
-        result: &EnrollmentResult,
-        nonce: &[u8],
-    ) -> ServiceResult<FinishEnrollSessionResponse> {
-        let client_session = lock_state!(self, client_session);
-        let Some(ref client_session) = *client_session else {
-            return Err(ServiceError::StateUnavailable("client_session"));
-        };
-        client_session.finish_enroll_session(sensor_user_pair, result, nonce)
-    }
-
-    fn prepare_auth_session(
-        &self,
-        sensor_user_pair: &SensorUserPair,
-        challenge: i64,
-        nonce: &[u8],
-    ) -> ServiceResult<PrepareAuthSessionResponse> {
-        let client_session = lock_state!(self, client_session);
-        let Some(ref client_session) = *client_session else {
-            return Err(ServiceError::StateUnavailable("client_session"));
-        };
-        client_session.prepare_auth_session(sensor_user_pair, challenge, nonce)
-    }
-
-    fn finish_auth_session(
-        &self,
-        sensor_user_pair: &SensorUserPair,
-        result: &AuthenticationResult,
-    ) -> ServiceResult<HardwareAuthToken> {
-        let client_session = lock_state!(self, client_session);
-        let Some(ref client_session) = *client_session else {
-            return Err(ServiceError::StateUnavailable("client_session"));
-        };
-        client_session.finish_auth_session(sensor_user_pair, result)
     }
 
     fn read_authenticator_id(
@@ -630,14 +628,14 @@ fn service_result_to_binder_result<T>(
 impl<T: TrustyEnvironment> Interface for FingerGuardService<T> {}
 
 impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
-    fn initHandshake(&self, client_public_key: &[u8]) -> binder::Result<HandshakeResponse> {
-        service_result_to_binder_result(
-            "initHandshake",
-            Self::init_handshake(self, client_public_key),
-        )
+    fn init(&self, client_public_key: &[u8]) -> binder::Result<InitResponse> {
+        service_result_to_binder_result("init", Self::init_handshake(self, client_public_key))
     }
-    fn newSession(&self, client_nonce: &[u8]) -> binder::Result<SessionResponse> {
-        service_result_to_binder_result("newSession", Self::new_session(self, client_nonce))
+    fn createClientSession(&self, client_nonce: &[u8]) -> binder::Result<ClientSessionResponse> {
+        service_result_to_binder_result(
+            "createClientSession",
+            Self::create_client_session(self, client_nonce),
+        )
     }
     fn generateChallenge(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
         service_result_to_binder_result(
@@ -653,49 +651,6 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
         service_result_to_binder_result(
             "revokeChallenge",
             Self::revoke_challenge(self, sensor_user_pair, challenge),
-        )
-    }
-    fn prepareEnrollSession(
-        &self,
-        sensor_user_pair: &SensorUserPair,
-        hat: &HardwareAuthToken,
-        nonce: &[u8],
-    ) -> binder::Result<PrepareEnrollSessionResponse> {
-        service_result_to_binder_result(
-            "prepareEnrollSession",
-            Self::prepare_enroll_session(self, sensor_user_pair, hat, nonce),
-        )
-    }
-    fn finishEnrollSession(
-        &self,
-        sensor_user_pair: &SensorUserPair,
-        result: &EnrollmentResult,
-        nonce: &[u8],
-    ) -> binder::Result<FinishEnrollSessionResponse> {
-        service_result_to_binder_result(
-            "finishEnrollSession",
-            Self::finish_enroll_session(self, sensor_user_pair, result, nonce),
-        )
-    }
-    fn prepareAuthSession(
-        &self,
-        sensor_user_pair: &SensorUserPair,
-        challenge: i64,
-        nonce: &[u8],
-    ) -> binder::Result<PrepareAuthSessionResponse> {
-        service_result_to_binder_result(
-            "prepareAuthSession",
-            Self::prepare_auth_session(self, sensor_user_pair, challenge, nonce),
-        )
-    }
-    fn finishAuthSession(
-        &self,
-        sensor_user_pair: &SensorUserPair,
-        result: &AuthenticationResult,
-    ) -> binder::Result<HardwareAuthToken> {
-        service_result_to_binder_result(
-            "finishAuthSession",
-            Self::finish_auth_session(self, sensor_user_pair, result),
         )
     }
     fn getAuthenticatorId(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
@@ -742,18 +697,24 @@ mod test {
     use crate::time::{Clock, Instant};
     use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
         AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
-        LockoutStatus::LockoutStatus, SensorUserPair::SensorUserPair,
+        IClientSession::IClientSession, LockoutStatus::LockoutStatus,
+        SensorUserPair::SensorUserPair,
     };
+    use binder::Strong;
     use std::array;
     use std::time::Duration;
     use zerocopy::{FromBytes, IntoBytes};
 
-    // Setup a service with a random auth_token_key and carried out a simulated
+    // Setup a service with a random auth_token_key and carried out a simulated client
     // session establishment with the service, returns the simulated clock, the service, the auth
-    // token key, and the session key.
-    fn service_setup(
-    ) -> (&'static SimulatedClock, FingerGuardService<SimulatedTrusty>, crypto::Key, crypto::Key)
-    {
+    // token key, the client session instance, and the channel key.
+    fn service_setup() -> (
+        &'static SimulatedClock,
+        FingerGuardService<SimulatedTrusty>,
+        crypto::Key,
+        Strong<dyn IClientSession>,
+        crypto::Key,
+    ) {
         let auth_token_key_bytes = rng::generate_random_vec::<32>();
         let auth_token_key = crypto::Key::read_from_bytes(&auth_token_key_bytes).unwrap();
         let init_params = InitParams {
@@ -769,22 +730,24 @@ mod test {
 
         let client_nonce_bytes = rng::generate_random_vec::<32>();
         let client_nonce = crypto::Nonce::import(&client_nonce_bytes).unwrap();
-        let session_response = service.new_session(client_nonce_bytes.as_slice()).unwrap();
-        let server_nonce = crypto::Nonce::import(&session_response.nonce).unwrap();
+        let client_session_response =
+            service.create_client_session(client_nonce_bytes.as_slice()).unwrap();
+        let server_nonce = crypto::Nonce::import(&client_session_response.nonce).unwrap();
         let sk = crypto::compute_hmac!(&init_params.pk, &client_nonce, &server_nonce).unwrap();
 
         // Decrypt the wrapped tpm seed, AEAD ensures the decryption succeeds and outputs only
         // the correct plaintext.
-        let iv = crypto::Iv::read_from_bytes(session_response.iv.as_slice()).unwrap();
-        let tag = crypto::Aes256Tag::read_from_bytes(session_response.tag.as_slice()).unwrap();
-        let encrypted_tpm_seed = session_response.wrappedTpmSeed;
+        let iv = crypto::Iv::read_from_bytes(client_session_response.iv.as_slice()).unwrap();
+        let tag =
+            crypto::Aes256Tag::read_from_bytes(client_session_response.tag.as_slice()).unwrap();
+        let encrypted_tpm_seed = client_session_response.wrappedTpmSeed;
         let aad = b"tpm_seed";
         let _ =
             crypto::decrypt_aes256_gcm(&sk, &iv, aad, encrypted_tpm_seed.as_slice(), &tag).unwrap();
 
         // Convert the HMAC into a key.
         let sk = crypto::Key::from(sk);
-        (clock, service, auth_token_key, sk)
+        (clock, service, auth_token_key, client_session_response.clientSession.unwrap(), sk)
     }
 
     // Struct used in tests to allow arbitrary blobs to be supplied to the HMAC generator.
@@ -821,8 +784,15 @@ mod test {
     }
 
     #[test]
+    fn test_multi_client_session_setup() {
+        let (_, service, _, _, _) = service_setup();
+        let client_nonce_bytes = rng::generate_random_vec::<32>();
+        let _ = service.create_client_session(client_nonce_bytes.as_slice()).unwrap();
+    }
+
+    #[test]
     fn test_enrollment_challenges() {
-        let (_, service, _, _) = service_setup();
+        let (_, service, _, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         // Generate multiple challenges and revoke them individually.
         let c1 = service.generate_challenge(&sup).unwrap();
@@ -843,7 +813,7 @@ mod test {
 
     #[test]
     fn test_authenticator_id() {
-        let (_, service, _, _) = service_setup();
+        let (_, service, _, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let id = service.generate_authenticator_id(&sup).unwrap();
         assert_ne!(i64::from(id), 0);
@@ -853,7 +823,7 @@ mod test {
 
     #[test]
     fn test_prepare_enrollment() {
-        let (_, service, auth_token_key, sk) = service_setup();
+        let (_, service, auth_token_key, client_session, sk) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -864,7 +834,7 @@ mod test {
         );
         let hat = hat.sign(&auth_token_key).unwrap();
         let nonce = rng::generate_random_vec::<32>();
-        let session_resp = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let session_resp = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
         let hmac = crypto::compute_hmac!(
             &sk,
             &TestBlob(&nonce),
@@ -877,7 +847,7 @@ mod test {
 
     #[test]
     fn test_prepare_enrollment_rejects_bad_challange() {
-        let (_, service, auth_token_key, _) = service_setup();
+        let (_, _, auth_token_key, client_session, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             0, // Bad challange value
@@ -888,12 +858,12 @@ mod test {
         );
         let hat = hat.sign(&auth_token_key).unwrap();
         let nonce = rng::generate_random_vec::<32>();
-        assert!(service.prepare_enroll_session(&sup, &hat, &nonce).is_err());
+        assert!(client_session.prepareEnrollSession(&sup, &hat, &nonce).is_err());
     }
 
     #[test]
     fn test_prepare_enrollment_invalidate_challenge_in_invalid_hat() {
-        let (_, service, _, _) = service_setup();
+        let (_, service, _, client_session, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let challenge = service.generate_challenge(&sup).unwrap();
         assert_ne!(challenge, 0_i64);
@@ -907,14 +877,14 @@ mod test {
         let fake_key = crypto::Key::read_from_bytes(&[0; 32]).unwrap();
         let fake_hat = hat.sign(&fake_key).unwrap();
         let nonce = rng::generate_random_vec::<32>();
-        assert!(service.prepare_enroll_session(&sup, &fake_hat, &nonce).is_err());
+        assert!(client_session.prepareEnrollSession(&sup, &fake_hat, &nonce).is_err());
         // Verify the challange is invalidated.
         assert_eq!(service.revoke_challenge(&sup, challenge).unwrap(), 0);
     }
 
     #[test]
     fn test_prepare_enrollment_allow_hat_reuse() {
-        let (_, service, auth_token_key, _) = service_setup();
+        let (_, service, auth_token_key, client_session, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -927,17 +897,17 @@ mod test {
         // Repeatedly prepare and cancel enrollments with the valid |hat|.
         for _ in 0..2 {
             let nonce = rng::generate_random_vec::<32>();
-            let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+            let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
             let enrollment_result = EnrollmentResult { enrolled: false };
             let nonce = rng::generate_random_vec::<32>();
-            let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+            let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
         }
     }
 
     #[test]
     fn test_finish_enrollment() {
         // Setup: prepare_enroll_session should succeed.
-        let (_, service, auth_token_key, sk) = service_setup();
+        let (_, service, auth_token_key, client_session, sk) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -948,12 +918,13 @@ mod test {
         );
         let hat = hat.sign(&auth_token_key).unwrap();
         let nonce = rng::generate_random_vec::<32>();
-        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
 
         // Test: finish_enroll_session should succeed.
         let nonce = rng::generate_random_vec::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
-        let finish_resp = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        let finish_resp =
+            client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
 
         // Verify: check response hmac should match the computation.
         let hmac = crypto::compute_hmac!(
@@ -972,7 +943,7 @@ mod test {
     #[test]
     fn test_prepare_authentication() {
         // Setup: complete an enroll session: prepare then finish.
-        let (_, service, auth_token_key, sk) = service_setup();
+        let (_, service, auth_token_key, client_session, sk) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -983,15 +954,15 @@ mod test {
         );
         let hat = hat.sign(&auth_token_key).unwrap();
         let nonce = rng::generate_random_vec::<32>();
-        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
         let nonce = rng::generate_random_vec::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
-        let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
 
         // Test: prepare_auth_session should succeed.
         let challenge = 0xc4a11e49e_i64;
         let nonce = rng::generate_random_vec::<32>();
-        let prepare_resp = service.prepare_auth_session(&sup, challenge, &nonce).unwrap();
+        let prepare_resp = client_session.prepareAuthSession(&sup, challenge, &nonce).unwrap();
 
         // Verify: check that response hmac should match the computation.
         let hmac = crypto::compute_hmac!(
@@ -1007,7 +978,7 @@ mod test {
     #[test]
     fn test_finish_authentication() {
         // Setup: prepare and finish an enroll session then prepare an auth session.
-        let (_, service, auth_token_key, sk) = service_setup();
+        let (_, service, auth_token_key, client_session, sk) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let secure_user_id = 0x1337BEEF_i64;
         let hat = UnsignedHat::new(
@@ -1019,14 +990,14 @@ mod test {
         );
         let hat = hat.sign(&auth_token_key).unwrap();
         let nonce = rng::generate_random_vec::<32>();
-        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
         let nonce = rng::generate_random_vec::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
-        let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
         let auth_id = service.read_authenticator_id(&sup).unwrap();
         let challenge = 0xc4a11e49e_i64;
         let nonce = rng::generate_random_vec::<32>();
-        let prepare_resp = service.prepare_auth_session(&sup, challenge, &nonce).unwrap();
+        let prepare_resp = client_session.prepareAuthSession(&sup, challenge, &nonce).unwrap();
 
         // Test: finish_auth_session with a good auth result should succeed.
         let hmac = crypto::compute_hmac!(
@@ -1037,7 +1008,7 @@ mod test {
         )
         .unwrap();
         let auth_result = AuthenticationResult::from(hmac);
-        let valid_hat = service.finish_auth_session(&sup, &auth_result).unwrap();
+        let valid_hat = client_session.finishAuthSession(&sup, &auth_result).unwrap();
 
         // Verify: validate the produced HAT.
         // `challenge` should be the challenge passed to prepare_auth_session().
@@ -1058,7 +1029,7 @@ mod test {
     fn test_prepare_auth_session_timeout() {
         // Setup: prepare and finish an enroll session, then advance the clock by the default
         // timeout window.
-        let (simulated_clock, service, auth_token_key, _) = service_setup();
+        let (simulated_clock, service, auth_token_key, client_session, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1069,22 +1040,22 @@ mod test {
         );
         let hat = hat.sign(&auth_token_key).unwrap();
         let nonce = rng::generate_random_vec::<32>();
-        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
         let nonce = rng::generate_random_vec::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
-        let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
         simulated_clock.advance_time(lockout::DEFAULT_AUTH_TIMEOUT_WINDOW);
 
         // Test: prepare_auth_session should fail.
         let challenge = 0xc4a11e49e_i64;
         let nonce = rng::generate_random_vec::<32>();
-        assert!(service.prepare_auth_session(&sup, challenge, &nonce).is_err());
+        assert!(client_session.prepareAuthSession(&sup, challenge, &nonce).is_err());
     }
 
     #[test]
     fn test_prepare_auth_session_lockout() {
         // Setup: prepare and finish an enroll session, then fail 5 auth attempts in a raw.
-        let (_, service, auth_token_key, _) = service_setup();
+        let (_, service, auth_token_key, client_session, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1095,17 +1066,17 @@ mod test {
         );
         let hat = hat.sign(&auth_token_key).unwrap();
         let nonce = rng::generate_random_vec::<32>();
-        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
         let nonce = rng::generate_random_vec::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
-        let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
         let challenge = 0xc4a11e49e_i64;
         for _ in 0..5 {
-            let _ = service
-                .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+            let _ = client_session
+                .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
                 .unwrap();
-            let _ = service
-                .finish_auth_session(
+            let _ = client_session
+                .finishAuthSession(
                     &sup,
                     &AuthenticationResult { authenticated: false, mac: vec![] },
                 )
@@ -1113,8 +1084,8 @@ mod test {
         }
 
         // Test: prepare_auth_session should fail.
-        assert!(service
-            .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+        assert!(client_session
+            .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
             .is_err());
     }
 
@@ -1122,7 +1093,7 @@ mod test {
     fn test_authentication_clear_attempt_counter() {
         // Setup: prepare and finish an enroll session, then fail 4 auth attempts in a raw,
         // and finally pass one auth attempt.
-        let (_, service, auth_token_key, sk) = service_setup();
+        let (_, service, auth_token_key, client_session, sk) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1133,24 +1104,24 @@ mod test {
         );
         let hat = hat.sign(&auth_token_key).unwrap();
         let nonce = rng::generate_random_vec::<32>();
-        let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+        let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
         let nonce = rng::generate_random_vec::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
-        let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
         let challenge = 0xc4a11e49e_i64;
         for _ in 0..4 {
-            let _ = service
-                .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+            let _ = client_session
+                .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
                 .unwrap();
-            let _ = service
-                .finish_auth_session(
+            let _ = client_session
+                .finishAuthSession(
                     &sup,
                     &AuthenticationResult { authenticated: false, mac: vec![] },
                 )
                 .unwrap();
         }
-        let prepare_resp = service
-            .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+        let prepare_resp = client_session
+            .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
             .unwrap();
         let hmac = crypto::compute_hmac!(
             &sk,
@@ -1160,18 +1131,18 @@ mod test {
         )
         .unwrap();
         let auth_result = AuthenticationResult::from(hmac);
-        let valid_hat = service.finish_auth_session(&sup, &auth_result).unwrap();
+        let valid_hat = client_session.finishAuthSession(&sup, &auth_result).unwrap();
         assert!(
             crypto::compute_hmac!(&auth_token_key, &valid_hat).unwrap() == valid_hat.mac.as_slice()
         );
 
         // Test: another 4 failed auth attempts should be allowed.
         for _ in 0..4 {
-            let _ = service
-                .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+            let _ = client_session
+                .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
                 .unwrap();
-            let _ = service
-                .finish_auth_session(
+            let _ = client_session
+                .finishAuthSession(
                     &sup,
                     &AuthenticationResult { authenticated: false, mac: vec![] },
                 )
@@ -1181,7 +1152,7 @@ mod test {
 
     #[test]
     fn test_get_lockout_status_default_to_permanent_lockout() {
-        let (_, service, _, _) = service_setup();
+        let (_, service, _, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         assert!(matches!(
             service.get_lockout_status(&sup).unwrap(),
@@ -1191,7 +1162,7 @@ mod test {
 
     #[test]
     fn test_fingerprint_hat_reset_fails_without_rate_limiter_setup() {
-        let (_, service, auth_token_key, _) = service_setup();
+        let (_, service, auth_token_key, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1206,7 +1177,7 @@ mod test {
 
     #[test]
     fn test_reset_lockout_with_password_hat() {
-        let (_, service, auth_token_key, _) = service_setup();
+        let (_, service, auth_token_key, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1222,7 +1193,7 @@ mod test {
 
     #[test]
     fn test_reset_lockout_with_stale_hat() {
-        let (clock, service, auth_token_key, _) = service_setup();
+        let (clock, service, auth_token_key, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1241,7 +1212,7 @@ mod test {
     fn test_reset_lockout_with_fingerprint_hat() {
         // Setup: reset the lockout status with a password HAT, then fail 4 auth attempts in a raw,
         // and reset the lockout status with a fingerprint HAT.
-        let (_, service, auth_token_key, _) = service_setup();
+        let (_, service, auth_token_key, client_session, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1254,11 +1225,11 @@ mod test {
         service.reset_lockout(&sup, &hat).unwrap();
         let challenge = 0xc4a11e49e_i64;
         for _ in 0..4 {
-            let _ = service
-                .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+            let _ = client_session
+                .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
                 .unwrap();
-            let _ = service
-                .finish_auth_session(
+            let _ = client_session
+                .finishAuthSession(
                     &sup,
                     &AuthenticationResult { authenticated: false, mac: vec![] },
                 )
@@ -1276,11 +1247,11 @@ mod test {
 
         // Test: another 4 failed auth attempts should be allowed.
         for _ in 0..4 {
-            let _ = service
-                .prepare_auth_session(&sup, challenge, &rng::generate_random_vec::<32>())
+            let _ = client_session
+                .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
                 .unwrap();
-            let _ = service
-                .finish_auth_session(
+            let _ = client_session
+                .finishAuthSession(
                     &sup,
                     &AuthenticationResult { authenticated: false, mac: vec![] },
                 )
@@ -1291,7 +1262,7 @@ mod test {
     #[test]
     fn test_reset_timeout_with_password_hat() {
         // Setup: reset the lockout status with a password HAT so a rate limiter is initialized.
-        let (clock, service, auth_token_key, _) = service_setup();
+        let (clock, service, auth_token_key, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1328,7 +1299,7 @@ mod test {
     #[test]
     fn test_reset_timeout_with_fingerprint_hat() {
         // Setup: reset the lockout status with a password HAT so a rate limiter is initialized.
-        let (clock, service, auth_token_key, _) = service_setup();
+        let (clock, service, auth_token_key, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1367,7 +1338,7 @@ mod test {
 
     #[test]
     fn test_reset_timeout_rejects_invalid_hat() {
-        let (_, service, _, _) = service_setup();
+        let (_, service, _, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1384,7 +1355,7 @@ mod test {
     #[test]
     fn test_reset_timeout_allows_valid_hat_reuse() {
         // Setup: reset the lockout status with a password HAT so a rate limiter is initialized.
-        let (_, service, auth_token_key, _) = service_setup();
+        let (_, service, auth_token_key, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),
@@ -1403,7 +1374,7 @@ mod test {
 
     #[test]
     fn test_reset_timeout_rejects_invalid_hat_challenge_reuse() {
-        let (_, service, auth_token_key, _) = service_setup();
+        let (_, service, auth_token_key, _, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
         let hat = UnsignedHat::new(
             service.generate_challenge(&sup).unwrap(),

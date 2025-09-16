@@ -16,34 +16,35 @@
 
 package android.desktop.security.finger_guard;
 
-import android.desktop.security.finger_guard.AuthenticationResult;
-import android.desktop.security.finger_guard.EnrollmentResult;
-import android.desktop.security.finger_guard.FinishEnrollSessionResponse;
-import android.desktop.security.finger_guard.HandshakeResponse;
-import android.desktop.security.finger_guard.LockoutStatus;
-import android.desktop.security.finger_guard.PrepareAuthSessionResponse;
-import android.desktop.security.finger_guard.PrepareEnrollSessionResponse;
-import android.desktop.security.finger_guard.SensorUserPair;
-import android.desktop.security.finger_guard.SessionResponse;
+import android.desktop.security.finger_guard.ClientSessionResponse;
+import android.desktop.security.finger_guard.InitResponse;
 import android.desktop.security.finger_guard.HardwareAuthToken;
+import android.desktop.security.finger_guard.LockoutStatus;
+import android.desktop.security.finger_guard.SensorUserPair;
 
 @VintfStability
 interface IFingerGuard {
     /**
-     * Return the HandshakeResponse.
+     * Return the InitResponse, which will be used by the client to
+     * derive the shared pairing key.
+     *
      * The pairing key, PK, is derived from ECDH key agreement. The client
-     * would use HandshakeResponse to derive the same PK.
+     * should derive the same PK as FingerGuard does.
      * Once the PK is established, it will be persisted and block further
-     * initHandshake calls until the device is powerwashed.
+     * init calls until the device is powerwashed.
      */
-    HandshakeResponse initHandshake(in byte[] clientPublicKey);
+    InitResponse init(in byte[] clientPublicKey);
     /**
-     * Return the nonce for a common shared session key and the session key
-     * encrypted TPM seed.
+     * Return the nonce for a common shared session key, the session key
+     * encrypted TPM seed, and an instance of the IClientSession.
+     *
      * The session key is derived from the pairing key, plus the client nonce
      * and the returned nonce.
+     *
+     * IClientSession can be used to perform authenticated operations as
+     * IClientSession#PrepareEnrollSession, IClientSession#FinishEnrollSession, etc.
      */
-    SessionResponse newSession(in byte[] clientNonce);
+    ClientSessionResponse createClientSession(in byte[] clientNonce);
     /**
      * Return a newly generated challange associated with the
      * (sensor, user) pair.
@@ -61,35 +62,6 @@ interface IFingerGuard {
      * or the challenge has expired, return 0.
      */
     long revokeChallenge(in SensorUserPair sensorUserPair, long challenge);
-    /**
-     * Create an enroll session for a given pair of (sensor, user).
-     * A MAC over the user id and the nonce will be returned.
-     *
-     * The challenge in the provided HAT must match a previously generated
-     * challenge for the same (senor, user) pair and must not exceeds the
-     * timeout.
-     */
-    PrepareEnrollSessionResponse prepareEnrollSession(in SensorUserPair sensorUserPair, in HardwareAuthToken hat, in byte[] nonce);
-    /**
-     * Finish a created enroll session.
-     * A MAC over the user id and the nonce will be returned.
-     * The associated AuthenticatorID will be updated with a successful
-     * enrollment.
-     */
-    FinishEnrollSessionResponse finishEnrollSession(in SensorUserPair sensorUserPair, in EnrollmentResult result, in byte[] nonce);
-    /**
-     * Create an auth session for a given pair of (sensor, user).
-     * A MAC over the user id and the nonce will be returned.
-     * |hatChallenge| should be returned in the HardwareAuthToken when the
-     * authentication succeeds.
-     */
-    PrepareAuthSessionResponse prepareAuthSession(in SensorUserPair sensorUserPair, in long hatChallenge, in byte[] nonce);
-    /**
-     * Finish a created auth session.
-     * If the authentication succeeds, return a valid auth token contains
-     * the challenge in prepareAuthSession. Otherwise, return an empty token.
-     */
-    HardwareAuthToken finishAuthSession(in SensorUserPair sensorUserPair, in AuthenticationResult result);
     /**
      * Return the AuthenticatorId associated with the (sensor, user) pair.
      */

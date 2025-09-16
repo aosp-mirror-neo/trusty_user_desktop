@@ -22,10 +22,10 @@ use crate::hat::SignedHat;
 use crate::identifiers::SensorStateIndex;
 use crate::rng;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
-    AuthenticationResult::AuthenticationResult,
-    FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
+    AuthenticationResult::AuthenticationResult, ClientSessionResponse::ClientSessionResponse,
+    FinishEnrollSessionResponse::FinishEnrollSessionResponse, InitResponse::InitResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
-    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
+    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse,
 };
 use openssl::bn::BigNumContext;
 use openssl::derive::Deriver;
@@ -103,8 +103,8 @@ impl Nonce {
         })
     }
 }
-impl ExportToAidl<SessionResponse> for Nonce {
-    fn export(&self, out: &mut SessionResponse) {
+impl ExportToAidl<ClientSessionResponse> for Nonce {
+    fn export(&self, out: &mut ClientSessionResponse) {
         out.nonce = self.bytes.to_vec();
     }
 }
@@ -127,16 +127,16 @@ impl Iv {
         Self { bytes: rng::generate_random_buffer::<{ Self::SIZE }>() }
     }
 }
-impl ExportToAidl<SessionResponse> for Iv {
-    fn export(&self, out: &mut SessionResponse) {
+impl ExportToAidl<ClientSessionResponse> for Iv {
+    fn export(&self, out: &mut ClientSessionResponse) {
         out.iv = self.bytes.to_vec();
     }
 }
 
 // Define a type for tags used in AES-256 encryption.
 blob_newtype!(Aes256Tag, 16);
-impl ExportToAidl<SessionResponse> for Aes256Tag {
-    fn export(&self, out: &mut SessionResponse) {
+impl ExportToAidl<ClientSessionResponse> for Aes256Tag {
+    fn export(&self, out: &mut ClientSessionResponse) {
         out.tag = self.bytes.to_vec();
     }
 }
@@ -307,8 +307,8 @@ impl ExportToAidl<SignedHat> for Hmac {
         out.mac = self.bytes.to_vec();
     }
 }
-impl ExportToAidl<HandshakeResponse> for Hmac {
-    fn export(&self, out: &mut HandshakeResponse) {
+impl ExportToAidl<InitResponse> for Hmac {
+    fn export(&self, out: &mut InitResponse) {
         out.pkMac = self.bytes.to_vec();
     }
 }

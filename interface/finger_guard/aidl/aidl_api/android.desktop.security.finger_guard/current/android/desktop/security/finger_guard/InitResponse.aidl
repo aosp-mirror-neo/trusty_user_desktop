@@ -33,7 +33,7 @@
 
 package android.desktop.security.finger_guard;
 @VintfStability
-parcelable HandshakeResponse {
+parcelable InitResponse {
   byte[] serverPublicKey;
   byte[] pkMac;
 }

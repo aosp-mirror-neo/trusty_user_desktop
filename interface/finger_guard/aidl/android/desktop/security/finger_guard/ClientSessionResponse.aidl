@@ -16,10 +16,13 @@
 
 package android.desktop.security.finger_guard;
 
+import android.desktop.security.finger_guard.IClientSession;
+
 @VintfStability
-parcelable SessionResponse {
+parcelable ClientSessionResponse {
     byte[] nonce;
     byte[] wrappedTpmSeed;
     byte[] iv;
     byte[] tag;
+    IClientSession clientSession;
 }

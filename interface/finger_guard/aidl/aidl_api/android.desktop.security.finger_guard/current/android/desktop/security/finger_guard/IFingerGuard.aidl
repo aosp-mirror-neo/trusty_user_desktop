@@ -34,14 +34,10 @@
 package android.desktop.security.finger_guard;
 @VintfStability
 interface IFingerGuard {
-  android.desktop.security.finger_guard.HandshakeResponse initHandshake(in byte[] clientPublicKey);
-  android.desktop.security.finger_guard.SessionResponse newSession(in byte[] clientNonce);
+  android.desktop.security.finger_guard.InitResponse init(in byte[] clientPublicKey);
+  android.desktop.security.finger_guard.ClientSessionResponse createClientSession(in byte[] clientNonce);
   long generateChallenge(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair);
   long revokeChallenge(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, long challenge);
-  android.desktop.security.finger_guard.PrepareEnrollSessionResponse prepareEnrollSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in android.desktop.security.finger_guard.HardwareAuthToken hat, in byte[] nonce);
-  android.desktop.security.finger_guard.FinishEnrollSessionResponse finishEnrollSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in android.desktop.security.finger_guard.EnrollmentResult result, in byte[] nonce);
-  android.desktop.security.finger_guard.PrepareAuthSessionResponse prepareAuthSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in long hatChallenge, in byte[] nonce);
-  android.desktop.security.finger_guard.HardwareAuthToken finishAuthSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in android.desktop.security.finger_guard.AuthenticationResult result);
   long getAuthenticatorId(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair);
   long newAuthenticatorId(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair);
   android.desktop.security.finger_guard.LockoutStatus getLockoutStatus(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair);

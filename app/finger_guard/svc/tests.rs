@@ -67,7 +67,7 @@ fn everything_with_a_shared_session() {
     // ECDH with the server. If the service has already done a handshake then it's not
     // possible to run this test, skip it and move on.
     let service = assert_ok!(finger_guard_api::connect_finger_guard());
-    let handshake = match service.initHandshake(client_public_key_bytes.as_slice()) {
+    let handshake = match service.init(client_public_key_bytes.as_slice()) {
         Err(status) if status.transaction_error() == binder::StatusCode::ALREADY_EXISTS => {
             skip!("service already bound to a controller")
         }
@@ -87,7 +87,8 @@ fn everything_with_a_shared_session() {
 
     // Start a new session with the server.
     let service = assert_ok!(finger_guard_api::connect_finger_guard());
-    let session_response = assert_ok!(service.newSession(client_nonce.as_slice()));
+    let session_response = assert_ok!(service.createClientSession(client_nonce.as_slice()));
+    let session = session_response.clientSession.unwrap();
     let sk = assert_ok!(crypto::compute_hmac!(
         &pk,
         &TestBlob(&client_nonce),
@@ -103,9 +104,6 @@ fn everything_with_a_shared_session() {
 
     // Convert the HMAC into a key.
     let sk = crypto::Key::from(sk);
-
-    // Ensure newSession only allows one successful invocation per boot.
-    assert!(service.newSession(vec![0u8; 32].as_slice()).is_err());
 
     let sensor_id = 1_i32;
     let user_id = 1_i32;
@@ -123,7 +121,7 @@ fn everything_with_a_shared_session() {
     );
     let hat = assert_ok!(hat.sign(&auth_token_key));
     let nonce = rng::generate_random_vec::<32>();
-    let session_resp = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
+    let session_resp = assert_ok!(session.prepareEnrollSession(&sup, &hat, &nonce));
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
         &TestBlob(&nonce),
@@ -135,7 +133,7 @@ fn everything_with_a_shared_session() {
     let old_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
     let nonce = rng::generate_random_vec::<32>();
     let enrollment_result = EnrollmentResult { enrolled: true };
-    let finish_resp = assert_ok!(service.finishEnrollSession(&sup, &enrollment_result, &nonce));
+    let finish_resp = assert_ok!(session.finishEnrollSession(&sup, &enrollment_result, &nonce));
     // Ensure the authenticator id updates after enrollment.
     let new_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
     assert_ne!(new_auth_id, old_auth_id);
@@ -157,15 +155,15 @@ fn everything_with_a_shared_session() {
     );
     let hat = assert_ok!(hat.sign(&auth_token_key));
     let nonce = rng::generate_random_vec::<32>();
-    let _ = assert_ok!(service.prepareEnrollSession(&sup, &hat, &nonce));
+    let _ = assert_ok!(session.prepareEnrollSession(&sup, &hat, &nonce));
     let cancel_result = EnrollmentResult { enrolled: false };
-    let _ = assert_ok!(service.finishEnrollSession(&sup, &cancel_result, &nonce));
+    let _ = assert_ok!(session.finishEnrollSession(&sup, &cancel_result, &nonce));
     // ---- End Enrollment Test ----
 
     // ---- Start Authentication Test ----
     let challenge = 0xc4a11e49e_i64;
     let nonce = rng::generate_random_vec::<32>();
-    let session_resp = assert_ok!(service.prepareAuthSession(&sup, challenge, &nonce));
+    let session_resp = assert_ok!(session.prepareAuthSession(&sup, challenge, &nonce));
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
         &TestBlob(&nonce),
@@ -181,7 +179,7 @@ fn everything_with_a_shared_session() {
         &TestBlob(b"fpmcuauth")
     ));
     let auth_result = AuthenticationResult::from(hmac);
-    let valid_hat = assert_ok!(service.finishAuthSession(&sup, &auth_result));
+    let valid_hat = assert_ok!(session.finishAuthSession(&sup, &auth_result));
     assert_eq!(valid_hat.challenge, challenge);
     assert_eq!(valid_hat.userId, secure_user_id_int);
     assert_eq!(valid_hat.authenticatorId, new_auth_id);
