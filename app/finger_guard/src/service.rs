@@ -110,7 +110,7 @@ struct ServiceState<T> {
     sensor_session: Mutex<SensorSession>,
     auth_token_key: OnceCell<crypto::Key>,
     enrollment_challenges: Mutex<BTreeMap<AuthTokenChallenge, Instant>>,
-    used_reset_challenges: Mutex<BTreeMap<AuthTokenChallenge, Instant>>,
+    banned_reset_challenges: Mutex<BTreeMap<AuthTokenChallenge, Instant>>,
     auth_rate_limiters: Mutex<BTreeMap<SensorStateIndex, AuthRateLimiter>>,
     trusty: T,
 }
@@ -147,24 +147,6 @@ impl<T: TrustyEnvironment> ServiceState<T> {
             lockout::DEFAULT_AUTH_TIMEOUT_WINDOW,
             lockout::DEFAULT_DELAY_POLICY.to_vec(),
         )
-    }
-
-    fn revoke_challenge(
-        &self,
-        sensor_user_pair: &SensorUserPair,
-        challenge: i64,
-    ) -> ServiceResult<i64> {
-        let mut enrollment_challenges = lock_state!(self, enrollment_challenges);
-        let ssi = SensorStateIndex::from(sensor_user_pair);
-        let ec = AuthTokenChallenge { ssi, challenge };
-        let now = self.trusty.clock().now()?;
-        enrollment_challenges.remove(&ec).map_or(Ok(AuthTokenChallenge::EMPTY), |valid_until| {
-            if now < valid_until {
-                Ok(ec.challenge())
-            } else {
-                Ok(AuthTokenChallenge::EMPTY)
-            }
-        })
     }
 }
 
@@ -382,7 +364,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
                 sensor_session: Default::default(),
                 auth_token_key: Default::default(),
                 enrollment_challenges: Default::default(),
-                used_reset_challenges: Default::default(),
+                banned_reset_challenges: Default::default(),
                 auth_rate_limiters: Default::default(),
                 trusty,
             }),
@@ -449,7 +431,17 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         sensor_user_pair: &SensorUserPair,
         challenge: i64,
     ) -> ServiceResult<i64> {
-        self.state.revoke_challenge(sensor_user_pair, challenge)
+        let mut enrollment_challenges = lock_state!(self.state, enrollment_challenges);
+        let ssi = SensorStateIndex::from(sensor_user_pair);
+        let ec = AuthTokenChallenge { ssi, challenge };
+        let now = self.state.trusty.clock().now()?;
+        enrollment_challenges.remove(&ec).map_or(Ok(AuthTokenChallenge::EMPTY), |valid_until| {
+            if now < valid_until {
+                Ok(ec.challenge())
+            } else {
+                Ok(AuthTokenChallenge::EMPTY)
+            }
+        })
     }
 
     fn prepare_enroll_session(
@@ -564,28 +556,29 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     ) -> ServiceResult<()> {
         // Check |hat| is recently minted, at most one minutes old.
         static SHELF_LIFE: Duration = Duration::from_secs(60);
-        let (mut used_reset_challenges, mut auth_rate_limiters) =
-            lock_state!(self.state, used_reset_challenges, auth_rate_limiters);
+        let (mut banned_reset_challenges, mut auth_rate_limiters) =
+            lock_state!(self.state, banned_reset_challenges, auth_rate_limiters);
 
         let now = self.state.trusty.clock().now()?;
         let hat_minted_at = Instant::from(hat);
         if now > hat_minted_at + SHELF_LIFE {
             return Err(ServiceError::InvalidArg("Stale hardware auth token"));
         }
-        // Check |hat| contains a unique challenge. Reject any retried HAT
-        // before HMAC computation.
+        // Check |hat| contains a unique challenge, while allowing valid |hat|s to be reused.
+        // Reject any retried invalid HAT before HMAC computation.
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
         let reset_challenge =
             AuthTokenChallenge { ssi: sensor_state_index, challenge: hat.challenge };
-        used_reset_challenges.retain(|_, minted_at| now <= *minted_at + SHELF_LIFE);
-        if used_reset_challenges.contains_key(&reset_challenge) {
+        banned_reset_challenges.retain(|_, minted_at| now <= *minted_at + SHELF_LIFE);
+        if banned_reset_challenges.contains_key(&reset_challenge) {
             return Err(ServiceError::InvalidArg("Reused hardware auth token challenge"));
         }
-        used_reset_challenges.insert(reset_challenge, hat_minted_at);
         // Validate |hat|.
         let auth_token_key = self.state.get_auth_token_key()?;
         let mac = crypto::compute_hmac!(&auth_token_key, hat)?;
         if mac != hat.mac.as_slice() {
+            // Only record challenges from invalid hats.
+            banned_reset_challenges.insert(reset_challenge, hat_minted_at);
             return Err(ServiceError::BadMac("hardware auth token"));
         }
         // Decide the reset behavior based on the |hat|'s authenticator type:
@@ -726,7 +719,7 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
         hat: &HardwareAuthToken,
     ) -> binder::Result<()> {
         service_result_to_binder_result(
-            "resetLockoutStatus",
+            "resetLockout",
             Self::reset_lockout(self, sensor_user_pair, hat),
         )
     }
@@ -1386,7 +1379,7 @@ mod test {
     }
 
     #[test]
-    fn test_reset_timeout_rejects_reused_hat() {
+    fn test_reset_timeout_allows_valid_hat_reuse() {
         // Setup: reset the lockout status with a password HAT so a rate limiter is initialized.
         let (_, service, auth_token_key, _) = service_setup();
         let sup = SensorUserPair { sensorId: 1, userId: 1 };
@@ -1401,7 +1394,26 @@ mod test {
         assert!(service.reset_lockout(&sup, &hat).is_ok());
         assert!(matches!(service.get_lockout_status(&sup).unwrap(), LockoutStatus::Available(_)));
 
-        // Test: expect failure to reset again with the same HAT.
+        // Test: expect ok to reset again with the same HAT.
+        assert!(service.reset_lockout(&sup, &hat).is_ok());
+    }
+
+    #[test]
+    fn test_reset_timeout_rejects_invalid_hat_challenge_reuse() {
+        let (_, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::PASSWORD,
+            Instant::from_nanos(0),
+        );
+        let fake_key = crypto::Key::read_from_bytes(&[0; 32]).unwrap();
+        let fake_hat = hat.sign(&fake_key).unwrap();
+        assert!(service.reset_lockout(&sup, &fake_hat).is_err());
+
+        let hat = hat.sign(&auth_token_key).unwrap();
         assert!(service.reset_lockout(&sup, &hat).is_err());
     }
 }
