@@ -185,24 +185,28 @@ impl<T: TrustyEnvironment> ClientSession<T> {
         hat: &HardwareAuthToken,
         nonce: &[u8],
     ) -> ServiceResult<PrepareEnrollSessionResponse> {
-        let mut sensor_session = lock_state!(self.state, sensor_session);
+        let (mut sensor_session, mut enrollment_challenges) =
+            lock_state!(self.state, sensor_session, enrollment_challenges);
         if !matches!(*sensor_session, SensorSession::Idle) {
             return Err(ServiceError::StateAlreadyExists("ongoing sensor session"));
         }
-
-        // revoke_challenge returns the given challenge when it is valid.
-        let challenge = self.state.revoke_challenge(sensor_user_pair, hat.challenge)?;
-        if challenge == AuthTokenChallenge::EMPTY || challenge != hat.challenge {
+        // Check the HAT's challenge is still valid.
+        let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
+        let ec = AuthTokenChallenge { ssi: sensor_state_index, challenge: hat.challenge };
+        let now = self.state.trusty.clock().now()?;
+        enrollment_challenges.retain(|_, valid_until| now <= *valid_until);
+        if !enrollment_challenges.contains_key(&ec) {
             return Err(ServiceError::StateUnavailable("enrollment challenge"));
         }
         // Validate |hat|.
         let auth_token_key = self.state.get_auth_token_key()?;
         let mac = crypto::compute_hmac!(&auth_token_key, hat)?;
         if mac != hat.mac.as_slice() {
+            // revoke the challenge of invalid |hat| so there is no retry for mac enumeration.
+            let _ = enrollment_challenges.remove(&ec);
             return Err(ServiceError::BadMac("hardware auth token"));
         }
         // Save the secure user id from the HAT.
-        let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
         let sid_file = sensor_state_index.secure_user_id_file_name();
         let secure_user_id = SecureUserId::from(hat.userId);
         self.state.trusty.save_user_id(&secure_user_id, &sid_file)?;
@@ -873,6 +877,65 @@ mod test {
         )
         .unwrap();
         assert!(hmac == session_resp.mac.as_slice());
+    }
+
+    #[test]
+    fn test_prepare_enrollment_rejects_bad_challange() {
+        let (_, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            0, // Bad challange value
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        assert!(service.prepare_enroll_session(&sup, &hat, &nonce).is_err());
+    }
+
+    #[test]
+    fn test_prepare_enrollment_invalidate_challenge_in_invalid_hat() {
+        let (_, service, _, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let challenge = service.generate_challenge(&sup).unwrap();
+        assert_ne!(challenge, 0_i64);
+        let hat = UnsignedHat::new(
+            challenge,
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let fake_key = crypto::Key::read_from_bytes(&[0; 32]).unwrap();
+        let fake_hat = hat.sign(&fake_key).unwrap();
+        let nonce = rng::generate_random_vec::<32>();
+        assert!(service.prepare_enroll_session(&sup, &fake_hat, &nonce).is_err());
+        // Verify the challange is invalidated.
+        assert_eq!(service.revoke_challenge(&sup, challenge).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_prepare_enrollment_allow_hat_reuse() {
+        let (_, service, auth_token_key, _) = service_setup();
+        let sup = SensorUserPair { sensorId: 1, userId: 1 };
+        let hat = UnsignedHat::new(
+            service.generate_challenge(&sup).unwrap(),
+            SecureUserId::from(0x1337BEEF_i64),
+            AuthenticatorId::generate_random(),
+            AuthenticatorType::FINGERPRINT,
+            Instant::from_nanos(0),
+        );
+        let hat = hat.sign(&auth_token_key).unwrap();
+        // Repeatedly prepare and cancel enrollments with the valid |hat|.
+        for _ in 0..2 {
+            let nonce = rng::generate_random_vec::<32>();
+            let _ = service.prepare_enroll_session(&sup, &hat, &nonce).unwrap();
+            let enrollment_result = EnrollmentResult { enrolled: false };
+            let nonce = rng::generate_random_vec::<32>();
+            let _ = service.finish_enroll_session(&sup, &enrollment_result, &nonce).unwrap();
+        }
     }
 
     #[test]
