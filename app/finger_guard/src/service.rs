@@ -38,7 +38,7 @@ use once_cell::sync::OnceCell;
 use std::collections::BTreeMap;
 use std::default::Default;
 use std::mem;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -92,7 +92,7 @@ impl AuthTokenChallenge {
 }
 
 #[derive(Default)]
-/// Represents the global state of the ongoing sensor session.
+// Represents the global state of the ongoing sensor session.
 enum SensorSession {
     #[default]
     Idle,
@@ -103,8 +103,9 @@ enum SensorSession {
     },
 }
 
-/// Implements the `IFingerGuard` AIDL interface for other Trusty apps to call.
-pub struct FingerGuardService<T> {
+// Stores all of the state backing the service. This state is stored separately from the service
+// implementation itself so that it can be shared between multiple interfaces.
+struct ServiceState<T> {
     init_params: Mutex<Option<InitParams>>,
     sk: Mutex<Option<crypto::Key>>,
     sensor_session: Mutex<SensorSession>,
@@ -113,6 +114,38 @@ pub struct FingerGuardService<T> {
     used_reset_challenges: Mutex<BTreeMap<AuthTokenChallenge, Instant>>,
     auth_rate_limiters: Mutex<BTreeMap<SensorStateIndex, AuthRateLimiter>>,
     trusty: T,
+}
+
+impl<T: TrustyEnvironment> ServiceState<T> {
+    fn get_auth_token_key(&self) -> ServiceResult<&crypto::Key> {
+        self.auth_token_key.get_or_try_init(|| self.trusty.get_auth_token_key())
+    }
+}
+
+// Helper macro that will lock the specified set of fields on service state.
+//
+// If any of the lock acquisitions fail this will return an Err(ServiceError::LockAcquire). The
+// intent is for this macro to be used within an interface implementation function that returns
+// ServiceResult to produce the snippet of code used to lock any state functions.
+macro_rules! lock_state {
+    ($state:expr, $($field:ident),+) => {
+        {
+            let state = &($state);
+            $(
+            let $field = state
+                .$field
+                .try_lock()
+                .map_err(|_| ServiceError::LockAcquire(stringify!($field)))?;
+            )+
+            // Note that this evaluates to single value for 1 field, a tuple for 2+ fields.
+            ($($field),+)
+        }
+    };
+}
+
+/// Implements the `IFingerGuard` AIDL interface for other Trusty apps to call.
+pub struct FingerGuardService<T> {
+    state: Arc<ServiceState<T>>,
 }
 
 /// The initial message signed by the private key during the handshake.
@@ -127,39 +160,34 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     /// Construct a new instance of the finger guard service using the given Trusty environment.
     pub fn new(trusty: T) -> Self {
         Self {
-            init_params: Mutex::new(
-                trusty
-                    .load_init_params()
-                    .inspect_err(|e| error!("failed to load init_params: {e:?}"))
-                    .ok(),
-            ),
-            sk: Mutex::new(None),
-            sensor_session: Default::default(),
-            auth_token_key: OnceCell::new(),
-            enrollment_challenges: Default::default(),
-            used_reset_challenges: Default::default(),
-            auth_rate_limiters: Default::default(),
-            trusty,
+            state: Arc::new(ServiceState {
+                init_params: Mutex::new(
+                    trusty
+                        .load_init_params()
+                        .inspect_err(|e| error!("failed to load init_params: {e:?}"))
+                        .ok(),
+                ),
+                sk: Default::default(),
+                sensor_session: Default::default(),
+                auth_token_key: Default::default(),
+                enrollment_challenges: Default::default(),
+                used_reset_challenges: Default::default(),
+                auth_rate_limiters: Default::default(),
+                trusty,
+            }),
         }
-    }
-
-    fn get_auth_token_key(&self) -> ServiceResult<&crypto::Key> {
-        self.auth_token_key.get_or_try_init(|| self.trusty.get_auth_token_key())
     }
 
     fn create_default_arl(&self) -> ServiceResult<AuthRateLimiter> {
         AuthRateLimiter::new(
-            self.trusty.clock(),
+            self.state.trusty.clock(),
             lockout::DEFAULT_AUTH_TIMEOUT_WINDOW,
             lockout::DEFAULT_DELAY_POLICY.to_vec(),
         )
     }
 
     fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<HandshakeResponse> {
-        let mut init_params = self
-            .init_params
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "init_params", mode: "write" })?;
+        let mut init_params = lock_state!(self.state, init_params);
         if init_params.is_some() {
             return Err(ServiceError::StateAlreadyExists("init_params"));
         }
@@ -172,7 +200,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let mac = crypto::compute_hmac!(&pk, &HandshakeMessage)?;
         // save pk and tpm_seed to storage.
         let new_init_params = InitParams { pk, tpm_seed };
-        self.trusty.save_init_params(&new_init_params)?;
+        self.state.trusty.save_init_params(&new_init_params)?;
         *init_params = Some(new_init_params);
         Ok(aidl::make_handshake_response(server_public_key_bytes, &mac))
     }
@@ -180,17 +208,10 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     fn new_session(&self, client_nonce: &[u8]) -> ServiceResult<SessionResponse> {
         let client_nonce = crypto::Nonce::import(client_nonce)
             .map_err(|_| ServiceError::InvalidArg("client_nonce"))?;
-        let init_params = self
-            .init_params
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "init_params", mode: "read" })?;
+        let (init_params, mut sk) = lock_state!(self.state, init_params, sk);
         let Some(ref init_params) = *init_params else {
             return Err(ServiceError::StateUnavailable("init_params"));
         };
-        let mut sk = self
-            .sk
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "sk", mode: "write" })?;
         if sk.is_some() {
             return Err(ServiceError::StateAlreadyExists("sk"));
         }
@@ -209,12 +230,10 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     }
 
     fn generate_challenge(&self, sensor_user_pair: &SensorUserPair) -> ServiceResult<i64> {
-        let mut enrollment_challenges = self.enrollment_challenges.try_lock().map_err(|_| {
-            ServiceError::LockAcquire { name: "enrollment_challenges", mode: "write" }
-        })?;
+        let mut enrollment_challenges = lock_state!(self.state, enrollment_challenges);
         let ssi = SensorStateIndex::from(sensor_user_pair);
         let challenge = rng::generate_random_int!(i64);
-        let valid_until = self.trusty.clock().now()? + Duration::from_secs(60);
+        let valid_until = self.state.trusty.clock().now()? + Duration::from_secs(60);
         let ec = AuthTokenChallenge { ssi, challenge };
         enrollment_challenges.insert(ec, valid_until);
         Ok(challenge)
@@ -225,12 +244,10 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         sensor_user_pair: &SensorUserPair,
         challenge: i64,
     ) -> ServiceResult<i64> {
-        let mut enrollment_challenges = self.enrollment_challenges.try_lock().map_err(|_| {
-            ServiceError::LockAcquire { name: "enrollment_challenges", mode: "write" }
-        })?;
+        let mut enrollment_challenges = lock_state!(self.state, enrollment_challenges);
         let ssi = SensorStateIndex::from(sensor_user_pair);
         let ec = AuthTokenChallenge { ssi, challenge };
-        let now = self.trusty.clock().now()?;
+        let now = self.state.trusty.clock().now()?;
         enrollment_challenges.remove(&ec).map_or(Ok(AuthTokenChallenge::EMPTY), |valid_until| {
             if now < valid_until {
                 Ok(ec.challenge())
@@ -246,17 +263,10 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         hat: &HardwareAuthToken,
         nonce: &[u8],
     ) -> ServiceResult<PrepareEnrollSessionResponse> {
-        let sk = self
-            .sk
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "sk", mode: "read" })?;
+        let (sk, mut sensor_session) = lock_state!(self.state, sk, sensor_session);
         let Some(ref sk) = *sk else {
             return Err(ServiceError::StateUnavailable("sk"));
         };
-        let mut sensor_session = self
-            .sensor_session
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "sensor_session", mode: "write" })?;
         if !matches!(*sensor_session, SensorSession::Idle) {
             return Err(ServiceError::StateAlreadyExists("ongoing sensor session"));
         }
@@ -267,7 +277,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             return Err(ServiceError::StateUnavailable("enrollment challenge"));
         }
         // Validate |hat|.
-        let auth_token_key = self.get_auth_token_key()?;
+        let auth_token_key = self.state.get_auth_token_key()?;
         let mac = crypto::compute_hmac!(&auth_token_key, hat)?;
         if mac != hat.mac.as_slice() {
             return Err(ServiceError::BadMac("hardware auth token"));
@@ -276,7 +286,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
         let sid_file = sensor_state_index.secure_user_id_file_name();
         let secure_user_id = SecureUserId::from(hat.userId);
-        self.trusty.save_user_id(&secure_user_id, &sid_file)?;
+        self.state.trusty.save_user_id(&secure_user_id, &sid_file)?;
         // Start a new enroll session.
         let nonce = crypto::Nonce::import(nonce)?;
         let hmac = crypto::sensor_session_message_hmac(
@@ -297,17 +307,11 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         result: &EnrollmentResult,
         nonce: &[u8],
     ) -> ServiceResult<FinishEnrollSessionResponse> {
-        let sk = self
-            .sk
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "sk", mode: "read" })?;
+        let (sk, mut sensor_session, mut auth_rate_limiters) =
+            lock_state!(self.state, sk, sensor_session, auth_rate_limiters);
         let Some(ref sk) = *sk else {
             return Err(ServiceError::StateUnavailable("sk"));
         };
-        let mut sensor_session = self
-            .sensor_session
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "sensor_session", mode: "write" })?;
         if !matches!(*sensor_session, SensorSession::Enroll) {
             return Err(ServiceError::StateUnavailable("ongoing enroll session"));
         };
@@ -328,11 +332,8 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             // Generate and save a new AuthenticatorId.
             let authenticator_id = AuthenticatorId::generate_random();
             let file_name = sensor_state_index.authenticator_id_file_name();
-            self.trusty.save_authenticator_id(&authenticator_id, &file_name)?;
+            self.state.trusty.save_authenticator_id(&authenticator_id, &file_name)?;
             // Create a new auth limiter and keep it in the memory.
-            let mut auth_rate_limiters = self.auth_rate_limiters.try_lock().map_err(|_| {
-                ServiceError::LockAcquire { name: "auth_rate_limiters", mode: "write" }
-            })?;
             let arl = self.create_default_arl()?;
             auth_rate_limiters.insert(sensor_state_index, arl);
             let response = aidl::make_finish_enroll_session_response(&hmac);
@@ -348,26 +349,16 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         challenge: i64,
         nonce: &[u8],
     ) -> ServiceResult<PrepareAuthSessionResponse> {
-        let sk = self
-            .sk
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "sk", mode: "read" })?;
+        let (sk, mut sensor_session, mut auth_rate_limiters) =
+            lock_state!(self.state, sk, sensor_session, auth_rate_limiters);
         let Some(ref sk) = *sk else {
             return Err(ServiceError::StateUnavailable("sk"));
         };
-        let mut sensor_session = self
-            .sensor_session
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "sensor_session", mode: "write" })?;
         if !matches!(*sensor_session, SensorSession::Idle) {
             return Err(ServiceError::StateAlreadyExists("ongoing sensor session"));
         }
         // Record the attempt with the auth rate limiter then start a new auth session.
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
-        let mut auth_rate_limiters = self
-            .auth_rate_limiters
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "auth_rate_limiters", mode: "write" })?;
         let arl = auth_rate_limiters
             .get_mut(&sensor_state_index)
             .ok_or(ServiceError::StateUnavailable("auth rate limiter"))?;
@@ -393,17 +384,11 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         sensor_user_pair: &SensorUserPair,
         result: &AuthenticationResult,
     ) -> ServiceResult<HardwareAuthToken> {
-        let sk = self
-            .sk
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "sk", mode: "read" })?;
+        let (sk, mut sensor_session, mut auth_rate_limiters) =
+            lock_state!(self.state, sk, sensor_session, auth_rate_limiters);
         let Some(ref sk) = *sk else {
             return Err(ServiceError::StateUnavailable("sk"));
         };
-        let mut sensor_session = self
-            .sensor_session
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "sensor_session", mode: "write" })?;
         if !matches!(*sensor_session, SensorSession::Auth { .. }) {
             return Err(ServiceError::StateUnavailable("no ongoing auth session"));
         }
@@ -429,26 +414,23 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
                 return Err(ServiceError::BadMac("authentication result"));
             }
             // Get the auth rate limiter and clear the counter.
-            let mut auth_rate_limiters = self.auth_rate_limiters.try_lock().map_err(|_| {
-                ServiceError::LockAcquire { name: "auth_rate_limiters", mode: "write" }
-            })?;
             let arl = auth_rate_limiters
                 .get_mut(&sensor_state_index)
                 .ok_or(ServiceError::StateUnavailable("auth rate limiter"))?;
             arl.reset_attempt_counter();
 
             // Produce a valid HAT signed by the auth token key.
-            let auth_token_key = self.get_auth_token_key()?;
+            let auth_token_key = self.state.get_auth_token_key()?;
             let aid_file_name = sensor_state_index.authenticator_id_file_name();
             let sid_file_name = sensor_state_index.secure_user_id_file_name();
-            let authenticator_id = self.trusty.load_authenticator_id(&aid_file_name)?;
-            let secure_user_id = self.trusty.load_user_id(&sid_file_name)?;
+            let authenticator_id = self.state.trusty.load_authenticator_id(&aid_file_name)?;
+            let secure_user_id = self.state.trusty.load_user_id(&sid_file_name)?;
             let hat = UnsignedHat::new(
                 challenge,
                 secure_user_id,
                 authenticator_id,
                 AuthenticatorType::FINGERPRINT,
-                self.trusty.clock().now()?,
+                self.state.trusty.clock().now()?,
             );
             let hat = hat.sign(auth_token_key)?;
             Ok(hat)
@@ -466,6 +448,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         // Treat read failure as there is no authenticator id and use the default
         // value of 0.
         let authenticator_id = self
+            .state
             .trusty
             .load_authenticator_id(&file_name)
             .inspect_err(|e| error!("failed to read authenticator id: {e:?}"))
@@ -480,7 +463,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let authenticator_id = AuthenticatorId::generate_random();
         let index = SensorStateIndex::from(sensor_user_pair);
         let file_name = index.authenticator_id_file_name();
-        self.trusty.save_authenticator_id(&authenticator_id, &file_name)?;
+        self.state.trusty.save_authenticator_id(&authenticator_id, &file_name)?;
         Ok(authenticator_id)
     }
 
@@ -489,11 +472,9 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         sensor_user_pair: &SensorUserPair,
     ) -> ServiceResult<LockoutStatus> {
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
-        // Get the auth rate limiter and clear the counter.
-        let auth_rate_limiters = self
-            .auth_rate_limiters
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "auth_rate_limiters", mode: "read" })?;
+        let auth_rate_limiters = lock_state!(self.state, auth_rate_limiters);
+
+        // Clear the auth rate limiter counter.
         let Some(arl) = auth_rate_limiters.get(&sensor_state_index) else {
             // When the rate limiter is not found, either there is no previous enrollment,
             // or the TA is freshly rebooted and requiring a knowledge factor authentiction.
@@ -519,7 +500,10 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     ) -> ServiceResult<()> {
         // Check |hat| is recently minted, at most one minutes old.
         static SHELF_LIFE: Duration = Duration::from_secs(60);
-        let now = self.trusty.clock().now()?;
+        let (mut used_reset_challenges, mut auth_rate_limiters) =
+            lock_state!(self.state, used_reset_challenges, auth_rate_limiters);
+
+        let now = self.state.trusty.clock().now()?;
         let hat_minted_at = Instant::from(hat);
         if now > hat_minted_at + SHELF_LIFE {
             return Err(ServiceError::InvalidArg("Stale hardware auth token"));
@@ -529,16 +513,13 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let sensor_state_index = SensorStateIndex::from(sensor_user_pair);
         let reset_challenge =
             AuthTokenChallenge { ssi: sensor_state_index, challenge: hat.challenge };
-        let mut used_reset_challenges = self.used_reset_challenges.try_lock().map_err(|_| {
-            ServiceError::LockAcquire { name: "used_reset_challenges", mode: "write" }
-        })?;
         used_reset_challenges.retain(|_, minted_at| now <= *minted_at + SHELF_LIFE);
         if used_reset_challenges.contains_key(&reset_challenge) {
             return Err(ServiceError::InvalidArg("Reused hardware auth token challenge"));
         }
         used_reset_challenges.insert(reset_challenge, hat_minted_at);
         // Validate |hat|.
-        let auth_token_key = self.get_auth_token_key()?;
+        let auth_token_key = self.state.get_auth_token_key()?;
         let mac = crypto::compute_hmac!(&auth_token_key, hat)?;
         if mac != hat.mac.as_slice() {
             return Err(ServiceError::BadMac("hardware auth token"));
@@ -551,10 +532,6 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         //     2. Fingerprint (or another biometrics authenticator type value in the future).
         //        Only reset the attempt counter. --> an existing rate limiter is required, and
         //        only reset its attempt counter.
-        let mut auth_rate_limiters = self
-            .auth_rate_limiters
-            .try_lock()
-            .map_err(|_| ServiceError::LockAcquire { name: "auth_rate_limiters", mode: "write" })?;
         let auth_type = AuthenticatorType::from(hat);
         match auth_type {
             AuthenticatorType::PASSWORD => {
@@ -765,7 +742,7 @@ mod test {
     fn test_no_auth_token_key() {
         let trusty = SimulatedTrusty::new();
         let service = FingerGuardService::new(trusty);
-        assert!(service.get_auth_token_key().is_err());
+        assert!(service.state.get_auth_token_key().is_err());
     }
 
     #[test]
@@ -774,7 +751,7 @@ mod test {
         let trusty = SimulatedTrusty::new();
         trusty.set_auth_token_key(&crypto::Key::read_from_bytes(&key_bytes).unwrap());
         let service = FingerGuardService::new(trusty);
-        let out_key = service.get_auth_token_key().unwrap();
+        let out_key = service.state.get_auth_token_key().unwrap();
         assert_eq!(out_key.as_bytes(), key_bytes);
     }
 

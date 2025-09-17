@@ -49,8 +49,8 @@ pub enum ServiceError {
     // Errors directly reported by the service implementation itself.
     #[error("{name} buffer size mismatch, expected {expected}, got {actual}")]
     BufferSizeMismatch { name: &'static str, expected: usize, actual: usize },
-    #[error("failed to acquire {name} {mode} lock")]
-    LockAcquire { name: &'static str, mode: &'static str },
+    #[error("failed to acquire {0} lock")]
+    LockAcquire(&'static str),
     #[error("invalid argument {0}")]
     InvalidArg(&'static str),
     #[error("internal state {0} already exists")]
