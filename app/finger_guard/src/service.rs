@@ -106,7 +106,7 @@ enum SensorSession {
 // Stores all of the state backing the service. This state is stored separately from the service
 // implementation itself so that it can be shared between multiple interfaces.
 struct ServiceState<T> {
-    init_params: Mutex<Option<InitParams>>,
+    init_params: OnceCell<InitParams>,
     sensor_session: Mutex<SensorSession>,
     auth_token_key: OnceCell<crypto::Key>,
     enrollment_challenges: Mutex<BTreeMap<AuthTokenChallenge, Instant>>,
@@ -355,12 +355,13 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     pub fn new(trusty: T) -> Self {
         Self {
             state: Arc::new(ServiceState {
-                init_params: Mutex::new(
-                    trusty
-                        .load_init_params()
-                        .inspect_err(|e| error!("failed to load init_params: {e:?}"))
-                        .ok(),
-                ),
+                init_params: match trusty.load_init_params() {
+                    Ok(loaded_params) => OnceCell::with_value(loaded_params),
+                    Err(e) => {
+                        error!("failed to load init_params: {e:?}");
+                        OnceCell::new()
+                    }
+                },
                 sensor_session: Default::default(),
                 auth_token_key: Default::default(),
                 enrollment_challenges: Default::default(),
@@ -373,29 +374,31 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     }
 
     fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<HandshakeResponse> {
-        let mut init_params = lock_state!(self.state, init_params);
-        if init_params.is_some() {
-            return Err(ServiceError::StateAlreadyExists("init_params"));
-        }
-        let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
-        let server_public_key_bytes = crypto::ec_public_key_serialization(&server_private_key)
-            .wrap_openssl_err("failed to serialize server public key")?;
-        let pk = crypto::perform_ecdh(server_private_key, client_public_key_bytes)?;
-        // generate random tpm_seed.
-        let tpm_seed = crypto::Secret::generate();
-        let mac = crypto::compute_hmac!(&pk, &HandshakeMessage)?;
-        // save pk and tpm_seed to storage.
-        let new_init_params = InitParams { pk, tpm_seed };
-        self.state.trusty.save_init_params(&new_init_params)?;
-        *init_params = Some(new_init_params);
-        Ok(aidl::make_handshake_response(server_public_key_bytes, &mac))
+        // Fetch the existing init params, or generate a fresh set of them if none exist. The
+        // response will only be populated if the get_or_try_init does a new handshake.
+        let mut response = None;
+        self.state.init_params.get_or_try_init(|| {
+            // Generate a fresh public+private key pair.
+            let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
+            let server_public_key_bytes = crypto::ec_public_key_serialization(&server_private_key)
+                .wrap_openssl_err("failed to serialize server public key")?;
+            // Use our new server key to do a DH exchange with the client public key.
+            let pk = crypto::perform_ecdh(server_private_key, client_public_key_bytes)?;
+            let mac = crypto::compute_hmac!(&pk, &HandshakeMessage)?;
+            // Save the newly generated PK along with a new TPM seed out to storage.
+            let init_params = InitParams { pk, tpm_seed: crypto::Secret::generate() };
+            self.state.trusty.save_init_params(&init_params)?;
+            // If we get here we have saved a new handshake, create the response to return.
+            response = Some(aidl::make_handshake_response(server_public_key_bytes, &mac));
+            Ok(init_params)
+        })?;
+        response.ok_or(ServiceError::StateAlreadyExists("init_params"))
     }
 
     fn new_session(&self, client_nonce: &[u8]) -> ServiceResult<SessionResponse> {
         let client_nonce = crypto::Nonce::import(client_nonce)
             .map_err(|_| ServiceError::InvalidArg("client_nonce"))?;
-        let init_params = lock_state!(self.state, init_params);
-        let Some(ref init_params) = *init_params else {
+        let Some(init_params) = self.state.init_params.get() else {
             return Err(ServiceError::StateUnavailable("init_params"));
         };
         let mut client_session = lock_state!(self, client_session);
