@@ -84,7 +84,7 @@ impl<M: WeaverMessageParser, W: Weaver> Service for WeaverHalTA<M, W> {
         peer: &Uuid,
     ) -> tipc::Result<ConnectResult<Self::Connection>> {
         info!("Accepted weaver hal connection from uuid {peer:?}.");
-        Ok(ConnectResult::Accept(Context { _uuid: peer.clone() }))
+        Ok(ConnectResult::Accept(Context { _uuid: *peer }))
     }
 
     fn on_message(
