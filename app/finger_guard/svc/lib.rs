@@ -27,11 +27,9 @@ use crate::trusty::Trusty;
 use binder::BinderFeatures;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::IFingerGuard::BnFingerGuard;
 use rpcbinder::RpcServer;
+use std::ffi::CString;
 use std::rc::Rc;
 use tipc::{Manager, PortCfg};
-
-// The port on FingerGuard TA which the Fingerprint sensor HAL connects to.
-const APP_SERVICE_PORT: &str = "com.android.desktop.trusty.fingerguard";
 
 const PORT_COUNT: usize = 1;
 const CONNECTION_COUNT: usize = 1;
@@ -53,8 +51,7 @@ pub fn init_and_start_loop() -> tipc::Result<()> {
     // Allow secure (within trusty) and non-secure (outside trusty) connections.
     // Originally only intended for non-secure connections, now allowed secure connection as well
     // to facilitate the unit tests within the trusty environment.
-    let app_cfg = PortCfg::new(APP_SERVICE_PORT)
-        .expect("Could not create port config")
+    let app_cfg = PortCfg::new_raw(CString::from(finger_guard_api::PORT_CSTR))
         .allow_ta_connect()
         .allow_ns_connect();
     dispatcher
