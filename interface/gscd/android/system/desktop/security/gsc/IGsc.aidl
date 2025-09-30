@@ -16,13 +16,15 @@
 
 package android.system.desktop.security.gsc;
 
+@VintfStability
 interface IGsc {
     /**
-     * Transmits a GSC command.
+     * Transmits a GSC command. The data size must be less than or equal to 4KB,
+     * which the GSC firmware's limits.
      *
-     * @param data GSC command to be sent
-     * @return response to the command. In case of error in communicating with
-     *                  the GSC, an empty vector is returned.
+     * @param A serialized TPM 2.0 command to be sent to GSC.
+     * @return a serialized TPM 2.0 response to the command. In case of error
+     *         in communicating with the GSC, an empty vector is returned.
      */
     byte[] transmit(in byte[] data);
 }
