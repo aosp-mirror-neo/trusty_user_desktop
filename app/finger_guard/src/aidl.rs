@@ -57,12 +57,15 @@ pub fn make_client_session_response(
     wrapped_tpm_seed: Vec<u8>,
     iv: &crypto::Iv,
     tag: &crypto::Aes256Tag,
-    client_session: Option<binder::Strong<dyn IClientSession>>,
+    client_session: Option<impl IClientSession>,
 ) -> ClientSessionResponse {
-    let mut response = ClientSessionResponse::default();
+    let mut response = ClientSessionResponse {
+        wrappedTpmSeed: wrapped_tpm_seed,
+        clientSession: client_session
+            .map(|s| binder::Strong::new(Box::new(s) as Box<dyn IClientSession>)),
+        ..Default::default()
+    };
     nonce.export(&mut response);
-    response.wrappedTpmSeed = wrapped_tpm_seed;
-    response.clientSession = client_session;
     iv.export(&mut response);
     tag.export(&mut response);
     response
@@ -102,6 +105,7 @@ mod test {
     use crate::crypto;
     use std::array;
     use zerocopy::FromBytes;
+    use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::IClientSession::BpClientSession;
 
     // In general all of these tests deliberately make their input data non-zero. Otherwise it's
     // difficult to distinguish between fields which were correctly populated and ones which were
@@ -126,8 +130,13 @@ mod test {
         let iv = crypto::Iv::read_from_bytes(&iv_bytes).unwrap();
         let tag_bytes: [u8; 16] = array::from_fn(|x| x as u8 * 4);
         let tag = crypto::Aes256Tag::read_from_bytes(&tag_bytes).unwrap();
-        let response =
-            make_client_session_response(&nonce, wrapped_tpm_seed.clone(), &iv, &tag, None);
+        let response = make_client_session_response(
+            &nonce,
+            wrapped_tpm_seed.clone(),
+            &iv,
+            &tag,
+            None::<BpClientSession>,
+        );
         assert_eq!(response.nonce, nonce_bytes);
         assert_eq!(response.wrappedTpmSeed, wrapped_tpm_seed);
         assert_eq!(response.iv, iv_bytes);

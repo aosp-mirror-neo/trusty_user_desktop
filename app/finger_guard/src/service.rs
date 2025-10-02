@@ -463,7 +463,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             wrapped_tpm_seed,
             &iv,
             &tag,
-            Some(binder::Strong::new(Box::new(client_session))),
+            Some(client_session),
         );
         Ok(session_response)
     }
