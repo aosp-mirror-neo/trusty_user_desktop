@@ -598,6 +598,8 @@ static struct hwkey_opaque_handle_data hwaes_unittest_opaque_handle_data = {
 static const uuid_t gatekeeper_uuid = GATEKEEPER_APP_UUID;
 static const uuid_t hwbcc_uuid = SAMPLE_HWBCC_APP_UUID;
 static const uuid_t hwbcc_unittest_uuid = HWBCC_UNITTEST_APP_UUID;
+/* TODO(410110761): Remove once StrongBox TA talks to the GSC */
+static const uuid_t km_strongbox_uuid = KM_STRONGBOX_APP_UUID;
 
 /* Clients that are allowed to connect to this service */
 static const uuid_t* allowed_clients[] = {
@@ -629,6 +631,9 @@ static const uuid_t* allowed_clients[] = {
         &hwbcc_uuid,
         /* Needs to derive keys */
         &hwbcc_unittest_uuid,
+
+        /* TODO(410110761): Remove once StrongBox TA talks to the GSC */
+        &km_strongbox_uuid,
 };
 
 /*
