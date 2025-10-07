@@ -16,7 +16,7 @@
 
 //! Common functions and data structures dealing with HardwareAuthToken
 
-use crate::aidl::ExportToAidl;
+use crate::aidl::{export_field, impl_export, ExportAidlField};
 use crate::crypto::{self, HmacSignable};
 use crate::error::ServiceResult;
 use crate::identifiers::{AuthenticatorId, SecureUserId};
@@ -49,23 +49,23 @@ impl UnsignedHat {
     }
 
     /// Attempt to convert the unsigned token into a signed one, using the given key.
-    pub fn sign(&self, key: &crypto::Key) -> ServiceResult<HardwareAuthToken> {
-        let mut hat = HardwareAuthToken {
+    pub fn sign(&self, key: &crypto::Key) -> ServiceResult<SignedHat> {
+        let mut hat = SignedHat {
             version: self.version,
             challenge: self.challenge,
-            ..Default::default()
+            userId: self.user_id.export(),
+            authenticatorId: self.authenticator_id.export(),
+            authenticatorType: self.authenticator_type.export(),
+            timestamp: self.timestamp.export(),
+            mac: Default::default(),
         };
-        self.user_id.export(&mut hat);
-        self.authenticator_id.export(&mut hat);
-        self.authenticator_type.export(&mut hat);
-        self.timestamp.export(&mut hat);
-        crypto::compute_hmac!(key, &hat)?.export(&mut hat);
+        hat.mac = export_field!(&crypto::compute_hmac!(key, &hat)? => SignedHat.mac);
         Ok(hat)
     }
 }
 
 /// The standard default empty hardware token.
-pub const EMPTY_HAT: HardwareAuthToken = HardwareAuthToken {
+pub const EMPTY_HAT: SignedHat = SignedHat {
     version: 0,
     challenge: 0,
     userId: 0,
@@ -92,11 +92,9 @@ impl AuthenticatorType {
     pub const FINGERPRINT: Self = Self(2);
 }
 
-impl ExportToAidl<SignedHat> for AuthenticatorType {
-    fn export(&self, out: &mut SignedHat) {
-        out.authenticatorType = self.0 as i32;
-    }
-}
+impl_export!(AuthenticatorType(self) => SignedHat.authenticatorType as i32 {
+    self.0 as i32
+});
 
 // This is implemented as the inverse of ExportToAidl. It is not a typical usage of From trait: it
 // is not lossless and it operates on the borrowed object.
@@ -118,7 +116,7 @@ impl From<&SignedHat> for AuthenticatorType {
 /// machine order, but authenticatorType and timestamp are in network order
 /// (big-endian). This odd construction is compatible with the hw_auth_token_t
 /// structure.
-impl HmacSignable for HardwareAuthToken {
+impl HmacSignable for SignedHat {
     fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
         add_bytes(&self.version.to_ne_bytes())?;
         add_bytes(&self.challenge.to_ne_bytes())?;

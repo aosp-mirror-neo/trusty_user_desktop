@@ -16,7 +16,7 @@
 
 //! Data structures representing time-related abstractions for finger_guard.
 
-use crate::aidl::ExportToAidl;
+use crate::aidl::impl_export;
 use crate::error::ServiceResult;
 use crate::hat::SignedHat;
 use std::ops::{Add, Sub};
@@ -40,12 +40,10 @@ impl Instant {
     }
 }
 
-impl ExportToAidl<SignedHat> for Instant {
-    fn export(&self, out: &mut SignedHat) {
-        // The exported timestamp is in milliseconds.
-        out.timestamp = self.nanos / 1000 / 1000;
-    }
-}
+impl_export!(Instant(self) => SignedHat.timestamp as i64 {
+    // The exported timestamp is in milliseconds.
+    self.nanos / 1000 / 1000
+});
 
 // This is implemented as the inverse of ExportToAidl. It is not a typical usage of From trait: it
 // is not lossless and it operates on the borrowed object.

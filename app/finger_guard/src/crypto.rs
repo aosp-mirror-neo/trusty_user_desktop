@@ -16,7 +16,7 @@
 
 //! Cryptographic operations used by the finger guard service.
 
-use crate::aidl::ExportToAidl;
+use crate::aidl::impl_export;
 use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
 use crate::identifiers::SensorStateIndex;
@@ -103,16 +103,12 @@ impl Nonce {
         })
     }
 }
-impl ExportToAidl<ClientSessionResponse> for Nonce {
-    fn export(&self, out: &mut ClientSessionResponse) {
-        out.nonce = self.bytes.to_vec();
-    }
-}
-impl ExportToAidl<PrepareAuthSessionResponse> for Nonce {
-    fn export(&self, out: &mut PrepareAuthSessionResponse) {
-        out.nonce = self.bytes;
-    }
-}
+impl_export!(Nonce(self) => ClientSessionResponse.nonce as Vec<u8> {
+    self.bytes.to_vec()
+});
+impl_export!(Nonce(self) => PrepareAuthSessionResponse.nonce as [u8; 32] {
+    self.bytes
+});
 impl HmacSignable for Nonce {
     fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
         add_bytes(&self.bytes)
@@ -127,19 +123,15 @@ impl Iv {
         Self { bytes: rng::generate_random_buffer::<{ Self::SIZE }>() }
     }
 }
-impl ExportToAidl<ClientSessionResponse> for Iv {
-    fn export(&self, out: &mut ClientSessionResponse) {
-        out.iv = self.bytes.to_vec();
-    }
-}
+impl_export!(Iv(self) => ClientSessionResponse.iv as Vec<u8> {
+    self.bytes.to_vec()
+});
 
 // Define a type for tags used in AES-256 encryption.
 blob_newtype!(Aes256Tag, 16);
-impl ExportToAidl<ClientSessionResponse> for Aes256Tag {
-    fn export(&self, out: &mut ClientSessionResponse) {
-        out.tag = self.bytes.to_vec();
-    }
-}
+impl_export!(Aes256Tag(self) => ClientSessionResponse.tag as Vec<u8> {
+    self.bytes.to_vec()
+});
 
 // Define a new type for a secret. Note that while most of the blobs (e.g. nonces, keys) are
 // secrets, those ones have additional semantic intent: nonces should only be used once, keys
@@ -302,29 +294,23 @@ impl From<Hmac> for AuthenticationResult {
         Self { authenticated: true, mac: value.bytes.to_vec() }
     }
 }
-impl ExportToAidl<SignedHat> for Hmac {
-    fn export(&self, out: &mut SignedHat) {
-        out.mac = self.bytes.to_vec();
+impl_export!(Hmac(self) => SignedHat.mac as Vec<u8> {
+    self.bytes.to_vec()
+});
+impl_export!(Hmac(self) => InitResponse.pkMac as Vec<u8> {
+    self.bytes.to_vec()
+});
+impl_export!(Hmac(self) => PrepareAuthSessionResponse.mac as Vec<u8> {
+    self.bytes.to_vec()
+});
+impl From<Hmac> for PrepareEnrollSessionResponse {
+    fn from(value: Hmac) -> Self {
+        PrepareEnrollSessionResponse { mac: value.bytes.to_vec() }
     }
 }
-impl ExportToAidl<InitResponse> for Hmac {
-    fn export(&self, out: &mut InitResponse) {
-        out.pkMac = self.bytes.to_vec();
-    }
-}
-impl ExportToAidl<PrepareAuthSessionResponse> for Hmac {
-    fn export(&self, out: &mut PrepareAuthSessionResponse) {
-        out.mac = self.bytes.to_vec();
-    }
-}
-impl ExportToAidl<PrepareEnrollSessionResponse> for Hmac {
-    fn export(&self, out: &mut PrepareEnrollSessionResponse) {
-        out.mac = self.bytes.to_vec();
-    }
-}
-impl ExportToAidl<FinishEnrollSessionResponse> for Hmac {
-    fn export(&self, out: &mut FinishEnrollSessionResponse) {
-        out.mac = self.bytes.to_vec();
+impl From<Hmac> for FinishEnrollSessionResponse {
+    fn from(value: Hmac) -> Self {
+        FinishEnrollSessionResponse { mac: value.bytes.to_vec() }
     }
 }
 

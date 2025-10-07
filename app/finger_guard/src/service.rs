@@ -201,9 +201,8 @@ impl<T: TrustyEnvironment> ClientSession<T> {
             crypto::SensorSessionType::Enroll,
             &sensor_state_index,
         )?;
-        let response = aidl::make_prepare_enroll_session_response(&hmac);
         *sensor_session = SensorSession::Enroll;
-        Ok(response)
+        Ok(PrepareEnrollSessionResponse::from(hmac))
     }
 
     fn finish_enroll_session(
@@ -238,8 +237,7 @@ impl<T: TrustyEnvironment> ClientSession<T> {
             // Create a new auth limiter and keep it in the memory.
             let arl = self.state.create_default_arl()?;
             auth_rate_limiters.insert(sensor_state_index, arl);
-            let response = aidl::make_finish_enroll_session_response(&hmac);
-            Ok(response)
+            Ok(FinishEnrollSessionResponse::from(hmac))
         } else {
             Ok(FinishEnrollSessionResponse::default())
         }
