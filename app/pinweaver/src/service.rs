@@ -146,7 +146,7 @@ pub(crate) mod binder_error {
     use binder::{ExceptionCode, Status};
     use pinweaver_api::aidl::IPinWeaver::{
         ERROR_AUTH_FAILED, ERROR_GSC, ERROR_LEAF_EXISTS, ERROR_LEAF_NOT_FOUND,
-        ERROR_LOWENT_AUTH_FAILED, ERROR_PINWEAVER,
+        ERROR_LOWENT_AUTH_FAILED, ERROR_NOT_READY, ERROR_PINWEAVER,
     };
 
     pub fn gsc() -> Status {
@@ -180,8 +180,16 @@ pub(crate) mod binder_error {
         Status::new_service_specific_error(ERROR_AUTH_FAILED, Some(c"auth failed"))
     }
 
-    pub fn from_tipc(_err: TipcError) -> Status {
-        pinweaver(c"tipc error")
+    pub fn not_ready() -> Status {
+        Status::new_service_specific_error(ERROR_NOT_READY, Some(c"not ready"))
+    }
+
+    pub fn from_tipc(err: TipcError) -> Status {
+        if matches!(err, TipcError::SystemError(trusty_sys::Error::NotReady)) {
+            not_ready()
+        } else {
+            pinweaver(c"tipc error")
+        }
     }
 
     pub fn unsupported_operation() -> Status {

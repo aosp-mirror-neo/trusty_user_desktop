@@ -21,6 +21,7 @@ use crate::WeaverTAError;
 use binder::Strong;
 use pinweaver_api::aidl::IPinWeaver::ERROR_LEAF_NOT_FOUND;
 use pinweaver_api::aidl::IPinWeaver::ERROR_LOWENT_AUTH_FAILED;
+use pinweaver_api::aidl::IPinWeaver::ERROR_NOT_READY;
 use pinweaver_api::connect_pinweaver;
 use pinweaver_api::DelayScheduleEntry;
 use pinweaver_api::IPinWeaver;
@@ -29,6 +30,8 @@ use pinweaver_api::LeafId;
 use pinweaver_api::LeafSet;
 use pinweaver_api::TryAuthResponse::HighEntropySecret;
 use pinweaver_api::TryAuthResponse::SecondsToWait;
+use std::thread;
+use std::time;
 
 pub(crate) struct PinWeaverImpl {
     pinweaver_connection: Strong<dyn IPinWeaver>,
@@ -51,6 +54,21 @@ pub(crate) fn connect_to_pinweaver() -> Result<PinWeaverImpl, WeaverTAError> {
     Ok(PinWeaverImpl { pinweaver_connection })
 }
 
+macro_rules! retry_if_not_ready {
+    ($expr:expr) => {
+        loop {
+            let pinweaver_response = $expr;
+            if let Err(status) = &pinweaver_response {
+                if status.service_specific_error() == ERROR_NOT_READY {
+                    thread::sleep(time::Duration::from_millis(50));
+                    continue;
+                }
+            }
+            break pinweaver_response;
+        }
+    };
+}
+
 impl Weaver for PinWeaverImpl {
     fn read(&self, slot_id: i32, key: &[u8]) -> Result<WeaverHalResponse, WeaverTAError> {
         let mut key_resize = Vec::with_capacity(32);
@@ -58,10 +76,10 @@ impl Weaver for PinWeaverImpl {
             key_resize.extend_from_slice(key);
             key_resize.resize(32usize, 0u8);
         }
-        let auth_response = self.pinweaver_connection.tryAuthenticate(
+        let auth_response = retry_if_not_ready!(self.pinweaver_connection.tryAuthenticate(
             &LeafId { leafSet: LeafSet::WEAVER, id: slot_id },
             if key.len() >= 32 { &key[0..32] } else { key_resize.as_slice() },
-        );
+        ));
 
         match auth_response {
             Ok(SecondsToWait(timeout)) => {
@@ -126,18 +144,15 @@ impl Weaver for PinWeaverImpl {
             reset_resize.resize(32usize, 0u8);
         }
 
-        self.pinweaver_connection
-            .insert(
-                &LeafId { leafSet: LeafSet::WEAVER, id: slot_id },
-                if key.len() >= 32 { &key[0..32] } else { key_resize.as_slice() },
-                value,
-                if value.len() >= 32 { &value[0..32] } else { reset_resize.as_slice() },
-                &delay_schedule,
-                InsertMode::REPLACE_EXISTING,
-            )
-            .map_err(|e| {
-                WeaverTAError::PinweaverError("Could not perform 'insert'".to_string(), e)
-            })?;
+        retry_if_not_ready!(self.pinweaver_connection.insert(
+            &LeafId { leafSet: LeafSet::WEAVER, id: slot_id },
+            if key.len() >= 32 { &key[0..32] } else { key_resize.as_slice() },
+            value,
+            if value.len() >= 32 { &value[0..32] } else { reset_resize.as_slice() },
+            &delay_schedule,
+            InsertMode::REPLACE_EXISTING,
+        ))
+        .map_err(|e| WeaverTAError::PinweaverError("Could not perform 'insert'".to_string(), e))?;
 
         Ok(WeaverHalResponse::WriteResponse { status: ResponseStatus::Ok })
     }
