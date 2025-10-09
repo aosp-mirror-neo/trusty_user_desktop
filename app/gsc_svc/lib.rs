@@ -15,6 +15,7 @@
 */
 
 mod boot_params_svc;
+mod keymint_provisioning;
 
 use alloc::vec::Vec;
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::BnGsc;
@@ -36,6 +37,7 @@ use trusty_sys::Error;
 const GSC_SERVICE_PORT: &str = "com.android.trusty.rust.GscAppService.V1";
 const TUNNEL_SERVICE_PORT: &str = "com.android.trusty.rust.GscTunnelService.V1";
 const BP_SERVICE_PORT: &str = "com.android.trusty.rust.BootParamsService.V1.bnd";
+const KM_PROVISIONING_SERVICE_PORT: &str = "com.android.trusty.rust.KeyMintProvisioningService.V1";
 
 /// A GscProxy implements the IGsc binder interface and forwards requests from trusty apps to the
 /// GSC over a GscTunnel.
@@ -154,17 +156,19 @@ impl GscTunnel {
 
 wrap_service!(GscService(RpcServer: UnbufferedService));
 wrap_service!(BpService(RpcServer: UnbufferedService));
+wrap_service!(KeyMintProvisioningService(RpcServer: UnbufferedService));
 
 service_dispatcher! {
     enum GscDispatcher {
         GscService,
         GscTunnel,
         BpService,
+        KeyMintProvisioningService,
     }
 }
 
-const PORT_COUNT: usize = 3;
-const CONNECTION_COUNT: usize = 8;
+const PORT_COUNT: usize = 4;
+const CONNECTION_COUNT: usize = 9;
 
 pub fn init_and_start_loop() -> Result<(), TipcError> {
     trusty_log::init();
@@ -196,6 +200,20 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
     dispatcher
         .add_service(Rc::new(BpService(bp_rpc_server)), bp_cfg)
         .expect("Could not add bp service to dispatcher");
+
+    let km_provisioning_cfg = PortCfg::new(KM_PROVISIONING_SERVICE_PORT)
+        .expect("Could not create port config")
+        .allow_ta_connect()
+        .allow_ns_connect();
+    let km_provisioning = keymint_provisioning::create_service();
+    let km_provisioning_rpc_server =
+        RpcServer::new_per_session(move |_uuid| Some(km_provisioning.as_binder()));
+    dispatcher
+        .add_service(
+            Rc::new(KeyMintProvisioningService(km_provisioning_rpc_server)),
+            km_provisioning_cfg,
+        )
+        .expect("Could not add keymint provisioning service to dispatcher");
 
     Manager::<_, _, PORT_COUNT, CONNECTION_COUNT>::new_with_dispatcher(dispatcher, [])
         .expect("Could not create service manager")

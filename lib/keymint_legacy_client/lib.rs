@@ -68,7 +68,7 @@ pub enum KeyMintClientError {
 #[cfg(target_os = "trusty")]
 impl From<tipc::TipcError> for KeyMintClientError {
     fn from(error: tipc::TipcError) -> Self {
-        KeyMintClientError::TipcHandleError(format!("{:?}", error))
+        KeyMintClientError::TipcHandleError(format!("{error:?}"))
     }
 }
 
@@ -192,7 +192,7 @@ where
         let res = self.0.transmit(&req)?;
         let cbor = &res[4..];
         let map: HashMap<String, Value> = kmr_wire::cbor::from_reader(cbor)
-            .map_err(|e| KeyMintClientError::Cbor(format!("{}", e)))?;
+            .map_err(|e| KeyMintClientError::Cbor(format!("{e}")))?;
 
         Ok(map)
     }
@@ -203,7 +203,7 @@ where
         let rsp: GetUdsCertsResponse = self.0.transaction(CODE, GetUdsCertsRequest {})?;
         let mut map: HashMap<String, Vec<Vec<u8>>> =
             kmr_wire::cbor::from_reader(rsp.uds_certs.as_slice())
-                .map_err(|e| KeyMintClientError::Cbor(format!("{}", e)))?;
+                .map_err(|e| KeyMintClientError::Cbor(format!("{e}")))?;
         let certs = map.remove("GSMIRkpSecp384r1").ok_or(KeyMintClientError::MissingUdsCertsKey)?;
 
         Ok(certs)
