@@ -19,10 +19,12 @@
 use crate::crypto;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
     ClientSessionResponse::ClientSessionResponse,
-    FinishEnrollSessionResponse::FinishEnrollSessionResponse, IClientSession::IClientSession,
-    InitResponse::InitResponse, PrepareAuthSessionResponse::PrepareAuthSessionResponse,
+    FinishEnrollSessionResponse::FinishEnrollSessionResponse, IClientSession::BnClientSession,
+    IClientSession::IClientSession, InitResponse::InitResponse,
+    PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse,
 };
+use binder::BinderFeatures;
 
 /// Trait that is implemented to support exporting data to a particular AIDL type.
 ///
@@ -62,7 +64,7 @@ pub fn make_client_session_response(
     let mut response = ClientSessionResponse {
         wrappedTpmSeed: wrapped_tpm_seed,
         clientSession: client_session
-            .map(|s| binder::Strong::new(Box::new(s) as Box<dyn IClientSession>)),
+            .map(|s| BnClientSession::new_binder(s, BinderFeatures::default())),
         ..Default::default()
     };
     nonce.export(&mut response);

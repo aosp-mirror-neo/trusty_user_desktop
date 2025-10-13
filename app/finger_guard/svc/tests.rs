@@ -86,7 +86,6 @@ fn everything_with_a_shared_session() {
     let client_nonce = rng::generate_random_vec::<32>();
 
     // Start a new session with the server.
-    let service = assert_ok!(finger_guard_api::connect_finger_guard());
     let session_response = assert_ok!(service.createClientSession(client_nonce.as_slice()));
     let session = session_response.clientSession.unwrap();
     let sk = assert_ok!(crypto::compute_hmac!(
@@ -121,15 +120,14 @@ fn everything_with_a_shared_session() {
     );
     let hat = assert_ok!(hat.sign(&auth_token_key));
     let nonce = rng::generate_random_vec::<32>();
-    let session_resp = assert_ok!(session.prepareEnrollSession(&sup, &hat, &nonce));
+    let prepare_resp = assert_ok!(session.prepareEnrollSession(&sup, &hat, &nonce));
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
         &TestBlob(&nonce),
         &TestBlob(&user_id.to_be_bytes()),
         &TestBlob(b"finger_guardenroll")
     ));
-    assert!(hmac == session_resp.mac.as_slice());
-
+    assert!(hmac == prepare_resp.mac.as_slice());
     let old_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
     let nonce = rng::generate_random_vec::<32>();
     let enrollment_result = EnrollmentResult { enrolled: true };
@@ -144,7 +142,6 @@ fn everything_with_a_shared_session() {
         &TestBlob(b"finger_guardenroll_finish")
     ));
     assert!(hmac == finish_resp.mac.as_slice());
-
     // Test enrollment session cancellation.
     let hat = UnsignedHat::new(
         assert_ok!(service.generateChallenge(&sup)),
@@ -163,18 +160,18 @@ fn everything_with_a_shared_session() {
     // ---- Start Authentication Test ----
     let challenge = 0xc4a11e49e_i64;
     let nonce = rng::generate_random_vec::<32>();
-    let session_resp = assert_ok!(session.prepareAuthSession(&sup, challenge, &nonce));
+    let prepare_resp = assert_ok!(session.prepareAuthSession(&sup, challenge, &nonce));
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
         &TestBlob(&nonce),
         &TestBlob(&user_id.to_be_bytes()),
         &TestBlob(b"finger_guardauth")
     ));
-    assert!(hmac == session_resp.mac.as_slice());
+    assert!(hmac == prepare_resp.mac.as_slice());
 
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
-        &TestBlob(&session_resp.nonce),
+        &TestBlob(&prepare_resp.nonce),
         &TestBlob(&user_id.to_be_bytes()),
         &TestBlob(b"fpmcuauth")
     ));
@@ -187,7 +184,6 @@ fn everything_with_a_shared_session() {
     assert!(
         crypto::compute_hmac!(&auth_token_key, &valid_hat).unwrap() == valid_hat.mac.as_slice()
     );
-
     // ---- End Authentication Test ----
 }
 
