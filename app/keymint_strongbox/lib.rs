@@ -89,7 +89,7 @@ pub fn start() {
         sk_wrapper: None,
         tup: Box::new(kmr_ta::device::TrustedPresenceUnsupported),
         legacy_key: None,
-        rpc: Box::new(TrustyRpc),
+        rpc: Box::new(TrustyRpc::new(&mut TrustyRng)),
         frp_secret_storage: None,
         frp_data_storage: None,
     };
