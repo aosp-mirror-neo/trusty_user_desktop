@@ -15,6 +15,7 @@
 rust_defaults {
     name: "libdesktop_hwsec_tpm_commands_defaults",
     rustlibs: [
+        "libkmr_wire",
         "libopen_enum",
         "libthiserror",
         "libzerocopy",

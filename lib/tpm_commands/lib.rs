@@ -528,6 +528,8 @@ pub mod trusty_storage_superblock_mac {
     }
 }
 
+pub mod strongbox;
+
 #[cfg(test)]
 mod tests {
     use super::*;
