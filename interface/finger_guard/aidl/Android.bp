@@ -16,6 +16,8 @@ aidl_interface {
         "android/desktop/security/finger_guard/LockoutStatus.aidl",
         "android/desktop/security/finger_guard/PrepareAuthSessionResponse.aidl",
         "android/desktop/security/finger_guard/PrepareEnrollSessionResponse.aidl",
+        "android/desktop/security/finger_guard/SdcpClaim.aidl",
+        "android/desktop/security/finger_guard/SdcpClientSessionResponse.aidl",
         "android/desktop/security/finger_guard/SensorUserPair.aidl",
     ],
     frozen: false,

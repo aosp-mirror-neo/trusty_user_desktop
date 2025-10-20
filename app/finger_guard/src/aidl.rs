@@ -20,6 +20,7 @@ use android_desktop_security_finger_guard::aidl::android::desktop::security::fin
     ClientSessionResponse::ClientSessionResponse, IClientSession::BnClientSession,
     IClientSession::IClientSession, InitResponse::InitResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
+    SdcpClientSessionResponse::SdcpClientSessionResponse,
 };
 use binder::BinderFeatures;
 
@@ -108,6 +109,26 @@ pub fn make_client_session_response(
     client_session: Option<impl IClientSession>,
 ) -> ClientSessionResponse {
     ClientSessionResponse {
+        nonce: nonce.export(),
+        wrappedTpmSeed: wrapped_tpm_seed,
+        iv: iv.export(),
+        tag: tag.export(),
+        clientSession: client_session
+            .map(|s| BnClientSession::new_binder(s, BinderFeatures::default())),
+    }
+}
+
+/// Construct a sdcp session response.
+pub fn make_sdcp_client_session_response(
+    server_public_key: Vec<u8>,
+    nonce: ref_to_impl_export!(SdcpClientSessionResponse.nonce as Vec<u8>),
+    wrapped_tpm_seed: Vec<u8>,
+    iv: ref_to_impl_export!(SdcpClientSessionResponse.iv as Vec<u8>),
+    tag: ref_to_impl_export!(SdcpClientSessionResponse.tag as Vec<u8>),
+    client_session: Option<impl IClientSession>,
+) -> SdcpClientSessionResponse {
+    SdcpClientSessionResponse {
+        serverPublicKey: server_public_key,
         nonce: nonce.export(),
         wrappedTpmSeed: wrapped_tpm_seed,
         iv: iv.export(),

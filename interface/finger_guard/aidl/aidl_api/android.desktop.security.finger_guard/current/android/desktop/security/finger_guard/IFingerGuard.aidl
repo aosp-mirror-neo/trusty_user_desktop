@@ -36,6 +36,7 @@ package android.desktop.security.finger_guard;
 interface IFingerGuard {
   android.desktop.security.finger_guard.InitResponse init(in byte[] clientPublicKey);
   android.desktop.security.finger_guard.ClientSessionResponse createClientSession(in byte[] clientNonce);
+  android.desktop.security.finger_guard.SdcpClientSessionResponse createSdcpClientSession(in android.desktop.security.finger_guard.SdcpClaim claim);
   long generateChallenge(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair);
   long revokeChallenge(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, long challenge);
   long getAuthenticatorId(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair);
