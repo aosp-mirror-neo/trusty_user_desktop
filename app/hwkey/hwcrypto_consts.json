@@ -80,6 +80,11 @@
             "name": "HWCRYPTOHAL_RUST_APP_UUID",
             "value": "f49e28c4-d8b0-41c2-8197-11f27402c0f8",
             "type": "uuid"
+        },
+        {
+            "name": "KM_STRONGBOX_APP_UUID",
+            "value": "c6b5b730-f21c-480b-ad6f-cc197680b76c",
+            "type": "uuid"
         }
     ]
 }

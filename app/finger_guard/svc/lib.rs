@@ -16,18 +16,20 @@
 
 mod clock;
 mod keymint;
-mod service;
 mod storage;
+mod trusty;
 
-use crate::service::FingerGuardService;
+#[cfg(test)]
+mod tests;
+
+use finger_guard::service::FingerGuardService;
+use crate::trusty::Trusty;
 use binder::BinderFeatures;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::IFingerGuard::BnFingerGuard;
 use rpcbinder::RpcServer;
+use std::ffi::CString;
 use std::rc::Rc;
 use tipc::{Manager, PortCfg};
-
-// The port on FingerGuard TA which the Fingerprint sensor HAL connects to.
-const APP_SERVICE_PORT: &str = "com.android.trusty.rust.FingerGuard.V1";
 
 const PORT_COUNT: usize = 1;
 const CONNECTION_COUNT: usize = 1;
@@ -42,15 +44,14 @@ pub fn init_and_start_loop() -> tipc::Result<()> {
 
     let mut dispatcher =
         FingerGuardDispatcher::<PORT_COUNT>::new().expect("Could not create dispatcher");
-    let service = FingerGuardService::new();
+    let service = FingerGuardService::new(Trusty);
     let binder_service = BnFingerGuard::new_binder(service, BinderFeatures::default());
     let rpc_service = RpcServer::new_per_session(move |_uuid| Some(binder_service.as_binder()));
 
     // Allow secure (within trusty) and non-secure (outside trusty) connections.
     // Originally only intended for non-secure connections, now allowed secure connection as well
     // to facilitate the unit tests within the trusty environment.
-    let app_cfg = PortCfg::new(APP_SERVICE_PORT)
-        .expect("Could not create port config")
+    let app_cfg = PortCfg::new_raw(CString::from(finger_guard_api::PORT_CSTR))
         .allow_ta_connect()
         .allow_ns_connect();
     dispatcher

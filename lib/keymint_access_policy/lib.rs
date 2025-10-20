@@ -19,7 +19,7 @@
 
 use tipc::Uuid;
 
-pub const KEYMINT_ACCESSIBLE_UUIDS: [Uuid; 6] = [
+pub const KEYMINT_ACCESSIBLE_UUIDS: [Uuid; 9] = [
     /* gatekeeper uuid */
     Uuid::new(0x38ba0cdc, 0xdf0e, 0x11e4, [0x98, 0x69, 0x23, 0x3f, 0xb6, 0xae, 0x47, 0x95]),
     /* confirmation UI uuid */
@@ -32,9 +32,22 @@ pub const KEYMINT_ACCESSIBLE_UUIDS: [Uuid; 6] = [
     Uuid::new(0x0c997054, 0xf477, 0x4cab, [0x96, 0x46, 0x46, 0x29, 0xe3, 0x4c, 0xb2, 0xf9]),
     /* finger_guard unit test uuid */
     Uuid::new(0x868899c6, 0xe820, 0x4cc0, [0xa8, 0x19, 0x11, 0x56, 0x5f, 0xfa, 0x8a, 0x45]),
+    /* gsc_svc trusty app uuid */
+    Uuid::new(0x77026d06, 0xbe0f, 0x4604, [0xa6, 0xd5, 0xf7, 0x29, 0x38, 0x8a, 0x44, 0x5b]),
+    /* gsc_svc unit test uuid */
+    Uuid::new(0x01b7938e, 0xabdd, 0x4e35, [0x93, 0x95, 0xc6, 0xb9, 0xb4, 0xdd, 0x82, 0x81]),
+    /* keymint_legacy_client uuid */
+    Uuid::new(0xf23a14c3, 0x9f99, 0x4481, [0xae, 0x41, 0x54, 0xe9, 0x62, 0x7d, 0xef, 0xbe]),
 ];
 
-pub fn keymint_check_secure_target_access_policy_provisioning(_uuid: &Uuid) -> bool {
+pub fn keymint_check_secure_target_access_policy_provisioning(uuid: &Uuid) -> bool {
+    const GSC_SVC_UUID: &Uuid = &KEYMINT_ACCESSIBLE_UUIDS[6];
+    const GSC_SVC_UT_UUID: &Uuid = &KEYMINT_ACCESSIBLE_UUIDS[7];
+    const KM_CLIENT_UUID: &Uuid = &KEYMINT_ACCESSIBLE_UUIDS[8];
+
+    if uuid == GSC_SVC_UUID || uuid == GSC_SVC_UT_UUID || uuid == KM_CLIENT_UUID {
+        return true;
+    }
     /* Not Supported */
     return false;
 }

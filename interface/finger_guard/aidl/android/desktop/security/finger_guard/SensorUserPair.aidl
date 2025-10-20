@@ -16,6 +16,7 @@
 
 package android.desktop.security.finger_guard;
 
+@VintfStability
 parcelable SensorUserPair {
     int sensorId;
     int userId;

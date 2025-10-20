@@ -16,111 +16,142 @@
 
 //! Traits and utilities for moving data into and out of AIDL interface types.
 
-use crate::crypto;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
-    FinishEnrollSessionResponse::FinishEnrollSessionResponse, HandshakeResponse::HandshakeResponse,
+    ClientSessionResponse::ClientSessionResponse, IClientSession::BnClientSession,
+    IClientSession::IClientSession, InitResponse::InitResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
-    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SessionResponse::SessionResponse,
 };
+use binder::BinderFeatures;
 
-/// Trait that is implemented to support exporting data to a particular AIDL type.
+/// Trait that is implemented to support exporting a specific field for an AIDL type.
 ///
-/// This relies on the exporting class being passed a mutable reference to a partially initialized
-/// AIDL type and filling in the appropriate subset of fields which it can populate. This is not
-/// entirely ideal because it mean the type system can't guarantee that the structure is truly
-/// initialized properly.
+/// For types where there is a simple "1 internal struct -> 1 aidl struct" this isn't necessary and
+/// implementing From is a good choice, but for "2+ internal structs -> 1 aidl struct" situations
+/// this does not work because no single individual struct can produce the complete AIDL type.
 ///
-/// For types where there's a simple "1 internal struct -> 1 aidl struct" it is better to use a
-/// From trait, but for situations where it takes multiple types to create the AIDL type this
-/// is a reasonable compromise.
-pub trait ExportToAidl<T> {
-    /// Export the relevant contexts of Self into the `out` parameter.
-    ///
-    /// The function should not assume that the output parameter is in any particular state when
-    /// being passed in. When an object of type T is being exported to by multiple source
-    /// ExportToAidl objects, the result should be the same regardless of the order in which the
-    /// export functions are called.
-    fn export(&self, out: &mut T);
+/// To work around this we use this generic trait which is intended to indicate that you can be
+/// converted to produce a single field of the output type. Thus this trait has three generic
+/// parameters: the type of the struct being exported, the field being exported as represented by
+/// its offset within the struct, and the type of the field. Note that the first two parameters
+/// are purely indicator parameters and are not actually used by implementations.
+pub trait ExportAidlField<AidlType, const OFFSET: usize, FieldType> {
+    /// Export the relevant contents of Self into the AidlType.OFFSET.
+    fn export(&self) -> FieldType;
+}
+
+/// Macro that can be used to simplify ExportAidlField declarations.
+///
+/// While implementing field export is just a simple "implement this trait" pattern, writing out the
+/// actual name of the trait is not particularly readable due to the use of field offsets to
+/// represent the field being exported. Thus, this macro is provided to encapsulate that.
+///
+/// Given a struct MyStruct that wants to export fieldName on AidlStruct you write this as:
+///
+///   impl_export!(MyStruct(self) => AidlStruct.fieldName as FieldType {
+///       ... code to do the export goes here ...
+///   });
+///
+/// This will fill in the somewhat messy trait declaration and export function, implementing it with
+/// the block of code you supply. Note that you need to explicitly specify the name you want to use
+/// for the "self" parameter due to how macro hygiene works, but it should be "self".
+macro_rules! impl_export {
+    ($impltype:ident($selfname:ident) => $external:ident.$field:ident as $ftype:ty {$($body:tt)*}) => {
+        impl crate::aidl::ExportAidlField<$external, {std::mem::offset_of!($external, $field)}, $ftype> for $impltype {
+            fn export(&$selfname) -> $ftype {
+                $($body)*
+            }
+        }
+    }
+}
+pub(crate) use impl_export;
+
+/// Simple macro that calls export on a given value for a specific AIDL type + field.
+///
+/// Normally this is unnecessary and you can just call export() directly, but if type exports
+/// multiple fields it may be ambiguous which export you want to call.
+macro_rules! export_field {
+    ($value:expr => $external:ident.$field:ident) => {
+        <_ as crate::aidl::ExportAidlField<
+            $external,
+            { std::mem::offset_of!($external, $field) },
+            _,
+        >>::export($value)
+    };
+}
+pub(crate) use export_field;
+
+/// Simple macro to spell the name of an "&impl ExportAidlField" parameter in functions.
+///
+/// This is intended for use by the various factory functions that are constructing an AIDL from a
+/// set of internal types. Generally such functions want to accept a "anything that implements the
+/// export of this field" reference and this spells that type in a somewhat more legible way:
+macro_rules! ref_to_impl_export {
+    ($external:ident.$field:ident as $ftype:ty) => {
+        &impl ExportAidlField<$external, {std::mem::offset_of!($external, $field)}, $ftype>
+    }
 }
 
 /// Construct a handshake response.
-pub fn make_handshake_response(
+pub fn make_init_response(
     server_public_key: Vec<u8>,
-    pk_mac: &crypto::Hmac,
-) -> HandshakeResponse {
-    let mut response =
-        HandshakeResponse { serverPublicKey: server_public_key, ..Default::default() };
-    pk_mac.export(&mut response);
-    response
+    pk_mac: ref_to_impl_export!(InitResponse.pkMac as Vec<u8>),
+) -> InitResponse {
+    InitResponse { serverPublicKey: server_public_key, pkMac: pk_mac.export() }
 }
 
 /// Construct a session response.
-pub fn make_session_response(
-    nonce: &crypto::Nonce,
+pub fn make_client_session_response(
+    nonce: ref_to_impl_export!(ClientSessionResponse.nonce as Vec<u8>),
     wrapped_tpm_seed: Vec<u8>,
-    iv: &crypto::Iv,
-    tag: &crypto::Aes256Tag,
-) -> SessionResponse {
-    let mut response = SessionResponse::default();
-    nonce.export(&mut response);
-    response.wrappedTpmSeed = wrapped_tpm_seed;
-    iv.export(&mut response);
-    tag.export(&mut response);
-    response
+    iv: ref_to_impl_export!(ClientSessionResponse.iv as Vec<u8>),
+    tag: ref_to_impl_export!(ClientSessionResponse.tag as Vec<u8>),
+    client_session: Option<impl IClientSession>,
+) -> ClientSessionResponse {
+    ClientSessionResponse {
+        nonce: nonce.export(),
+        wrappedTpmSeed: wrapped_tpm_seed,
+        iv: iv.export(),
+        tag: tag.export(),
+        clientSession: client_session
+            .map(|s| BnClientSession::new_binder(s, BinderFeatures::default())),
+    }
 }
 
 /// Construct a new prepare_auth_session response.
 pub fn make_prepare_auth_session_response(
-    nonce: &crypto::Nonce,
-    mac: &crypto::Hmac,
+    nonce: ref_to_impl_export!(PrepareAuthSessionResponse.nonce as [u8; 32]),
+    mac: ref_to_impl_export!(PrepareAuthSessionResponse.mac as Vec<u8>),
 ) -> PrepareAuthSessionResponse {
-    let mut response = PrepareAuthSessionResponse::default();
-    nonce.export(&mut response);
-    mac.export(&mut response);
-    response
-}
-
-/// Construct a new prepare_enroll_session response.
-pub fn make_prepare_enroll_session_response(mac: &crypto::Hmac) -> PrepareEnrollSessionResponse {
-    let mut response = PrepareEnrollSessionResponse::default();
-    mac.export(&mut response);
-    response
-}
-
-/// Construct a new finish_enroll_session response.
-pub fn make_finish_enroll_session_response(mac: &crypto::Hmac) -> FinishEnrollSessionResponse {
-    let mut response = FinishEnrollSessionResponse::default();
-    mac.export(&mut response);
-    response
+    PrepareAuthSessionResponse { nonce: nonce.export(), mac: mac.export() }
 }
 
 #[cfg(test)]
 mod test {
     use super::{
-        make_finish_enroll_session_response, make_handshake_response,
-        make_prepare_auth_session_response, make_prepare_enroll_session_response,
-        make_session_response,
+        make_client_session_response, make_init_response,
+        make_prepare_auth_session_response,
     };
     use crate::crypto;
     use std::array;
     use zerocopy::FromBytes;
+    use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::IClientSession::BpClientSession;
 
     // In general all of these tests deliberately make their input data non-zero. Otherwise it's
     // difficult to distinguish between fields which were correctly populated and ones which were
     // simply default-initialized.
 
     #[test]
-    fn test_make_handshake_response() {
+    fn test_make_init_response() {
         let public_key: Vec<u8> = (1..=32).collect();
         let hmac_bytes: Vec<u8> = (1..=32).map(|x| x * 2).collect();
         let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
-        let response = make_handshake_response(public_key.clone(), &hmac);
+        let response = make_init_response(public_key.clone(), &hmac);
         assert_eq!(response.serverPublicKey, public_key);
         assert_eq!(response.pkMac, hmac_bytes);
     }
 
     #[test]
-    fn test_make_session_response() {
+    fn test_make_client_session_response() {
         let nonce_bytes: [u8; 32] = array::from_fn(|x| x as u8);
         let nonce = crypto::Nonce::read_from_bytes(&nonce_bytes).unwrap();
         let wrapped_tpm_seed: Vec<u8> = (1..=32).map(|x| x * 2).collect();
@@ -128,7 +159,13 @@ mod test {
         let iv = crypto::Iv::read_from_bytes(&iv_bytes).unwrap();
         let tag_bytes: [u8; 16] = array::from_fn(|x| x as u8 * 4);
         let tag = crypto::Aes256Tag::read_from_bytes(&tag_bytes).unwrap();
-        let response = make_session_response(&nonce, wrapped_tpm_seed.clone(), &iv, &tag);
+        let response = make_client_session_response(
+            &nonce,
+            wrapped_tpm_seed.clone(),
+            &iv,
+            &tag,
+            None::<BpClientSession>,
+        );
         assert_eq!(response.nonce, nonce_bytes);
         assert_eq!(response.wrappedTpmSeed, wrapped_tpm_seed);
         assert_eq!(response.iv, iv_bytes);
@@ -143,22 +180,6 @@ mod test {
         let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
         let response = make_prepare_auth_session_response(&nonce, &hmac);
         assert_eq!(response.nonce, nonce_bytes);
-        assert_eq!(response.mac, hmac_bytes);
-    }
-
-    #[test]
-    fn test_make_prepare_enroll_session_response() {
-        let hmac_bytes: Vec<u8> = (1..=32).collect();
-        let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
-        let response = make_prepare_enroll_session_response(&hmac);
-        assert_eq!(response.mac, hmac_bytes);
-    }
-
-    #[test]
-    fn test_make_finish_enroll_session_response() {
-        let hmac_bytes: Vec<u8> = (1..=32).collect();
-        let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
-        let response = make_finish_enroll_session_response(&hmac);
         assert_eq!(response.mac, hmac_bytes);
     }
 }

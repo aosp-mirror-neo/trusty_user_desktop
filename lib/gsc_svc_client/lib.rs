@@ -117,7 +117,7 @@ impl TpmInterface for GscServiceClient {
 
         // Check for TPM errors
         let (header, _) = TpmResponseHeader::ref_from_prefix(&bytes).map_err(|err| {
-            log::error!("transmit: ref_from_prefix failed: {}", err);
+            log::error!("transmit: ref_from_prefix failed: {err}");
             GscServiceClientError::Deserialization
         })?;
         if header.error_code != 0 {
@@ -125,7 +125,7 @@ impl TpmInterface for GscServiceClient {
         }
 
         let response = TpmResponseMessage::<Rsp>::read_from_bytes(&bytes).map_err(|err| {
-            log::error!("transmit: read_from_bytes failed: {}", err);
+            log::error!("transmit: read_from_bytes failed: {err}");
             GscServiceClientError::Deserialization
         })?;
 
@@ -148,7 +148,7 @@ impl TpmInterface for GscServiceClient {
 
         // Check for TPM errors
         let (header, _) = TpmResponseHeader::ref_from_prefix(&bytes).map_err(|err| {
-            log::error!("transmit_into: ref_from_prefix failed: {}", err);
+            log::error!("transmit_into: ref_from_prefix failed: {err}");
             GscServiceClientError::Deserialization
         })?;
         if header.error_code != 0 {
@@ -158,7 +158,7 @@ impl TpmInterface for GscServiceClient {
         drop(bytes);
 
         let response = TpmResponseMessage::<Rsp>::mut_from_bytes(buffer).map_err(|err| {
-            log::error!("transmit_into: read_from_bytes failed: {}", err);
+            log::error!("transmit_into: read_from_bytes failed: {err}");
             GscServiceClientError::Deserialization
         })?;
         Ok(&mut response.response)

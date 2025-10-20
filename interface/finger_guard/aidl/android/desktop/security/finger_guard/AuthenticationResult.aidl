@@ -19,6 +19,7 @@ package android.desktop.security.finger_guard;
 /**
  * AuthenticationResult represents an attested authentication result.
  */
+@VintfStability
 parcelable AuthenticationResult {
     boolean authenticated;
     /**

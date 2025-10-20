@@ -19,18 +19,22 @@ MODULE := $(LOCAL_DIR)
 MODULE_AIDL_PACKAGE := android/desktop/security/finger_guard
 MODULE_CRATE_NAME := android_desktop_security_finger_guard
 
+MODULE_AIDL_FLAGS := \
+	--stability=vintf \
+
 MODULE_AIDLS := \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/AuthenticationResult.aidl \
+	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/ClientSessionResponse.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/EnrollmentResult.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/FinishEnrollSessionResponse.aidl \
-	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/HandshakeResponse.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/HardwareAuthToken.aidl \
+	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/IClientSession.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/IFingerGuard.aidl \
+	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/InitResponse.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/LockoutStatus.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/PrepareAuthSessionResponse.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/PrepareEnrollSessionResponse.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/SensorUserPair.aidl \
-	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/SessionResponse.aidl \
 
 MODULE_AIDL_LANGUAGE := rust
 

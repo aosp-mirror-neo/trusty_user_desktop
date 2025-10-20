@@ -25,6 +25,7 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := finger_guard
 
 MODULE_LIBRARY_DEPS += \
+	$(call FIND_CRATE,once_cell) \
 	$(call FIND_CRATE,thiserror) \
 	$(call FIND_CRATE,zerocopy) \
 	trusty/user/base/lib/keymint-rust/boringssl \
@@ -33,5 +34,6 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/openssl-rust \
 	trusty/user/base/lib/trusty-std \
 	trusty/user/desktop/interface/finger_guard/aidl \
+	frameworks/native/libs/binder/trusty/rust \
 
 include make/library.mk

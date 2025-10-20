@@ -29,6 +29,7 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/base/lib/service_manager/client \
+	trusty/user/base/lib/vmm_obj/rust \
 	trusty/user/desktop/interface/boot_params/aidl \
 	trusty/user/base/lib/trusty-std \
 	trusty/user/base/lib/trusty-log \

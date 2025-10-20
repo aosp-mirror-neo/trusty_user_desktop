@@ -8,6 +8,8 @@ MODULE_AIDL_LANGUAGE := rust
 
 MODULE_CRATE_NAME := android_system_desktop_security_gsc
 
+MODULE_AIDL_FLAGS := --stability=vintf
+
 MODULE_AIDLS := \
 	$(LOCAL_DIR)/android/system/desktop/security/gsc/IGsc.aidl \
 

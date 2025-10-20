@@ -52,6 +52,9 @@ interface IPinWeaver {
     /** The secret was not correct for this leaf */
     const int ERROR_AUTH_FAILED = 6;
 
+    /** The service is not ready yet either because of the GSC or pinweaver_storaged. */
+    const int ERROR_NOT_READY = 7;
+
     /**
      * Inserts a leaf into PinWeaver.
      *

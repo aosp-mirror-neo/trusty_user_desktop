@@ -5,7 +5,7 @@ use rpcbinder::RpcSession;
 use std::ffi::CStr;
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::IFingerGuard::IFingerGuard;
 
-pub const PORT_CSTR: &CStr = c"com.android.trusty.rust.FingerGuard.V1";
+pub const PORT_CSTR: &CStr = c"com.android.desktop.trusty.fingerguard";
 
 /// Creates a new FingerGuard client.
 pub fn connect_finger_guard() -> Result<Strong<dyn IFingerGuard>, binder::StatusCode> {

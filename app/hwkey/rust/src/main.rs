@@ -16,6 +16,7 @@
 
 use android_desktop_security_boot_params::aidl::android::desktop::security::boot_params::IBootParams::IBootParams;
 use service_manager::wait_for_interface;
+use vmm_obj::get_vmm_obj;
 
 const BP_SERVICE_PORT: &str = "com.android.trusty.rust.BootParamsService.V1";
 
@@ -47,7 +48,7 @@ fn main() {
     let bp: binder::Strong<dyn IBootParams> =
         wait_for_interface(BP_SERVICE_PORT).expect("Could not connect");
 
-    let mut seal = bp.getCdiSeal().expect("Could not get seal");
+    let mut seal = get_vmm_obj(c"google,versioned-seed").expect("Could not get versioned seed");
     let mut sign = bp.getCdiAttest().expect("Could not get sign");
     let mut auth_token_key_seed =
         bp.getAuthTokenKeySeed().expect("Could not get auth token key seed");

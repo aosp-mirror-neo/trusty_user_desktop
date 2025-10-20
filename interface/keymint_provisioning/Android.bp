@@ -1,0 +1,17 @@
+aidl_interface {
+    name: "android.desktop.security.keymint_provisioning",
+    owner: "google",
+    unstable: true,
+    vendor_available: true,
+    srcs: ["android/desktop/security/keymint_provisioning/IKeyMintProvisioning.aidl"],
+    frozen: false,
+    backend: {
+        rust: {
+            enabled: true,
+            apex_available: [
+                "//apex_available:platform",
+                "com.android.virt",
+            ],
+        },
+    },
+}

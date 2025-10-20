@@ -22,11 +22,14 @@ rust_defaults {
     srcs: ["src/lib.rs"],
     crate_name: "desktop_finger_guard",
     rustlibs: [
+        "libbinder_rs",
         "libkmr_common",
+        "liblog_rust",
+        "libonce_cell",
         "libopenssl",
         "libthiserror",
         "libzerocopy",
-        "android.desktop.security.finger_guard-rust",
+        "android.desktop.security.finger_guard-V1-rust",
     ],
 }
 

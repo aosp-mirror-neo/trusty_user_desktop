@@ -19,7 +19,7 @@
 //! These types are meant for use in external APIs and/or persistent storage and so they have
 //! meaning beyond the internal process state and so should be modified only very carefully.
 
-use crate::aidl::ExportToAidl;
+use crate::aidl::impl_export;
 use crate::crypto::HmacSignable;
 use crate::error::ServiceResult;
 use crate::hat::SignedHat;
@@ -65,7 +65,7 @@ impl HmacSignable for SensorStateIndex {
 }
 
 /// Newtype that encapsulates an authenticator id.
-#[derive(Copy, Clone, Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
+#[derive(Copy, Clone, Default, Eq, PartialEq, Debug, FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
 pub struct AuthenticatorId(i64);
 
@@ -81,11 +81,9 @@ impl From<AuthenticatorId> for i64 {
         value.0
     }
 }
-impl ExportToAidl<SignedHat> for AuthenticatorId {
-    fn export(&self, out: &mut SignedHat) {
-        out.authenticatorId = self.0;
-    }
-}
+impl_export!(AuthenticatorId(self) => SignedHat.authenticatorId as i64 {
+    self.0
+});
 
 /// Newtype that encapsulates a secure user id.
 #[derive(Copy, Clone, Default, Eq, PartialEq, FromBytes, IntoBytes, Immutable)]
@@ -97,12 +95,9 @@ impl From<i64> for SecureUserId {
         Self(value as u64)
     }
 }
-
-impl ExportToAidl<SignedHat> for SecureUserId {
-    fn export(&self, out: &mut SignedHat) {
-        out.userId = self.0 as i64;
-    }
-}
+impl_export!(SecureUserId(self) => SignedHat.userId as i64 {
+    self.0 as i64
+});
 
 #[cfg(test)]
 mod test {

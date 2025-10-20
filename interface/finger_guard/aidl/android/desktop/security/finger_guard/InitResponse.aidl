@@ -16,9 +16,9 @@
 
 package android.desktop.security.finger_guard;
 
-parcelable SessionResponse {
-    byte[] nonce;
-    byte[] wrappedTpmSeed;
-    byte[] iv;
-    byte[] tag;
+@VintfStability
+parcelable InitResponse {
+    byte[] serverPublicKey;
+    byte[] pkMac;
 }
+

@@ -26,5 +26,10 @@ pub mod crypto;
 pub mod error;
 pub mod hat;
 pub mod identifiers;
+pub mod lockout;
 pub mod rng;
+pub mod service;
 pub mod time;
+
+#[cfg(test)]
+mod fake;

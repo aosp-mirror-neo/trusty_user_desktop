@@ -30,12 +30,16 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/vmm_obj/rust \
+	trusty/user/base/lib/openssl-rust \
 	trusty/user/desktop/interface/boot_params/aidl \
 	trusty/user/desktop/interface/gscd \
+	trusty/user/desktop/interface/keymint_provisioning \
 	trusty/user/desktop/lib/boot_params \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
+	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/keymint-rust/wire \
+	trusty/user/desktop/lib/keymint_legacy_client \
 
 MODULE_RUST_USE_CLIPPY := true
 MODULE_RUST_TESTS := true
