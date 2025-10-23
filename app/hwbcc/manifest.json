@@ -1,6 +1,6 @@
 {
     "app_name": "hwbcc",
     "uuid": "f758d162-3481-4bb4-ab54-5ed41652f44e",
-    "min_heap": 8192,
+    "min_heap": 32768,
     "min_stack": 16384
 }
