@@ -55,7 +55,7 @@ fn log_formatter(record: &log::Record) -> String {
     // line number should be present, so keeping it simple by just returning a 0.
     let line = record.line().unwrap_or(0);
     let file = record.file().unwrap_or("unknown file");
-    format!("{}: {}:{} {}\n", record.level(), file, line, record.args())
+    format!("strongbox: {}: {}:{} {}\n", record.level(), file, line, record.args())
 }
 
 pub fn start() {
@@ -110,7 +110,7 @@ pub fn handle_port_connections(_hw_info: HardwareInfo, _rpc_info: RpcInfo) -> Re
     let sb_ta = Rc::new(RefCell::new(StrongBox::default()));
     let ns_service = KMService::new(sb_ta);
 
-    let mut dispatcher = KMServiceDispatcher::<3>::new()
+    let mut dispatcher = KMServiceDispatcher::<1>::new()
         .map_err(|e| km_err!(UnknownError, "could not create multi-service dispatcher: {:?}", e))?;
     let cfg = PortCfg::new(KM_NS_TIPC_SRV_PORT)
         .map_err(|e| {
