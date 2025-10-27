@@ -34,6 +34,8 @@ MODULE_AIDLS := \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/LockoutStatus.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/PrepareAuthSessionResponse.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/PrepareEnrollSessionResponse.aidl \
+	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/SdcpClaim.aidl \
+	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/SdcpClientSessionResponse.aidl \
 	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/SensorUserPair.aidl \
 
 MODULE_AIDL_LANGUAGE := rust

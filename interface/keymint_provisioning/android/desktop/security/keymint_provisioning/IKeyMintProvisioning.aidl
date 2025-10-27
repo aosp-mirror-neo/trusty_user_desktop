@@ -33,6 +33,15 @@ interface IKeyMintProvisioning {
      */
     const int ERROR_CERTIFICATE_VERIFICATION_UNSUCCESSFUL = 4;
 
+    /** Certificate extension encoding attestation IDs could not be found. */
+    const int ERROR_CERTIFICATE_EXTENSION_MISSING = 5;
+
+    /** One of the required attestation identity fields was not encoded in the extension. */
+    const int ERROR_IDENTITY_FIELD_MISSING = 6;
+
+    /** SetAttestationIds call through the KeyMintSecureLegacyClient failed. */
+    const int ERROR_SET_ATTESTATION_IDS_FAILED = 7;
+
     /**
      * Requests the UDS certificates from the KeyMint secure legacy client, and
      * verifies the certificate chain was issued by the root CA.

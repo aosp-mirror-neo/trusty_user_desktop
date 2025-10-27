@@ -16,6 +16,7 @@
 
 mod boot_params_svc;
 mod keymint_provisioning;
+mod proto;
 
 use alloc::vec::Vec;
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::BnGsc;

@@ -30,7 +30,8 @@ use android_desktop_security_finger_guard::aidl::android::desktop::security::fin
     HardwareAuthToken::HardwareAuthToken, IClientSession::IClientSession,
     IFingerGuard::IFingerGuard, InitResponse::InitResponse, LockoutStatus::LockoutStatus,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
-    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SensorUserPair::SensorUserPair,
+    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SdcpClaim::SdcpClaim,
+    SdcpClientSessionResponse::SdcpClientSessionResponse, SensorUserPair::SensorUserPair,
 };
 use binder::Interface;
 use log::error;
@@ -395,6 +396,14 @@ impl HmacSignable for HandshakeMessage {
     }
 }
 
+/// The context string appended to nonces during SDCP session key derivation.
+struct SdcpContext;
+impl HmacSignable for SdcpContext {
+    fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
+        add_bytes(b"sdcp")
+    }
+}
+
 impl<T: TrustyEnvironment> FingerGuardService<T> {
     /// Construct a new instance of the finger guard service using the given Trusty environment.
     pub fn new(trusty: T) -> Self {
@@ -457,6 +466,45 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         .wrap_openssl_err("failed to encrypt tpm_seed")?;
         let client_session = ClientSession { state: Arc::clone(&self.state), sk: new_sk.into() };
         let session_response = aidl::make_client_session_response(
+            &nonce,
+            wrapped_tpm_seed,
+            &iv,
+            &tag,
+            Some(client_session),
+        );
+        Ok(session_response)
+    }
+
+    fn create_sdcp_client_session(
+        &self,
+        sdcp_claim: &SdcpClaim,
+    ) -> ServiceResult<SdcpClientSessionResponse> {
+        // TODO(b/451630059): device public key pinning after first use.
+        // TODO(b/451630059): persist generated tpm_key after first use.
+        // TODO(b/451630059): return error when InitParams exists.
+        // TODO(b/451630059): validate the claim, including the signature chain and firmware hash.
+        let client_nonce = crypto::Nonce::import(&sdcp_claim.nonce)
+            .map_err(|_| ServiceError::InvalidArg("client_nonce"))?;
+        let nonce = crypto::Nonce::generate();
+        // Generate a fresh public+private key pair.
+        let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
+        let server_public_key_bytes = crypto::ec_public_key_serialization(&server_private_key)
+            .wrap_openssl_err("failed to serialize server public key")?;
+        // Use our new server key to do a DH exchange with the client's ephemeral public key.
+        let pk = crypto::perform_ecdh(server_private_key, &sdcp_claim.ephemeralPublicKey)?;
+        let new_sk = crypto::compute_hmac!(&pk, &client_nonce, &nonce, &SdcpContext)?;
+        let tpm_seed = crypto::Secret::generate();
+        let iv = crypto::Iv::generate();
+        let (wrapped_tpm_seed, tag) = crypto::encrypt_aes256_gcm(
+            &new_sk,
+            &iv,
+            b"tpm_seed", // aad = "tpm_seed"
+            &tpm_seed,
+        )
+        .wrap_openssl_err("failed to encrypt tpm_seed")?;
+        let client_session = ClientSession { state: Arc::clone(&self.state), sk: new_sk.into() };
+        let session_response = aidl::make_sdcp_client_session_response(
+            server_public_key_bytes,
             &nonce,
             wrapped_tpm_seed,
             &iv,
@@ -635,6 +683,15 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
             Self::create_client_session(self, client_nonce),
         )
     }
+    fn createSdcpClientSession(
+        &self,
+        sdcp_claim: &SdcpClaim,
+    ) -> binder::Result<SdcpClientSessionResponse> {
+        service_result_to_binder_result(
+            "createSdcpClientSession",
+            Self::create_sdcp_client_session(self, sdcp_claim),
+        )
+    }
     fn generateChallenge(&self, sensor_user_pair: &SensorUserPair) -> binder::Result<i64> {
         service_result_to_binder_result(
             "generateChallenge",
@@ -683,7 +740,7 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
 
 #[cfg(test)]
 mod test {
-    use super::FingerGuardService;
+    use super::{FingerGuardService, SdcpContext};
     use crate::crypto;
     use crate::error::ServiceResult;
     use crate::fake::{SimulatedClock, SimulatedTrusty};
@@ -695,7 +752,7 @@ mod test {
     use crate::time::{Clock, Instant};
     use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
         AuthenticationResult::AuthenticationResult, EnrollmentResult::EnrollmentResult,
-        IClientSession::IClientSession, LockoutStatus::LockoutStatus,
+        IClientSession::IClientSession, LockoutStatus::LockoutStatus, SdcpClaim::SdcpClaim,
         SensorUserPair::SensorUserPair,
     };
     use binder::Strong;
@@ -732,6 +789,51 @@ mod test {
             service.create_client_session(client_nonce_bytes.as_slice()).unwrap();
         let server_nonce = crypto::Nonce::import(&client_session_response.nonce).unwrap();
         let sk = crypto::compute_hmac!(&init_params.pk, &client_nonce, &server_nonce).unwrap();
+
+        // Decrypt the wrapped tpm seed, AEAD ensures the decryption succeeds and outputs only
+        // the correct plaintext.
+        let iv = crypto::Iv::read_from_bytes(client_session_response.iv.as_slice()).unwrap();
+        let tag =
+            crypto::Aes256Tag::read_from_bytes(client_session_response.tag.as_slice()).unwrap();
+        let encrypted_tpm_seed = client_session_response.wrappedTpmSeed;
+        let aad = b"tpm_seed";
+        let _ =
+            crypto::decrypt_aes256_gcm(&sk, &iv, aad, encrypted_tpm_seed.as_slice(), &tag).unwrap();
+
+        // Convert the HMAC into a key.
+        let sk = crypto::Key::from(sk);
+        (clock, service, auth_token_key, client_session_response.clientSession.unwrap(), sk)
+    }
+
+    fn service_sdcp_session_setup() -> (
+        &'static SimulatedClock,
+        FingerGuardService<SimulatedTrusty>,
+        crypto::Key,
+        Strong<dyn IClientSession>,
+        crypto::Key,
+    ) {
+        let auth_token_key_bytes = rng::generate_random_vec::<32>();
+        let auth_token_key = crypto::Key::read_from_bytes(&auth_token_key_bytes).unwrap();
+        let trusty = SimulatedTrusty::new();
+        trusty.set_auth_token_key(&auth_token_key);
+        let clock = trusty.simulated_clock();
+        let service = FingerGuardService::new(trusty);
+
+        let client_nonce_bytes = rng::generate_random_vec::<32>();
+        let client_nonce = crypto::Nonce::import(&client_nonce_bytes).unwrap();
+        let client_private_key = crypto::ec_keygen().unwrap();
+        let client_public_key_bytes =
+            crypto::ec_public_key_serialization(&client_private_key).unwrap();
+        let sdcp_claim = SdcpClaim {
+            nonce: client_nonce_bytes,
+            ephemeralPublicKey: client_public_key_bytes.try_into().unwrap(),
+            ..Default::default()
+        };
+        let client_session_response = service.create_sdcp_client_session(&sdcp_claim).unwrap();
+        let server_nonce = crypto::Nonce::import(&client_session_response.nonce).unwrap();
+        let pk = crypto::perform_ecdh(client_private_key, &client_session_response.serverPublicKey)
+            .unwrap();
+        let sk = crypto::compute_hmac!(&pk, &client_nonce, &server_nonce, &SdcpContext).unwrap();
 
         // Decrypt the wrapped tpm seed, AEAD ensures the decryption succeeds and outputs only
         // the correct plaintext.
@@ -1387,5 +1489,10 @@ mod test {
 
         let hat = hat.sign(&auth_token_key).unwrap();
         assert!(service.reset_lockout(&sup, &hat).is_err());
+    }
+
+    #[test]
+    fn test_sdcp_service_setup() {
+        let _ = service_sdcp_session_setup();
     }
 }

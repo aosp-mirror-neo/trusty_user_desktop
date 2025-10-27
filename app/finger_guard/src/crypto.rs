@@ -26,6 +26,7 @@ use android_desktop_security_finger_guard::aidl::android::desktop::security::fin
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, InitResponse::InitResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
     PrepareEnrollSessionResponse::PrepareEnrollSessionResponse,
+    SdcpClientSessionResponse::SdcpClientSessionResponse,
 };
 use openssl::bn::BigNumContext;
 use openssl::derive::Deriver;
@@ -106,6 +107,9 @@ impl Nonce {
 impl_export!(Nonce(self) => ClientSessionResponse.nonce as Vec<u8> {
     self.bytes.to_vec()
 });
+impl_export!(Nonce(self) => SdcpClientSessionResponse.nonce as Vec<u8> {
+    self.bytes.to_vec()
+});
 impl_export!(Nonce(self) => PrepareAuthSessionResponse.nonce as [u8; 32] {
     self.bytes
 });
@@ -126,10 +130,16 @@ impl Iv {
 impl_export!(Iv(self) => ClientSessionResponse.iv as Vec<u8> {
     self.bytes.to_vec()
 });
+impl_export!(Iv(self) => SdcpClientSessionResponse.iv as Vec<u8> {
+    self.bytes.to_vec()
+});
 
 // Define a type for tags used in AES-256 encryption.
 blob_newtype!(Aes256Tag, 16);
 impl_export!(Aes256Tag(self) => ClientSessionResponse.tag as Vec<u8> {
+    self.bytes.to_vec()
+});
+impl_export!(Aes256Tag(self) => SdcpClientSessionResponse.tag as Vec<u8> {
     self.bytes.to_vec()
 });
 

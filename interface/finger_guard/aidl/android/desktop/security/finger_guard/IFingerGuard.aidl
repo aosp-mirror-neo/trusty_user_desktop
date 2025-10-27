@@ -20,6 +20,8 @@ import android.desktop.security.finger_guard.ClientSessionResponse;
 import android.desktop.security.finger_guard.InitResponse;
 import android.desktop.security.finger_guard.HardwareAuthToken;
 import android.desktop.security.finger_guard.LockoutStatus;
+import android.desktop.security.finger_guard.SdcpClaim;
+import android.desktop.security.finger_guard.SdcpClientSessionResponse;
 import android.desktop.security.finger_guard.SensorUserPair;
 
 @VintfStability
@@ -45,6 +47,15 @@ interface IFingerGuard {
      * IClientSession#PrepareEnrollSession, IClientSession#FinishEnrollSession, etc.
      */
     ClientSessionResponse createClientSession(in byte[] clientNonce);
+    /**
+     * Return the session key encrypted TPM seed, and an instance of the IClientSession.
+     *
+     * The session key is derived from the ECDH key agreement.
+     *
+     * IClientSession can be used to perform authenticated operations as
+     * IClientSession#PrepareEnrollSession, IClientSession#FinishEnrollSession, etc.
+     */
+    SdcpClientSessionResponse createSdcpClientSession(in SdcpClaim claim);
     /**
      * Return a newly generated challange associated with the
      * (sensor, user) pair.

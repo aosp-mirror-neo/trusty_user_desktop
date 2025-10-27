@@ -1,0 +1,83 @@
+/*
+ * Copyright (C) 2025 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+
+// Android product identity data. The values in that extension, when present,
+// can be used to attest various properties.
+message AndroidProductIdentityCertificateExtension {
+  SerialNumberInfo serial_number_info = 1;
+  AndroidProductDataInfo product_data_info = 2;
+}
+
+message SerialNumberInfo {
+  oneof serial_number_info {
+    // Serial Number (SN).
+    string serial_number = 1;
+    // Gives an explanation of why the serial number is not present.
+    SerialNumberRetrievalError serial_number_retrieval_error = 2;
+  }
+}
+
+enum SerialNumberRetrievalError {
+  SERIAL_NUMBER_RETRIEVAL_ERROR_UNSPECIFIED = 0;
+  // The DLM service is not available.
+  SERIAL_NUMBER_RETRIEVAL_ERROR_DLM_SERVICE_UNAVAILABLE = 1;
+  // The response from Product Service is empty for the given brand code.
+  SERIAL_NUMBER_RETRIEVAL_ERROR_BRAND_CODE_NOT_FOUND = 2;
+  // The ADID source from the Product Service is not recognized.
+  SERIAL_NUMBER_RETRIEVAL_ERROR_ADID_SOURCE_UNRECOGNIZED = 3;
+  // The ADID is not a valid Lenovo ADID.
+  SERIAL_NUMBER_RETRIEVAL_ERROR_LENOVO_ADID_FORMAT_INCORRECT = 4;
+}
+
+message AndroidProductDataInfo {
+  oneof product_data_info {
+    // The Android product data.
+    AndroidProductData product_data = 1;
+    // Gives an explanation of why the product data is not present.
+    AndroidProductDataRetrievalError android_product_data_retrieval_error = 2;
+  }
+}
+
+message AndroidProductData {
+  // The name of the consumer-visible brand of the device.
+  string brand = 1;
+  // The name of the device.
+  string device = 2;
+  // The name of the manufacturer of the device.
+  string manufacturer = 3;
+  // The end-user-visible name of the device.
+  string model = 4;
+  // The name of the product.
+  string product = 5;
+}
+
+enum AndroidProductDataRetrievalError {
+  ANDROID_PRODUCT_DATA_RETRIEVAL_ERROR_UNSPECIFIED = 0;
+  // The DLM service (which is needed to compute the build target to obtain our
+  // data from) is not available.
+  ANDROID_PRODUCT_DATA_RETRIEVAL_ERROR_DLM_SERVICE_NOT_AVAILABLE = 1;
+  // The response from the DLM service is empty for the given brand code, which
+  // prevents us from computing the build target to obtain our data.
+  ANDROID_PRODUCT_DATA_RETRIEVAL_ERROR_BRAND_CODE_NOT_FOUND = 2;
+  // There are no builds available for the given device.
+  ANDROID_PRODUCT_DATA_RETRIEVAL_ERROR_BUILD_NOT_FOUND = 3;
+  // The product data is missing for the given device.
+  ANDROID_PRODUCT_DATA_RETRIEVAL_ERROR_PRODUCT_DATA_MISSING = 4;
+  // An error was encountered while trying to retrieve the product data.
+  ANDROID_PRODUCT_DATA_RETRIEVAL_ERROR_SOURCE_UNAVAILABLE = 5;
+}

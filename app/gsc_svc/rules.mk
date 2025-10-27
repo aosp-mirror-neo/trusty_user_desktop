@@ -27,8 +27,12 @@ MODULE_CRATE_NAME := gsc_svc
 MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,libc) \
 	$(call FIND_CRATE,log) \
+	$(call FIND_CRATE,protobuf) \
+	$(call FIND_CRATE,x509-cert) \
+	$(call FIND_CRATE,spki) \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
+	trusty/user/base/lib/keymint-rust/wire \
 	trusty/user/base/lib/vmm_obj/rust \
 	trusty/user/base/lib/openssl-rust \
 	trusty/user/desktop/interface/boot_params/aidl \
