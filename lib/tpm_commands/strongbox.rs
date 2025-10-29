@@ -16,9 +16,12 @@
 
 //! Structs and items that define TPM communications with the GSC
 
-use crate::{TpmvRequest, NO_SESSION_TAG, VENDOR_COMMAND_ORDINAL};
+use crate::{TpmvRequest, NO_SESSION_TAG};
 use kmr_wire::*;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, BE, U16, U32};
+
+/// The ordinal value that is used for all strongbox commands
+const VENDOR_COMMAND_STRONGBOX: U32<BE> = U32::new(0x20000001);
 
 /// Vendor TPM command representing a strongbox generate ecdsa P256 keypair request.
 pub mod generate_ecdsa_p256_keypair {
@@ -32,7 +35,7 @@ pub mod generate_ecdsa_p256_keypair {
     impl TpmvRequest for Request {
         const TAG: U16<BE> = NO_SESSION_TAG;
         const COMMAND_CODE: U16<BE> = U16::new(GenerateEcdsaP256KeyPairRequest::CODE as u16);
-        const ORDINAL: U32<BE> = VENDOR_COMMAND_ORDINAL;
+        const ORDINAL: U32<BE> = VENDOR_COMMAND_STRONGBOX;
         type TpmvResponse = Response;
     }
 
