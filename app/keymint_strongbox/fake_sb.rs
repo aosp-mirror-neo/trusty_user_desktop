@@ -21,10 +21,6 @@ use alloc::{rc::Rc, vec::Vec};
 use core::{cell::RefCell, fmt};
 use keymint::{CertSignInfo, TrustyKeys, TrustyMonotonicClock, TrustyRng, TrustyRpc};
 use kmr_common::{crypto, km_err, Error, ErrorKind, ErrorLocation};
-use kmr_crypto_boring::{
-    aes::BoringAes, aes_cmac::BoringAesCmac, des::BoringDes, ec::BoringEc, eq::BoringEq,
-    hmac::BoringHmac, rsa::BoringRsa, sha256::BoringSha256,
-};
 use kmr_ta::{HardwareInfo, KeyMintTa, RpcInfo, RpcInfoV3};
 use log::{error, trace};
 use tipc::{
@@ -83,20 +79,7 @@ pub fn start() {
 
     let rng = TrustyRng;
     let clock = TrustyMonotonicClock;
-    let aes = BoringAes;
-    let imp = crypto::Implementation {
-        rng: Box::new(rng),
-        clock: Some(Box::new(clock)),
-        compare: Box::new(BoringEq),
-        aes: Box::new(aes),
-        des: Box::new(BoringDes),
-        hmac: Box::new(BoringHmac),
-        rsa: Box::<BoringRsa>::default(),
-        ec: Box::<BoringEc>::default(),
-        ckdf: Box::new(BoringAesCmac),
-        hkdf: Box::new(BoringHmac),
-        sha256: Box::new(BoringSha256),
-    };
+    let imp = kmr_crypto_boring::implementation(Box::new(rng), Box::new(clock));
 
     let dev = kmr_ta::device::Implementation {
         keys: Box::new(TrustyKeys),
