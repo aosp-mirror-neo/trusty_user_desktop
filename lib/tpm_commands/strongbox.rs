@@ -48,6 +48,31 @@ pub mod generate_ecdsa_p256_keypair {
     }
 }
 
+/// Vendor TPM command representing a strongbox get dice chain request.
+pub mod get_dice_chain {
+    use super::*;
+
+    /// This command has no inputs, so Request is an empty struct.
+    #[derive(Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Request;
+
+    impl TpmvRequest for Request {
+        const TAG: U16<BE> = NO_SESSION_TAG;
+        const COMMAND_CODE: U16<BE> = U16::new(0xA0u16);
+        const ORDINAL: U32<BE> = VENDOR_COMMAND_STRONGBOX;
+        type TpmvResponse = Response;
+    }
+
+    /// Represents a response from a [`Request`]
+    #[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Response {
+        /// A dice chain.
+        pub data: [u8],
+    }
+}
+
 /// Vendor TPM command representing a strongbox get hardware info request.
 pub mod get_hardware_info {
     use super::*;

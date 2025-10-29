@@ -36,6 +36,20 @@ pub fn generate_ecdsa_p256_keypair(client: &Strong<dyn IGsc>) -> Result<Vec<u8>,
     }
 }
 
+pub fn _get_dice_chain(client: &Strong<dyn IGsc>) -> Result<Vec<u8>, Error> {
+    let cmd = TpmRequestMessage::new(get_dice_chain::Request {});
+    let rsp =
+        client.transmit(cmd.as_bytes()).map_err(|_| km_err!(SecureHwCommunicationFailed, ""))?;
+    let rsp = TpmResponseMessage::<get_dice_chain::Response>::ref_from_bytes(&rsp)
+        .map_err(|_| km_err!(SecureHwCommunicationFailed, ""))?;
+    if rsp.header.error_code == 0 {
+        let len = rsp.header.length.get() as usize - core::mem::size_of::<TpmResponseHeader>();
+        Ok(rsp.response.data[..len].to_vec())
+    } else {
+        Err(km_err!(SecureHwCommunicationFailed, "0x{:X}", rsp.header.error_code))
+    }
+}
+
 pub fn get_hardware_info(client: &Strong<dyn IGsc>) -> Result<HardwareInfo, Error> {
     let cmd = TpmRequestMessage::new(get_hardware_info::Request {});
     let rsp =

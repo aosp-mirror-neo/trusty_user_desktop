@@ -238,4 +238,10 @@ mod tests {
         let tpm = GscServiceClient::default().0;
         rkp::generate_ecdsa_p256_keypair(&tpm).unwrap();
     }
+
+    #[test]
+    fn get_dice_chain() {
+        let tpm = GscServiceClient::default().0;
+        rkp::_get_dice_chain(&tpm).unwrap();
+    }
 }
