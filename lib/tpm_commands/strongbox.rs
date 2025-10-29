@@ -18,7 +18,7 @@
 
 use crate::{TpmvRequest, NO_SESSION_TAG};
 use kmr_wire::*;
-use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, BE, U16, U32};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, BE, I32, U16, U32};
 
 /// The ordinal value that is used for all strongbox commands
 const VENDOR_COMMAND_STRONGBOX: U32<BE> = U32::new(0x20000001);
@@ -45,5 +45,44 @@ pub mod generate_ecdsa_p256_keypair {
     pub struct Response {
         /// A public key. The TA may treat this as opaque data to later be passed back to the GSC.
         pub data: [u8],
+    }
+}
+
+/// Vendor TPM command representing a strongbox get hardware info request.
+pub mod get_hardware_info {
+    use super::*;
+
+    /// This command has no inputs, so Request is an empty struct.
+    #[derive(Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Request;
+
+    impl TpmvRequest for Request {
+        const TAG: U16<BE> = NO_SESSION_TAG;
+        const COMMAND_CODE: U16<BE> = U16::new(GetHardwareInfoRequest::CODE as u16);
+        const ORDINAL: U32<BE> = VENDOR_COMMAND_STRONGBOX;
+        type TpmvResponse = Response;
+    }
+
+    /// Represents a response from a [`Request`]
+    #[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Response {
+        /// Stronbox version
+        pub version: I32<BE>,
+        /// Keymint security level (KM_SECURITY_STRONGBOX = 2)
+        pub security_level: U32<BE>,
+        /// Keymint name length (4)
+        pub keymint_name_len: U32<BE>,
+        /// Keymint name (CR50)
+        pub keymint_name: [u8; 4],
+        /// Keymint author length (6)
+        pub keymint_author_len: U32<BE>,
+        /// Keymint author (Google\0\0)
+        pub keymint_author: [u8; 8],
+        /// Timestamp token required (false)
+        pub timestamp_token_required: U32<BE>,
+        /// TODO: remove when firmware removes the extra bytes
+        pub unused: [u8; 7],
     }
 }

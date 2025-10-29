@@ -44,7 +44,7 @@ MODULE_LIBRARY_DEPS += \
 MODULE_RUST_USE_CLIPPY := true
 MODULE_RUST_TESTS := true
 
-KM_USE_FAKE_SB ?= true
+#KM_USE_FAKE_SB ?= true
 
 ifeq (true,$(call TOBOOL,$(KM_USE_FAKE_SB)))
 MODULE_RUSTFLAGS += --cfg 'fake_strongbox'

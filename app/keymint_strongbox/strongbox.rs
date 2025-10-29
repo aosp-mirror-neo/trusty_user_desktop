@@ -64,6 +64,10 @@ impl StrongBox {
                 let _ = rkp::generate_ecdsa_p256_keypair(&self.tpm);
                 error_rsp(ErrorCode::Unimplemented as i32)
             }
+            PerformOpReq::RpcGetHardwareInfo(_) => {
+                let _ = rkp::get_hardware_info(&self.tpm);
+                error_rsp(ErrorCode::Unimplemented as i32)
+            }
             _ => error_rsp(ErrorCode::Unimplemented as i32),
         }
     }

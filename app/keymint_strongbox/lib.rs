@@ -228,8 +228,14 @@ mod tests {
     test::init!();
 
     #[test]
+    fn get_hardware_info() {
+        let tpm = GscServiceClient::default().0;
+        rkp::get_hardware_info(&tpm).unwrap();
+    }
+
+    #[test]
     fn generate_key() {
         let tpm = GscServiceClient::default().0;
-        let _ = rkp::generate_ecdsa_p256_keypair(&tpm);
+        rkp::generate_ecdsa_p256_keypair(&tpm).unwrap();
     }
 }
