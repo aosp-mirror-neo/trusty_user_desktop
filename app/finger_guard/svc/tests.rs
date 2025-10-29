@@ -73,10 +73,10 @@ fn everything_with_a_shared_session() {
         }
         result => assert_ok!(result),
     };
-    let server_public_key_bytes = handshake.serverPublicKey;
+    let server_public_key = crypto::P256Point::import(&handshake.serverPublicKey).unwrap();
 
     // Derive PK from the client side.
-    let pk = assert_ok!(crypto::perform_ecdh(client_private_key, &server_public_key_bytes));
+    let pk = assert_ok!(crypto::perform_ecdh(client_private_key, &server_public_key));
 
     // Check the computed MAC matches the one in the response.
     let hmac = assert_ok!(crypto::compute_hmac!(&pk, &TestBlob(b"tofu")));

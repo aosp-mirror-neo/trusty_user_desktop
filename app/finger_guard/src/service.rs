@@ -433,16 +433,17 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         self.state.init_params.get_or_try_init(|| {
             // Generate a fresh public+private key pair.
             let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
-            let server_public_key_bytes = crypto::ec_public_key_serialization(&server_private_key)
+            let server_public_key = crypto::ec_public_key_serialization(&server_private_key)
                 .wrap_openssl_err("failed to serialize server public key")?;
+            let client_public_key = crypto::P256Point::import(client_public_key_bytes)?;
             // Use our new server key to do a DH exchange with the client public key.
-            let pk = crypto::perform_ecdh(server_private_key, client_public_key_bytes)?;
+            let pk = crypto::perform_ecdh(server_private_key, &client_public_key)?;
             let mac = crypto::compute_hmac!(&pk, &HandshakeMessage)?;
             // Save the newly generated PK along with a new TPM seed out to storage.
             let init_params = InitParams { pk, tpm_seed: crypto::Secret::generate() };
             self.state.trusty.save_init_params(&init_params)?;
             // If we get here we have saved a new handshake, create the response to return.
-            response = Some(aidl::make_init_response(server_public_key_bytes, &mac));
+            response = Some(aidl::make_init_response(&server_public_key, &mac));
             Ok(init_params)
         })?;
         response.ok_or(ServiceError::StateAlreadyExists("init_params"))
@@ -488,10 +489,11 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let nonce = crypto::Nonce::generate();
         // Generate a fresh public+private key pair.
         let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
-        let server_public_key_bytes = crypto::ec_public_key_serialization(&server_private_key)
+        let server_public_key = crypto::ec_public_key_serialization(&server_private_key)
             .wrap_openssl_err("failed to serialize server public key")?;
+        let client_public_key = crypto::P256Point::import(&sdcp_claim.ephemeralPublicKey)?;
         // Use our new server key to do a DH exchange with the client's ephemeral public key.
-        let pk = crypto::perform_ecdh(server_private_key, &sdcp_claim.ephemeralPublicKey)?;
+        let pk = crypto::perform_ecdh(server_private_key, &client_public_key)?;
         let new_sk = crypto::compute_hmac!(&pk, &client_nonce, &nonce, &SdcpContext)?;
         let tpm_seed = crypto::Secret::generate();
         let iv = crypto::Iv::generate();
@@ -504,7 +506,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         .wrap_openssl_err("failed to encrypt tpm_seed")?;
         let client_session = ClientSession { state: Arc::clone(&self.state), sk: new_sk.into() };
         let session_response = aidl::make_sdcp_client_session_response(
-            server_public_key_bytes,
+            &server_public_key,
             &nonce,
             wrapped_tpm_seed,
             &iv,
@@ -826,13 +828,14 @@ mod test {
             crypto::ec_public_key_serialization(&client_private_key).unwrap();
         let sdcp_claim = SdcpClaim {
             nonce: client_nonce_bytes,
-            ephemeralPublicKey: client_public_key_bytes.try_into().unwrap(),
+            ephemeralPublicKey: client_public_key_bytes.into(),
             ..Default::default()
         };
         let client_session_response = service.create_sdcp_client_session(&sdcp_claim).unwrap();
         let server_nonce = crypto::Nonce::import(&client_session_response.nonce).unwrap();
-        let pk = crypto::perform_ecdh(client_private_key, &client_session_response.serverPublicKey)
-            .unwrap();
+        let server_public_key =
+            crypto::P256Point::import(&client_session_response.serverPublicKey).unwrap();
+        let pk = crypto::perform_ecdh(client_private_key, &server_public_key).unwrap();
         let sk = crypto::compute_hmac!(&pk, &client_nonce, &server_nonce, &SdcpContext).unwrap();
 
         // Decrypt the wrapped tpm seed, AEAD ensures the decryption succeeds and outputs only
