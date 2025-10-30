@@ -62,6 +62,12 @@ pub fn start() {
     #[cfg(fake_strongbox)]
     fake_sb::start();
 
+    #[cfg(not(fake_strongbox))]
+    start_impl();
+}
+
+#[allow(dead_code)]
+fn start_impl() {
     let config = trusty_log::TrustyLoggerConfig::default()
         .with_min_level(log::Level::Trace)
         .format(log_formatter);
