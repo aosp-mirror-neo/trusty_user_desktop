@@ -18,7 +18,7 @@
 use crate::crypto::Key;
 use crate::error::{ServiceError, ServiceResult};
 use crate::identifiers::{AuthenticatorId, SecureUserId};
-use crate::service::{InitParams, TrustyEnvironment};
+use crate::service::{InitParams, SdcpParams, TrustyEnvironment};
 use crate::time::{Clock, Instant};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -126,6 +126,12 @@ impl TrustyEnvironment for SimulatedTrusty {
     }
     fn save_init_params(&self, init_params: &InitParams) -> ServiceResult<()> {
         self.save_bytes(init_params, InitParams::FILE_NAME)
+    }
+    fn load_sdcp_params(&self) -> ServiceResult<SdcpParams> {
+        self.load_bytes::<SdcpParams>(SdcpParams::FILE_NAME)
+    }
+    fn save_sdcp_params(&self, sdcp_params: &SdcpParams) -> ServiceResult<()> {
+        self.save_bytes(sdcp_params, SdcpParams::FILE_NAME)
     }
     fn load_authenticator_id(&self, filename: &str) -> ServiceResult<AuthenticatorId> {
         self.load_bytes::<AuthenticatorId>(filename)
