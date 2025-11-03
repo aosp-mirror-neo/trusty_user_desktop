@@ -1,0 +1,6 @@
+{
+        "app_name": "keymint_strongbox_test",
+        "uuid": "a03187ca-d7c2-4702-86b7-8e3859ba88e8",
+        "min_heap": 20480,
+        "min_stack": 20480
+}

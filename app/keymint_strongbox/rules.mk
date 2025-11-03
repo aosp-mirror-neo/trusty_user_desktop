@@ -17,6 +17,8 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
 
+MANIFEST := $(LOCAL_DIR)/manifest.json
+
 MODULE_SRCS += \
 	$(LOCAL_DIR)/lib.rs \
 
@@ -25,6 +27,8 @@ MODULE_CRATE_NAME := keymint_strongbox
 MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,libc) \
 	$(call FIND_CRATE,log) \
+	$(call FIND_CRATE,zerocopy) \
+	frameworks/native/libs/binder/trusty/rust \
 	trusty/user/app/keymint \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/keymint-rust/ta \
@@ -33,7 +37,17 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/trusty-std \
  	trusty/user/base/lib/keymint-rust/boringssl \
+	trusty/user/desktop/interface/gscd \
+	trusty/user/desktop/lib/gsc_svc_client \
+	trusty/user/desktop/lib/tpm_commands \
 
 MODULE_RUST_USE_CLIPPY := true
+MODULE_RUST_TESTS := true
+
+#KM_USE_FAKE_SB ?= true
+
+ifeq (true,$(call TOBOOL,$(KM_USE_FAKE_SB)))
+MODULE_RUSTFLAGS += --cfg 'fake_strongbox'
+endif
 
 include make/library.mk

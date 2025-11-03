@@ -159,13 +159,24 @@ pub mod tipc_channel {
     }
 
     impl KeyMintNonsecureLegacyClient<TipcChannelKeyMintInterface> {
-        /// Create a new `KeyMintNonsecureLegacyClient` given an `ipc_device`
-        /// path, e.g., "VSOCK:200:1".
+        /// Create a new `KeyMintNonsecureLegacyClient` for the TEE KeyMint
+        /// instance given an `ipc_device` path, e.g., "VSOCK:200:1".
         ///
         /// Refer to [`hwsec_trusty_utils::query_trusty_ipc_device`] for
         /// additional information.
         pub fn new_with_ipc_device(ipc_device: &str) -> Result<Self, KeyMintClientError> {
             const KEYMASTER_PORT: &str = "com.android.trusty.keymaster";
+            let connection = trusty::TipcChannel::connect(ipc_device, KEYMASTER_PORT)?;
+            Ok(Self(TipcChannelKeyMintInterface(connection)))
+        }
+
+        /// Create a new `KeyMintNonsecureLegacyClient` for the StrongBox
+        /// KeyMint instance given an `ipc_device` path, e.g., "VSOCK:200:1".
+        ///
+        /// Refer to [`hwsec_trusty_utils::query_trusty_ipc_device`] for
+        /// additional information.
+        pub fn new_strongbox_with_ipc_device(ipc_device: &str) -> Result<Self, KeyMintClientError> {
+            const KEYMASTER_PORT: &str = "com.android.trusty.keymaster.strongbox";
             let connection = trusty::TipcChannel::connect(ipc_device, KEYMASTER_PORT)?;
             Ok(Self(TipcChannelKeyMintInterface(connection)))
         }

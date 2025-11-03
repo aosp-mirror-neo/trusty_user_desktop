@@ -19,15 +19,21 @@
 
 use alloc::{rc::Rc, vec::Vec};
 use core::{cell::RefCell, fmt};
-use keymint::{CertSignInfo, TrustyKeys, TrustyMonotonicClock, TrustyRng, TrustyRpc};
-use kmr_common::{crypto, km_err, Error, ErrorKind, ErrorLocation};
-use kmr_ta::{HardwareInfo, KeyMintTa, RpcInfo, RpcInfoV3};
+use kmr_common::{km_err, Error, ErrorKind, ErrorLocation};
+use kmr_ta::{HardwareInfo, RpcInfo, RpcInfoV3};
 use log::{error, trace};
 use tipc::{
     service_dispatcher, ConnectResult, Deserialize, Handle, Manager, MessageResult, PortCfg,
     Serialize, Serializer, Service, TipcError, Uuid,
 };
 use trusty_std::alloc::TryAllocFrom;
+
+#[cfg(fake_strongbox)]
+mod fake_sb;
+
+mod rkp;
+mod strongbox;
+use strongbox::StrongBox;
 
 /// Port that handles new style keymint messages from non-secure world
 const KM_NS_TIPC_SRV_PORT: &str = "com.android.trusty.keymint.strongbox";
@@ -53,6 +59,15 @@ fn log_formatter(record: &log::Record) -> String {
 }
 
 pub fn start() {
+    #[cfg(fake_strongbox)]
+    fake_sb::start();
+
+    #[cfg(not(fake_strongbox))]
+    start_impl();
+}
+
+#[allow(dead_code)]
+fn start_impl() {
     let config = trusty_log::TrustyLoggerConfig::default()
         .with_min_level(log::Level::Trace)
         .format(log_formatter);
@@ -77,24 +92,7 @@ pub fn start() {
         supported_num_of_keys_in_csr: kmr_wire::rpc::MINIMUM_SUPPORTED_KEYS_IN_CSR,
     };
 
-    let rng = TrustyRng;
-    let clock = TrustyMonotonicClock;
-    let imp = kmr_crypto_boring::implementation(Box::new(rng), Box::new(clock));
-    let dev = kmr_ta::device::Implementation {
-        keys: Box::new(TrustyKeys),
-        sign_info: Some(Box::new(CertSignInfo)),
-        attest_ids: None,
-        sdd_mgr: None,
-        bootloader: Box::new(kmr_ta::device::BootloaderDone),
-        sk_wrapper: None,
-        tup: Box::new(kmr_ta::device::TrustedPresenceUnsupported),
-        legacy_key: None,
-        rpc: Box::new(TrustyRpc::new(&mut TrustyRng)),
-        frp_secret_storage: None,
-        frp_data_storage: None,
-    };
-
-    handle_port_connections(hw_info, RpcInfo::V3(rpc_info_v3), imp, dev)
+    handle_port_connections(hw_info, RpcInfo::V3(rpc_info_v3))
         .expect("handle_port_connections returned an error");
 }
 
@@ -108,14 +106,9 @@ service_dispatcher! {
 }
 
 /// Main loop handler for the KeyMint TA.
-pub fn handle_port_connections(
-    hw_info: HardwareInfo,
-    rpc_info: RpcInfo,
-    imp: crypto::Implementation,
-    dev: kmr_ta::device::Implementation,
-) -> Result<(), Error> {
-    let km_ta = Rc::new(RefCell::new(KeyMintTa::new(hw_info, rpc_info, imp, dev)));
-    let ns_service = KMService::new(Rc::clone(&km_ta));
+pub fn handle_port_connections(_hw_info: HardwareInfo, _rpc_info: RpcInfo) -> Result<(), Error> {
+    let sb_ta = Rc::new(RefCell::new(StrongBox::default()));
+    let ns_service = KMService::new(sb_ta);
 
     let mut dispatcher = KMServiceDispatcher::<3>::new()
         .map_err(|e| km_err!(UnknownError, "could not create multi-service dispatcher: {:?}", e))?;
@@ -145,19 +138,19 @@ pub fn handle_port_connections(
 
 /// TIPC service implementation for communication with the HAL service in Android.
 struct KMService {
-    km_ta: Rc<RefCell<KeyMintTa>>,
+    sb_ta: Rc<RefCell<StrongBox>>,
 }
 
 impl KMService {
     /// Create a service implementation.
-    fn new(km_ta: Rc<RefCell<KeyMintTa>>) -> Self {
-        KMService { km_ta }
+    fn new(sb_ta: Rc<RefCell<StrongBox>>) -> Self {
+        KMService { sb_ta }
     }
 
     /// Process an incoming request message, returning the response as a collection of fragments
     /// that are each small enough to send over the channel.
     fn handle_message(&self, req_data: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
-        let resp = self.km_ta.borrow_mut().process(req_data);
+        let resp = self.sb_ta.borrow_mut().process(req_data);
         kmr_ta::split_rsp(resp.as_slice(), KEYMINT_MAX_MESSAGE_CONTENT_SIZE)
     }
 }
@@ -230,5 +223,25 @@ impl<'s> Serialize<'s> for KMMessage {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use gsc_svc_client::GscServiceClient;
     test::init!();
+
+    #[test]
+    fn get_hardware_info() {
+        let tpm = GscServiceClient::default().0;
+        rkp::get_hardware_info(&tpm).unwrap();
+    }
+
+    #[test]
+    fn generate_key() {
+        let tpm = GscServiceClient::default().0;
+        rkp::generate_ecdsa_p256_keypair(&tpm).unwrap();
+    }
+
+    #[test]
+    fn get_dice_chain() {
+        let tpm = GscServiceClient::default().0;
+        rkp::_get_dice_chain(&tpm).unwrap();
+    }
 }
