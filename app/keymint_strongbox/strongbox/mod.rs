@@ -64,6 +64,10 @@ impl StrongBox {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceBegin(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::DeviceBegin, err),
             },
+            PerformOpReq::DeviceGenerateKey(req) => match rkp::generate_key(req, &self.tpm) {
+                Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceGenerateKey(resp)),
+                Err(err) => op_error_rsp(KeyMintOperation::DeviceGenerateKey, err),
+            },
             PerformOpReq::OperationFinish(req) => {
                 match operations::operation_finish(req, &self.tpm) {
                     Ok(resp) => op_ok_rsp(PerformOpRsp::OperationFinish(resp)),

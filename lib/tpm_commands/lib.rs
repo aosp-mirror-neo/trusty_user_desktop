@@ -31,6 +31,8 @@ const VENDOR_COMMAND_ORDINAL: U32<BE> = U32::new(0x20000000);
 /// The ordinal value that is used for all extension commands
 const EXTENSION_COMMAND_ORDINAL: U32<BE> = U32::new(0xBACCD00A);
 
+//pub(crate) const MAX_PAYLOAD_SIZE: usize = 2048 - core::mem::size_of::<TpmRequestHeader>();
+
 /// A `u32` that is always equal to zero
 #[derive(
     Clone, Copy, Debug, Default, Eq, FromZeros, IntoBytes, Immutable, KnownLayout, PartialEq,

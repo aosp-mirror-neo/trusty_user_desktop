@@ -20,10 +20,12 @@
 
 use crate::{TpmvRequest, TpmvRequestBuild, NO_SESSION_TAG};
 use kmr_common::{km_err_new, Error, ErrorKind};
-use kmr_wire::*;
+use kmr_wire::{keymint::KeyCreationResult, *};
 use zerocopy::{
     FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, BE, I32, I64, LE, U16, U32,
 };
+
+pub mod key_param;
 
 /// This is a rewrite of the copy from kmr_common without alloc.
 macro_rules! km_err {
@@ -326,6 +328,102 @@ pub mod generate_ecdsa_p256_keypair {
             }
 
             Ok(BufferedResponse { key_blob, maced_key_bytes, maced_key })
+        }
+    }
+}
+
+/// Vendor TPM command representing a strongbox generate key request.
+/// Input Buffer (`buf`):
+/// A serialized list of Key parameters(tags).
+/// - [ 4 bytes ] uint32_t tags_len_words: The size of the tag list that
+///   follows, in 32-bit words.
+/// - [ n bytes ] Serialized KeyMint tags. Each tag consists of a 32-bit tag
+///   word followed by an optional, 32-bit aligned payload.
+///
+/// Output Buffer (`buf`):
+/// A KeyCreationResult structure containing the key blob and an empty
+/// certificate chain.
+/// - [ 4 bytes ] uint32_t key_blob_total_words: Total size of the key blob
+///   and characteristics that follow, in 32-bit words.
+/// - [ n bytes ] Key blob, containing HW and SW enforced KeyCharacteristics.
+///   Note: that key blob include KeyCharacteristics as its part, but in AIDL
+///   KeyCharacteristics are returned separately as key blob format is opaque.
+pub mod generate_key {
+    use super::*;
+
+    /// This command has no inputs, so Request is an empty struct.
+    #[derive(Debug, Eq, IntoBytes, FromBytes, KnownLayout, Immutable, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Request {
+        /// The size of the tag list that follows, in 32-bit words.
+        pub tags_len_words: U32LE,
+        /// The trailing bytes
+        pub suffix: [u8],
+    }
+
+    impl TpmvRequestBuild for Request {
+        type BuildParams = GenerateKeyRequest;
+
+        type Err = Error;
+
+        fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
+            let static_size = size_of::<U32LE>();
+            let attestation_key_size =
+                params.attestation_key.as_ref().map_or(0, |a| a.key_blob.len());
+            static_size
+                .checked_add(key_param::expected_size(&params.key_params))
+                .ok_or(km_err!(EncodingError, ""))?
+                .checked_add(attestation_key_size)
+                .ok_or(km_err!(EncodingError, ""))?
+                .try_into()
+                .map_err(|_| km_err!(EncodingError, ""))
+        }
+
+        fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err> {
+            self.tags_len_words = U32LE::new(
+                (key_param::expected_size(&params.key_params) / 4)
+                    .try_into()
+                    .map_err(|_| km_err!(EncodingError, ""))?,
+            );
+
+            let remainder = key_param::serialize_key_params(&mut self.suffix, &params.key_params);
+            if let Some(attestation_key) = params.attestation_key {
+                if remainder.len() != attestation_key.key_blob.len() {
+                    return Err(km_err!(EncodingError, ""));
+                }
+                remainder.copy_from_slice(&attestation_key.key_blob);
+            } else if !remainder.is_empty() {
+                return Err(km_err!(EncodingError, ""));
+            }
+
+            Ok(())
+        }
+    }
+
+    impl_tpmv_request!(GenerateKeyRequest);
+
+    /// Represents a response from a [`Request`]
+    #[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Response {
+        /// Number of 4-byte words in the key blob.
+        pub key_blob_words: U32LE,
+        /// suffix
+        pub key_blob: [u8],
+    }
+
+    impl TryFrom<&mut Response> for kmr_wire::GenerateKeyResponse {
+        type Error = Error;
+
+        /// Convert a response into a kmr_wire::GenerateEcdsaP256KeyPairResponse.
+        fn try_from(response: &mut Response) -> Result<kmr_wire::GenerateKeyResponse, Error> {
+            Ok(kmr_wire::GenerateKeyResponse {
+                ret: KeyCreationResult {
+                    key_blob: response.key_blob.to_vec(),
+                    key_characteristics: Vec::new(),
+                    certificate_chain: Vec::new(),
+                },
+            })
         }
     }
 }

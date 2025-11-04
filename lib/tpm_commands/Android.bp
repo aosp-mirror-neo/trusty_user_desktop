@@ -17,6 +17,7 @@ rust_defaults {
     rustlibs: [
         "libkmr_common",
         "libkmr_wire",
+        "liblog_rust",
         "libopen_enum",
         "libthiserror",
         "libzerocopy",
@@ -28,11 +29,12 @@ rust_defaults {
 rust_library {
     name: "libdesktop_hwsec_tpm_commands",
     crate_name: "desktop_hwsec_tpm_commands",
+    host_supported: true,
     srcs: ["lib.rs"],
     defaults: ["libdesktop_hwsec_tpm_commands_defaults"],
 }
 
-rust_test {
+rust_test_host {
     name: "libdesktop_hwsec_tpm_commands_test",
     crate_name: "libdesktop_hwsec_tpm_commands_test",
     srcs: ["lib.rs"],

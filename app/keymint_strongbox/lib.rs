@@ -304,6 +304,25 @@ mod tests {
     }
 
     #[test]
+    fn generate_key() {
+        let key_params = vec![
+            KeyParam::Algorithm(Algorithm::Ec),
+            KeyParam::KeySize(KeySizeInBits(256)),
+            KeyParam::Purpose(KeyPurpose::Sign),
+            KeyParam::Digest(Digest::Sha256),
+            KeyParam::AllowWhileOnBody,
+            KeyParam::UserId(0xF00),
+            KeyParam::ApplicationId(vec![0xAA, 0xBB, 0xCC, 0xDD]),
+            KeyParam::ApplicationData(vec![0x11, 0x22, 0x33, 0x44]),
+        ];
+        let tpm = GscServiceClient::default().0;
+        assert_matches!(
+            rkp::generate_key(GenerateKeyRequest { key_params, attestation_key: None }, &tpm),
+            Ok(_)
+        );
+    }
+
+    #[test]
     fn generate_keypair() {
         let tpm = GscServiceClient::default().0;
         assert_matches!(

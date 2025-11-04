@@ -17,10 +17,11 @@
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
 use binder::Strong;
 use kmr_common::{km_err, Error};
-use kmr_wire::rpc::{EekCurve, HardwareInfo, MINIMUM_SUPPORTED_KEYS_IN_CSR};
 use kmr_wire::{
+    rpc::{EekCurve, HardwareInfo, MINIMUM_SUPPORTED_KEYS_IN_CSR},
     GenerateCertificateRequestV2Request, GenerateCertificateRequestV2Response,
-    GenerateEcdsaP256KeyPairRequest, GenerateEcdsaP256KeyPairResponse,
+    GenerateEcdsaP256KeyPairRequest, GenerateEcdsaP256KeyPairResponse, GenerateKeyRequest,
+    GenerateKeyResponse,
 };
 use tpm_commands::strongbox::*;
 use tpm_commands::{TpmRequestMessage, TpmResponseHeader, TpmResponseMessage};
@@ -57,6 +58,15 @@ pub fn generate_ecdsa_p256_keypair(
         GenerateEcdsaP256KeyPairRequest,
         GenerateEcdsaP256KeyPairResponse,
     >(request, client)
+}
+
+pub fn generate_key(
+    request: GenerateKeyRequest,
+    client: &Strong<dyn IGsc>,
+) -> Result<GenerateKeyResponse, Error> {
+    do_rpc::<generate_key::Request, generate_key::Response, GenerateKeyRequest, GenerateKeyResponse>(
+        request, client,
+    )
 }
 
 pub fn _get_dice_chain(client: &Strong<dyn IGsc>) -> Result<Vec<u8>, Error> {
