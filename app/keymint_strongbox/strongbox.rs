@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::rkp;
+use crate::{operations, rkp};
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
 use binder::Strong;
 use gsc_svc_client::GscServiceClient;
@@ -60,6 +60,22 @@ impl StrongBox {
     }
     fn process_req(&mut self, req: PerformOpReq) -> PerformOpResponse {
         match req {
+            PerformOpReq::DeviceBegin(req) => match operations::device_begin(req, &self.tpm) {
+                Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceBegin(resp)),
+                Err(err) => op_error_rsp(KeyMintOperation::DeviceBegin, err),
+            },
+            PerformOpReq::OperationFinish(req) => {
+                match operations::operation_finish(req, &self.tpm) {
+                    Ok(resp) => op_ok_rsp(PerformOpRsp::OperationFinish(resp)),
+                    Err(err) => op_error_rsp(KeyMintOperation::OperationFinish, err),
+                }
+            }
+            PerformOpReq::OperationUpdate(req) => {
+                match operations::operation_update(req, &self.tpm) {
+                    Ok(resp) => op_ok_rsp(PerformOpRsp::OperationUpdate(resp)),
+                    Err(err) => op_error_rsp(KeyMintOperation::OperationUpdate, err),
+                }
+            }
             PerformOpReq::RpcGenerateEcdsaP256KeyPair(_) => {
                 let _ = rkp::generate_ecdsa_p256_keypair(&self.tpm);
                 error_rsp(ErrorCode::Unimplemented as i32)
@@ -73,8 +89,14 @@ impl StrongBox {
     }
 }
 
+/// Create an OK response structure with the given inner response message.
+fn op_ok_rsp(rsp: PerformOpRsp) -> PerformOpResponse {
+    // Zero is OK in any context.
+    PerformOpResponse { error_code: 0, rsp: Some(rsp) }
+}
+
 /// Create a response structure with the given error.
-fn _op_error_rsp(op: KeyMintOperation, err: Error) -> PerformOpResponse {
+fn op_error_rsp(op: KeyMintOperation, err: Error) -> PerformOpResponse {
     warn!("failing {op:?} request with error {err:?}");
     if kmr_wire::is_rpc_operation(op) {
         // The IRemotelyProvisionedComponent HAL uses its own error space.
