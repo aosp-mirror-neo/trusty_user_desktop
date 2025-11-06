@@ -25,7 +25,7 @@ use android_desktop_security_finger_guard::aidl::android::desktop::security::fin
     AuthenticationResult::AuthenticationResult, ClientSessionResponse::ClientSessionResponse,
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, InitResponse::InitResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
-    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse,
+    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SdcpClaim::SdcpClaim,
     SdcpClientSessionResponse::SdcpClientSessionResponse,
 };
 use openssl::bn::{BigNum, BigNumContext};
@@ -107,6 +107,9 @@ impl Nonce {
     }
 }
 impl_export!(Nonce(self) => ClientSessionResponse.nonce as Vec<u8> {
+    self.bytes.to_vec()
+});
+impl_export!(Nonce(self) => SdcpClaim.nonce as Vec<u8> {
     self.bytes.to_vec()
 });
 impl_export!(Nonce(self) => SdcpClientSessionResponse.nonce as Vec<u8> {
@@ -213,6 +216,15 @@ impl_export!(P256Point(self) => InitResponse.serverPublicKey as Vec<u8> {
 impl_export!(P256Point(self) => SdcpClientSessionResponse.serverPublicKey as Vec<u8> {
     self.bytes.to_vec()
 });
+impl_export!(P256Point(self) => SdcpClaim.modelPublicKey as [u8; 65] {
+    self.bytes
+});
+impl_export!(P256Point(self) => SdcpClaim.devicePublicKey as [u8; 65] {
+    self.bytes
+});
+impl_export!(P256Point(self) => SdcpClaim.ephemeralPublicKey as [u8; 65] {
+    self.bytes
+});
 
 // Define a type for the raw representation of a ECDSA P256 signature.
 blob_newtype!(P256Sig, 64);
@@ -252,6 +264,16 @@ impl P256SigVerifier for EcKey<Public> {
         ecdsa_sig.verify(&dgst.bytes, self).wrap_openssl_err("failed to verify a ECDSA signature")
     }
 }
+
+impl_export!(P256Sig(self) => SdcpClaim.modelKeySignature as [u8; 64] {
+    self.bytes
+});
+impl_export!(P256Sig(self) => SdcpClaim.deviceKeySignature as [u8; 64] {
+    self.bytes
+});
+impl_export!(P256Sig(self) => SdcpClaim.firmwareSignature as [u8; 64] {
+    self.bytes
+});
 
 /// The type of EC used by finger_guard.
 pub const NIST_P256_CURVE_NAME: Nid = Nid::X9_62_PRIME256V1;
@@ -511,6 +533,10 @@ impl Hashable for HashValue {
         add_bytes(&self.bytes)
     }
 }
+
+impl_export!(HashValue(self) => SdcpClaim.firmwareHash as [u8; 32] {
+    self.bytes
+});
 
 /// Generator which can consume bytes and produce a Sha256.
 pub struct HashGenerator {

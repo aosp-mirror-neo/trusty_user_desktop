@@ -17,12 +17,13 @@
 //! Implementation of the IFingerGuard service interface.
 
 use crate::aidl;
-use crate::crypto::{self, HmacSignable, MapOpenSslErrExt};
+use crate::crypto::{self, Hashable, HmacSignable, MapOpenSslErrExt, P256SigVerifier};
 use crate::error::{ServiceError, ServiceResult};
 use crate::hat::{AuthenticatorType, UnsignedHat, EMPTY_HAT};
 use crate::identifiers::{AuthenticatorId, SecureUserId, SensorStateIndex};
 use crate::lockout::{self, AuthRateLimiter, MapLockoutStatusErrExt};
 use crate::rng;
+use crate::sdcp_pki;
 use crate::time::{Clock, Instant};
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
     AuthenticationResult::AuthenticationResult, ClientSessionResponse::ClientSessionResponse,
@@ -414,6 +415,14 @@ impl HmacSignable for HandshakeMessage {
     }
 }
 
+// The 2-byte header for generating the hash which the firmware signature in the sdcp claim is signed on.
+struct SdcpHashHeader;
+impl Hashable for SdcpHashHeader {
+    fn update(&self, mut add_bytes: impl FnMut(&[u8])) {
+        add_bytes(&[0xc0, 0x01])
+    }
+}
+
 /// The context string appended to nonces during SDCP session key derivation.
 struct SdcpContext;
 impl HmacSignable for SdcpContext {
@@ -509,10 +518,31 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         &self,
         sdcp_claim: &SdcpClaim,
     ) -> ServiceResult<SdcpClientSessionResponse> {
-        // TODO(b/451630059): validate the claim, including the signature chain and firmware hash.
+        // TODO(b/451630059): consider to pin firmware hash in SdcpParams so we don't need to
+        // maintain an allowlist of possible firmware hash values.
         if self.state.init_params.get().is_some() {
             return Err(ServiceError::StateAlreadyExists("init_params"));
         }
+        let model_key = crypto::P256Point::import(&sdcp_claim.modelPublicKey)?;
+        let model_key_sig = crypto::P256Sig::import(&sdcp_claim.modelKeySignature)?;
+        if !sdcp_pki::verify_public_key_signature(&model_key, &model_key_sig)? {
+            return Err(ServiceError::InvalidArg("sdcp model key signature"));
+        }
+        let device_key = crypto::P256Point::import(&sdcp_claim.devicePublicKey)?;
+        let device_key_sig = crypto::P256Sig::import(&sdcp_claim.deviceKeySignature)?;
+        if !model_key.verify(&crypto::compute_sha256!(&device_key), &device_key_sig)? {
+            return Err(ServiceError::InvalidArg("sdcp device key signature"));
+        }
+        let firmware_hash = crypto::HashValue::import(&sdcp_claim.firmwareHash)?;
+        let ephemeral_public_key = crypto::P256Point::import(&sdcp_claim.ephemeralPublicKey)?;
+        let firmware_sig = crypto::P256Sig::import(&sdcp_claim.firmwareSignature)?;
+        if !device_key.verify(
+            &crypto::compute_sha256!(&SdcpHashHeader, &firmware_hash, &ephemeral_public_key),
+            &firmware_sig,
+        )? {
+            return Err(ServiceError::InvalidArg("sdcp firmware signature"));
+        }
+
         let sdcp_params = self.state.sdcp_params.get_or_try_init(|| {
             let device_public_key = crypto::P256Point::import(&sdcp_claim.devicePublicKey)?;
             // Save the device public key along with a new TPM seed out to storage.
@@ -531,9 +561,8 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
         let server_public_key = crypto::ec_public_key_serialization(&server_private_key)
             .wrap_openssl_err("failed to serialize server public key")?;
-        let client_public_key = crypto::P256Point::import(&sdcp_claim.ephemeralPublicKey)?;
         // Use our new server key to do a DH exchange with the client's ephemeral public key.
-        let pk = crypto::perform_ecdh(server_private_key, &client_public_key)?;
+        let pk = crypto::perform_ecdh(server_private_key, &ephemeral_public_key)?;
         let new_sk = crypto::compute_hmac!(&pk, &client_nonce, &nonce, &SdcpContext)?;
         let iv = crypto::Iv::generate();
         let (wrapped_tpm_seed, tag) = crypto::encrypt_aes256_gcm(
@@ -781,7 +810,8 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
 
 #[cfg(test)]
 mod test {
-    use super::{FingerGuardService, SdcpContext};
+    use super::{FingerGuardService, SdcpContext, SdcpHashHeader};
+    use crate::aidl;
     use crate::crypto;
     use crate::error::ServiceResult;
     use crate::fake::{SimulatedClock, SimulatedTrusty};
@@ -797,9 +827,79 @@ mod test {
         SensorUserPair::SensorUserPair,
     };
     use binder::Strong;
+    use openssl::ec::EcKey;
+    use openssl::pkey::Private;
     use std::array;
     use std::time::Duration;
     use zerocopy::{FromBytes, IntoBytes};
+
+    struct SdcpClientState {
+        model_public_key: crypto::P256Point,
+        model_key_sig: crypto::P256Sig,
+        device_private_key: EcKey<Private>,
+        device_public_key: crypto::P256Point,
+        device_key_sig: crypto::P256Sig,
+        firmware_hash: crypto::HashValue,
+    }
+
+    impl SdcpClientState {
+        fn new() -> Self {
+            let model_private_key = crypto::ec_keygen().unwrap();
+            let model_public_key = crypto::ec_public_key_serialization(&model_private_key).unwrap();
+            //  Self-signed model key is accepted for unit tests.
+            let model_key_sig =
+                crypto::ecdsa_sign(&crypto::compute_sha256!(&model_public_key), &model_private_key)
+                    .unwrap();
+            let device_private_key = crypto::ec_keygen().unwrap();
+            let device_public_key =
+                crypto::ec_public_key_serialization(&device_private_key).unwrap();
+            let device_key_sig = crypto::ecdsa_sign(
+                &crypto::compute_sha256!(&device_public_key),
+                &model_private_key,
+            )
+            .unwrap();
+            let firmware_hash_bytes = rng::generate_random_vec::<32>();
+            let firmware_hash = crypto::HashValue::import(&firmware_hash_bytes).unwrap();
+            Self {
+                model_public_key,
+                model_key_sig,
+                device_private_key,
+                device_public_key,
+                device_key_sig,
+                firmware_hash,
+            }
+        }
+        // Generate a SdcpClaim and the ephemeral private key for session establishment.
+        fn generate_sdcp_claim(&self) -> (SdcpClaim, EcKey<Private>) {
+            let ephemeral_private_key = crypto::ec_keygen().unwrap();
+            let ephemeral_public_key =
+                crypto::ec_public_key_serialization(&ephemeral_private_key).unwrap();
+            let client_nonce_bytes = rng::generate_random_vec::<32>();
+            let client_nonce = crypto::Nonce::import(&client_nonce_bytes).unwrap();
+            let firmware_sig = crypto::ecdsa_sign(
+                &crypto::compute_sha256!(
+                    &SdcpHashHeader,
+                    &self.firmware_hash,
+                    &ephemeral_public_key
+                ),
+                &self.device_private_key,
+            )
+            .unwrap();
+            (
+                aidl::make_sdcp_claim(
+                    &client_nonce,
+                    &self.model_public_key,
+                    &self.model_key_sig,
+                    &self.device_public_key,
+                    &self.device_key_sig,
+                    &ephemeral_public_key,
+                    &self.firmware_hash,
+                    &firmware_sig,
+                ),
+                ephemeral_private_key,
+            )
+        }
+    }
 
     // Setup a service with a random auth_token_key and carried out a simulated client
     // session establishment with the service, returns the simulated clock, the service, the auth
@@ -846,13 +946,12 @@ mod test {
         (clock, service, auth_token_key, client_session_response.clientSession.unwrap(), sk)
     }
 
-    fn service_sdcp_session_setup() -> (
-        &'static SimulatedClock,
-        FingerGuardService<SimulatedTrusty>,
-        crypto::Key,
-        Strong<dyn IClientSession>,
-        crypto::Key,
-    ) {
+    // Setup a service with a random auth_token_key and carried out the first SDCP
+    // session establishment with the service, returns the simulated clock, the service, the auth
+    // token key, and the client state for subsequent SDCP session creations.
+    fn service_sdcp_session_setup(
+    ) -> (&'static SimulatedClock, FingerGuardService<SimulatedTrusty>, crypto::Key, SdcpClientState)
+    {
         let auth_token_key_bytes = rng::generate_random_vec::<32>();
         let auth_token_key = crypto::Key::read_from_bytes(&auth_token_key_bytes).unwrap();
         let trusty = SimulatedTrusty::new();
@@ -860,20 +959,10 @@ mod test {
         let clock = trusty.simulated_clock();
         let service = FingerGuardService::new(trusty);
 
-        let client_nonce_bytes = rng::generate_random_vec::<32>();
-        let client_nonce = crypto::Nonce::import(&client_nonce_bytes).unwrap();
-        let device_private_key = crypto::ec_keygen().unwrap();
-        let device_public_key = crypto::ec_public_key_serialization(&device_private_key).unwrap();
-        let ephemeral_private_key = crypto::ec_keygen().unwrap();
-        let ephemeral_public_key =
-            crypto::ec_public_key_serialization(&ephemeral_private_key).unwrap();
-        let sdcp_claim = SdcpClaim {
-            nonce: client_nonce_bytes,
-            devicePublicKey: device_public_key.into(),
-            ephemeralPublicKey: ephemeral_public_key.into(),
-            ..Default::default()
-        };
+        let sdcp_client_state = SdcpClientState::new();
+        let (sdcp_claim, ephemeral_private_key) = sdcp_client_state.generate_sdcp_claim();
         let client_session_response = service.create_sdcp_client_session(&sdcp_claim).unwrap();
+        let client_nonce = crypto::Nonce::import(&sdcp_claim.nonce).unwrap();
         let server_nonce = crypto::Nonce::import(&client_session_response.nonce).unwrap();
         let server_public_key =
             crypto::P256Point::import(&client_session_response.serverPublicKey).unwrap();
@@ -889,10 +978,7 @@ mod test {
         let aad = b"tpm_seed";
         let _ =
             crypto::decrypt_aes256_gcm(&sk, &iv, aad, encrypted_tpm_seed.as_slice(), &tag).unwrap();
-
-        // Convert the HMAC into a key.
-        let sk = crypto::Key::from(sk);
-        (clock, service, auth_token_key, client_session_response.clientSession.unwrap(), sk)
+        (clock, service, auth_token_key, sdcp_client_state)
     }
 
     // Struct used in tests to allow arbitrary blobs to be supplied to the HMAC generator.
@@ -1542,8 +1628,39 @@ mod test {
     }
 
     #[test]
+    fn test_sdcp_session_creation() {
+        let (_, service, _, sdcp_client_state) = service_sdcp_session_setup();
+        let (sdcp_claim, _) = sdcp_client_state.generate_sdcp_claim();
+        assert!(service.create_sdcp_client_session(&sdcp_claim).is_ok());
+    }
+
+    #[test]
+    fn test_sdcp_session_fail_with_bad_model_key_sig() {
+        let (_, service, _, sdcp_client_state) = service_sdcp_session_setup();
+        let (mut sdcp_claim, _) = sdcp_client_state.generate_sdcp_claim();
+        sdcp_claim.modelKeySignature[0] ^= 0xFF;
+        assert!(service.create_sdcp_client_session(&sdcp_claim).is_err());
+    }
+
+    #[test]
+    fn test_sdcp_session_fail_with_bad_device_key_sig() {
+        let (_, service, _, sdcp_client_state) = service_sdcp_session_setup();
+        let (mut sdcp_claim, _) = sdcp_client_state.generate_sdcp_claim();
+        sdcp_claim.deviceKeySignature[0] ^= 0xFF;
+        assert!(service.create_sdcp_client_session(&sdcp_claim).is_err());
+    }
+
+    #[test]
+    fn test_sdcp_session_fail_with_bad_firmware_sig() {
+        let (_, service, _, sdcp_client_state) = service_sdcp_session_setup();
+        let (mut sdcp_claim, _) = sdcp_client_state.generate_sdcp_claim();
+        sdcp_claim.firmwareSignature[0] ^= 0xFF;
+        assert!(service.create_sdcp_client_session(&sdcp_claim).is_err());
+    }
+
+    #[test]
     fn test_sdcp_session_stickiness() {
-        let (_, service, _, _, _) = service_sdcp_session_setup();
+        let (_, service, _, _) = service_sdcp_session_setup();
         // Try going through non-SDCP session creation.
         let device_private_key = crypto::ec_keygen().unwrap();
         let device_public_key = crypto::ec_public_key_serialization(&device_private_key).unwrap();
@@ -1557,32 +1674,18 @@ mod test {
     fn test_non_sdcp_session_stickiness() {
         let (_, service, _, _, _) = service_setup();
         // Try going through SDCP session creation while a non-SDCP session has been created.
-        let device_private_key = crypto::ec_keygen().unwrap();
-        let device_public_key = crypto::ec_public_key_serialization(&device_private_key).unwrap();
-        let client_nonce_bytes = rng::generate_random_vec::<32>();
-        //TODO(b/444220481): construct a proper claim so the session creation failure can only be
-        //attributed to the session stickiness.
-        let sdcp_claim = SdcpClaim {
-            nonce: client_nonce_bytes,
-            devicePublicKey: device_public_key.into(),
-            ..Default::default()
-        };
+        let sdcp_client_state = SdcpClientState::new();
+        let (sdcp_claim, _) = sdcp_client_state.generate_sdcp_claim();
         assert!(service.create_sdcp_client_session(&sdcp_claim).is_err());
     }
 
     #[test]
     fn test_sdcp_session_device_key_pinning() {
-        let (_, service, _, _, _) = service_sdcp_session_setup();
-        let device_private_key = crypto::ec_keygen().unwrap();
-        let device_public_key = crypto::ec_public_key_serialization(&device_private_key).unwrap();
-        let client_nonce_bytes = rng::generate_random_vec::<32>();
-        //TODO(b/444220481): construct a proper claim so the session creation failure can only be
-        //attributed to device key pinning.
-        let sdcp_claim = SdcpClaim {
-            nonce: client_nonce_bytes,
-            devicePublicKey: device_public_key.into(),
-            ..Default::default()
-        };
+        let (_, service, _, _) = service_sdcp_session_setup();
+        // Create a new sdcp client with different model key and device key.
+        // Its SDCP claims will be rejected due to device key pinning.
+        let sdcp_client_state = SdcpClientState::new();
+        let (sdcp_claim, _) = sdcp_client_state.generate_sdcp_claim();
         assert!(service.create_sdcp_client_session(&sdcp_claim).is_err());
     }
 }

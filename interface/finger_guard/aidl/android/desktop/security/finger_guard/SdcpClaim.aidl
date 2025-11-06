@@ -57,9 +57,9 @@ parcelable SdcpClaim {
     byte[65] ephemeralPublicKey;
 
     /**
-     * Hash of RO firmware, h_f.
+     * SHA256 hash of RO firmware, h_f.
      */
-    byte[] firmwareHash;
+    byte[32] firmwareHash;
 
     /**
      * 64-byte ECDSA signature produced by per-device private key on firmwareHash

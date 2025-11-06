@@ -19,7 +19,7 @@
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
     ClientSessionResponse::ClientSessionResponse, IClientSession::BnClientSession,
     IClientSession::IClientSession, InitResponse::InitResponse,
-    PrepareAuthSessionResponse::PrepareAuthSessionResponse,
+    PrepareAuthSessionResponse::PrepareAuthSessionResponse, SdcpClaim::SdcpClaim,
     SdcpClientSessionResponse::SdcpClientSessionResponse,
 };
 use binder::BinderFeatures;
@@ -115,6 +115,30 @@ pub fn make_client_session_response(
         tag: tag.export(),
         clientSession: client_session
             .map(|s| BnClientSession::new_binder(s, BinderFeatures::default())),
+    }
+}
+
+/// Construct a SdcpClaim message.
+#[allow(clippy::too_many_arguments)]
+pub fn make_sdcp_claim(
+    nonce: ref_to_impl_export!(SdcpClaim.nonce as Vec<u8>),
+    model_public_key: ref_to_impl_export!(SdcpClaim.modelPublicKey as [u8; 65]),
+    model_key_sig: ref_to_impl_export!(SdcpClaim.modelKeySignature as [u8; 64]),
+    device_public_key: ref_to_impl_export!(SdcpClaim.devicePublicKey as [u8; 65]),
+    device_key_sig: ref_to_impl_export!(SdcpClaim.deviceKeySignature as [u8; 64]),
+    ephemeral_public_key: ref_to_impl_export!(SdcpClaim.ephemeralPublicKey as [u8; 65]),
+    firmware_hash: ref_to_impl_export!(SdcpClaim.firmwareHash as [u8; 32]),
+    firmware_sig: ref_to_impl_export!(SdcpClaim.firmwareSignature as [u8; 64]),
+) -> SdcpClaim {
+    SdcpClaim {
+        nonce: nonce.export(),
+        modelPublicKey: model_public_key.export(),
+        modelKeySignature: model_key_sig.export(),
+        devicePublicKey: device_public_key.export(),
+        deviceKeySignature: device_key_sig.export(),
+        ephemeralPublicKey: ephemeral_public_key.export(),
+        firmwareHash: firmware_hash.export(),
+        firmwareSignature: firmware_sig.export(),
     }
 }
 
