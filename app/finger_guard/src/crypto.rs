@@ -197,6 +197,16 @@ impl Hashable for P256Point {
     }
 }
 
+impl P256SigVerifier for P256Point {
+    fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool> {
+        let ecdsa_sig = sig.to_ecdsa_sig()?;
+        let ec_key = self.to_ec_key()?;
+        ecdsa_sig
+            .verify(&dgst.bytes, &ec_key)
+            .wrap_openssl_err("failed to verify a ECDSA signature")
+    }
+}
+
 impl_export!(P256Point(self) => InitResponse.serverPublicKey as Vec<u8> {
     self.bytes.to_vec()
 });
@@ -228,14 +238,18 @@ impl P256Sig {
         .wrap_openssl_err("failed to convert into a EcdsaSig")?;
         Ok(sig)
     }
+}
 
-    /// Verify self with the hash value in `dgst` using the EC public key in P256Point format.
-    pub fn verify(&self, dgst: &HashValue, public_key: &P256Point) -> ServiceResult<bool> {
-        let ecdsa_sig = &self.to_ecdsa_sig()?;
-        let ec_key = public_key.to_ec_key()?;
-        ecdsa_sig
-            .verify(&dgst.bytes, &ec_key)
-            .wrap_openssl_err("failed to verify a ECDSA signature")
+/// Trait which types can implement to verify a P256Sig.
+pub trait P256SigVerifier {
+    /// Verify the P256Sig signature `sig` on the message hash `dgst`, with Self providing a ec public key.
+    fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool>;
+}
+
+impl P256SigVerifier for EcKey<Public> {
+    fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool> {
+        let ecdsa_sig = sig.to_ecdsa_sig()?;
+        ecdsa_sig.verify(&dgst.bytes, self).wrap_openssl_err("failed to verify a ECDSA signature")
     }
 }
 
@@ -537,7 +551,7 @@ impl Default for HashGenerator {
 macro_rules! _compute_sha256 {
     ($($hashable:expr),*) => {
         {
-            let mut generator = HashGenerator::new();
+            let mut generator = $crate::crypto::HashGenerator::new();
             $(generator.update($hashable);)*
             generator.finish()
         }
@@ -565,8 +579,8 @@ pub fn sensor_session_message_hmac(
 mod test {
     use super::{
         compute_hmac, compute_sha256, decrypt_aes256_gcm, ec_keygen, ec_public_key_serialization,
-        encrypt_aes256_gcm, perform_ecdh, Aes256Tag, HashGenerator, Hmac, HmacGenerator,
-        HmacSignable, Iv, Key, P256Point, P256Sig, Secret,
+        encrypt_aes256_gcm, perform_ecdh, Aes256Tag, Hmac, HmacGenerator, HmacSignable, Iv, Key,
+        P256Point, P256Sig, P256SigVerifier, Secret,
     };
     use crate::error::ServiceResult;
     use std::array;
@@ -765,9 +779,11 @@ mod test {
             0x57, 0x76, 0x47, 0x10, 0x67, 0xe0, 0xff, 0xa6,
         ];
         let p256_sig = P256Sig::import(&sig).unwrap();
-        let ksk_key = P256Point::import(&ksk_public_key_bytes).unwrap();
+        let ksk_point = P256Point::import(&ksk_public_key_bytes).unwrap();
+        let ksk_key = ksk_point.to_ec_key().unwrap();
         let model_key = P256Point::import(&model_key_bytes).unwrap();
         let dgst = compute_sha256!(&model_key);
-        assert!(p256_sig.verify(&dgst, &ksk_key).unwrap());
+        assert!(ksk_point.verify(&dgst, &p256_sig).unwrap());
+        assert!(ksk_key.verify(&dgst, &p256_sig).unwrap());
     }
 }
