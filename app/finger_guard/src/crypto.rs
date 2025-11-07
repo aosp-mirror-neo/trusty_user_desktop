@@ -183,14 +183,14 @@ impl_blob_export!(P256Point(self) => SdcpClaim.modelPublicKey as [u8]);
 impl_blob_export!(P256Point(self) => SdcpClaim.devicePublicKey as [u8]);
 impl_blob_export!(P256Point(self) => SdcpClaim.ephemeralPublicKey as [u8]);
 
-impl P256Point {
-    /// Convert to a created `EcKey<Public>`
-    pub fn to_ec_key(&self) -> ServiceResult<EcKey<Public>> {
+impl TryFrom<&P256Point> for EcKey<Public> {
+    type Error = ServiceError;
+    fn try_from(value: &P256Point) -> ServiceResult<Self> {
         let ec_key = (|| {
             let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
             let mut ctx = BigNumContext::new()?;
-            let ec_point = EcPoint::from_bytes(&group, &self.bytes, &mut ctx)?;
-            let public_key: EcKey<Public> = EcKey::from_public_key(&group, &ec_point)?;
+            let ec_point = EcPoint::from_bytes(&group, &value.bytes, &mut ctx)?;
+            let public_key = EcKey::from_public_key(&group, &ec_point)?;
             Ok(public_key)
         })()
         .wrap_openssl_err("failed to convert into a EcKey public key")?;
@@ -207,8 +207,8 @@ impl From<P256Point> for [u8; 65] {
 
 impl P256SigVerifier for P256Point {
     fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool> {
-        let ecdsa_sig = sig.to_ecdsa_sig()?;
-        let ec_key = self.to_ec_key()?;
+        let ecdsa_sig = EcdsaSig::try_from(sig)?;
+        let ec_key = EcKey::try_from(self)?;
         ecdsa_sig
             .verify(&dgst.bytes, &ec_key)
             .wrap_openssl_err("failed to verify a ECDSA signature")
@@ -221,12 +221,12 @@ impl_blob_export!(P256Sig(self) => SdcpClaim.modelKeySignature as [u8]);
 impl_blob_export!(P256Sig(self) => SdcpClaim.deviceKeySignature as [u8]);
 impl_blob_export!(P256Sig(self) => SdcpClaim.firmwareSignature as [u8]);
 
-impl P256Sig {
-    /// Convert to a created EcdsaSig.
-    pub fn to_ecdsa_sig(&self) -> ServiceResult<EcdsaSig> {
+impl TryFrom<&P256Sig> for EcdsaSig {
+    type Error = ServiceError;
+    fn try_from(value: &P256Sig) -> ServiceResult<Self> {
         let sig = (|| {
-            let r = BigNum::from_slice(&self.bytes[0..32])?;
-            let s = BigNum::from_slice(&self.bytes[32..64])?;
+            let r = BigNum::from_slice(&value.bytes[0..32])?;
+            let s = BigNum::from_slice(&value.bytes[32..64])?;
             EcdsaSig::from_private_components(r, s)
         })()
         .wrap_openssl_err("failed to convert into a EcdsaSig")?;
@@ -242,7 +242,7 @@ pub trait P256SigVerifier {
 
 impl P256SigVerifier for EcKey<Public> {
     fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool> {
-        let ecdsa_sig = sig.to_ecdsa_sig()?;
+        let ecdsa_sig = EcdsaSig::try_from(sig)?;
         ecdsa_sig.verify(&dgst.bytes, self).wrap_openssl_err("failed to verify a ECDSA signature")
     }
 }
@@ -289,7 +289,7 @@ pub fn perform_ecdh(
     client_public_key: &P256Point,
 ) -> ServiceResult<Key> {
     // Perform all of the crypto operations to produce the new key.
-    let ec_key = client_public_key.to_ec_key()?;
+    let ec_key = EcKey::try_from(client_public_key)?;
     let pk = (|| {
         let server_private_key: PKey<Private> = server_private_key.try_into()?;
         let peer_public_key: PKey<Public> = ec_key.try_into()?;
@@ -549,8 +549,8 @@ pub fn sensor_session_message_hmac(
 mod test {
     use super::{
         compute_hmac, compute_sha256, decrypt_aes256_gcm, ec_keygen, ec_public_key_serialization,
-        encrypt_aes256_gcm, perform_ecdh, Aes256Tag, Hmac, HmacGenerator, HmacSignable, Iv, Key,
-        P256Point, P256Sig, P256SigVerifier, Secret,
+        encrypt_aes256_gcm, perform_ecdh, Aes256Tag, EcKey, EcdsaSig, Hmac, HmacGenerator,
+        HmacSignable, Iv, Key, P256Point, P256Sig, P256SigVerifier, Secret,
     };
     use crate::error::ServiceResult;
     use std::array;
@@ -706,7 +706,7 @@ mod test {
             0xdf, 0xa0, 0xec, 0xb5, 0x77, 0x44, 0xf7, 0xd2, 0x95,
         ];
         let p256_point = P256Point::import(&public_key_bytes).unwrap();
-        let _ = p256_point.to_ec_key();
+        assert!(EcKey::try_from(&p256_point).is_ok());
     }
 
     #[test]
@@ -719,7 +719,7 @@ mod test {
             0x57, 0x76, 0x47, 0x10, 0x67, 0xe0, 0xff, 0xa6,
         ];
         let p256_sig = P256Sig::import(&sig).unwrap();
-        let _ = p256_sig.to_ecdsa_sig().unwrap();
+        assert!(EcdsaSig::try_from(&p256_sig).is_ok());
     }
 
     #[test]
@@ -750,7 +750,7 @@ mod test {
         ];
         let p256_sig = P256Sig::import(&sig).unwrap();
         let ksk_point = P256Point::import(&ksk_public_key_bytes).unwrap();
-        let ksk_key = ksk_point.to_ec_key().unwrap();
+        let ksk_key = EcKey::try_from(&ksk_point).unwrap();
         let model_key = P256Point::import(&model_key_bytes).unwrap();
         let dgst = compute_sha256!(&model_key);
         assert!(ksk_point.verify(&dgst, &p256_sig).unwrap());

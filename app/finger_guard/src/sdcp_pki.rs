@@ -44,7 +44,7 @@ type EcPointBytes = [u8; 65];
 // Helper to convert p256 public key point raw bytes into EcKey<Public>.
 fn parse_public_key_bytes(p256_point_bytes: &EcPointBytes) -> EcKey<Public> {
     let p256_point = P256Point::import(p256_point_bytes).expect("static key should not fail");
-    p256_point.to_ec_key().expect("static key should not fail.")
+    EcKey::try_from(&p256_point).expect("static key should not fail.")
 }
 
 /// Verify the signature on the model key is issued from trusted key signing keys.
@@ -84,6 +84,7 @@ pub fn verify_public_key_signature(
 mod test {
     use super::{verify_public_key_signature, KSK_PUBLIC_KEYS};
     use crate::crypto::{self, compute_sha256};
+    use openssl::ec::EcKey;
 
     #[cfg(feature = "dev_sdcp_pki")]
     #[test]
@@ -113,7 +114,7 @@ mod test {
     fn load_prod_roots() {
         for public_key_bytes in KSK_PUBLIC_KEYS.iter() {
             let p256_point = crypto::P256Point::import(public_key_bytes).unwrap();
-            let _ = p256_point.to_ec_key().unwrap();
+            assert!(EcKey::try_from(&p256_point).is_ok());
         }
     }
 
