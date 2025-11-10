@@ -42,6 +42,13 @@ rust_library {
 rust_test_host {
     name: "libdesktop_finger_guard_test",
     defaults: ["libdesktop_finger_guard_defaults"],
+    test_suites: ["general-tests"],
+    auto_gen_config: true,
+}
+
+rust_test_host {
+    name: "libdesktop_finger_guard_dev_test",
+    defaults: ["libdesktop_finger_guard_defaults"],
     features: ["dev_sdcp_pki"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
