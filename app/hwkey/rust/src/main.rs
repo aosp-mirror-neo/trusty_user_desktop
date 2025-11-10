@@ -27,6 +27,8 @@ const VERSION_CDI_SEAL: i32 = 0;
 // but cannot generate older versions.
 const _VERSION_UNVERSIONED: i32 = 1;
 
+const KEY_BYTES: usize = 32;
+
 extern "C" {
     // Implementations of run_hwkey should not retain any referencs but may clear the contents of
     // encrypt and sign.
@@ -49,6 +51,7 @@ fn main() {
         wait_for_interface(BP_SERVICE_PORT).expect("Could not connect");
 
     let mut seal = get_vmm_obj(c"google,versioned-seed").expect("Could not get versioned seed");
+    let version = i32::from_le_bytes(seal[KEY_BYTES..KEY_BYTES + 4].try_into().unwrap());
     let mut sign = bp.getCdiAttest().expect("Could not get sign");
     let mut auth_token_key_seed =
         bp.getAuthTokenKeySeed().expect("Could not get auth token key seed");
@@ -58,12 +61,12 @@ fn main() {
     unsafe {
         run_hwkey(
             seal.as_mut_ptr(),
-            seal.len(),
+            seal.len() - core::mem::size_of::<i32>(),
             sign.as_mut_ptr(),
             sign.len(),
             auth_token_key_seed.as_mut_ptr(),
             auth_token_key_seed.len(),
-            VERSION_CDI_SEAL,
+            version,
             VERSION_CDI_SEAL,
         );
     }

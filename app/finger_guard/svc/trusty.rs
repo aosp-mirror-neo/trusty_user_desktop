@@ -22,13 +22,19 @@ use crate::storage::{PersistedState, SingleFileState};
 use finger_guard::crypto;
 use finger_guard::error::ServiceResult;
 use finger_guard::identifiers::{AuthenticatorId, SecureUserId};
-use finger_guard::service::{InitParams, TrustyEnvironment};
+use finger_guard::service::{InitParams, SdcpParams, TrustyEnvironment};
 use finger_guard::time::Clock;
 
 // Init params are persisted to a single fixed file.
 impl PersistedState for InitParams {}
 impl SingleFileState for InitParams {
     const FILE_NAME: &str = InitParams::FILE_NAME;
+}
+
+// Sdcp params are persisted to a single fixed file
+impl PersistedState for SdcpParams {}
+impl SingleFileState for SdcpParams {
+    const FILE_NAME: &str = SdcpParams::FILE_NAME;
 }
 
 // These identifier types support persistence to arbitrary files.
@@ -49,6 +55,12 @@ impl TrustyEnvironment for Trusty {
     }
     fn save_init_params(&self, init_params: &InitParams) -> ServiceResult<()> {
         init_params.save()
+    }
+    fn load_sdcp_params(&self) -> ServiceResult<SdcpParams> {
+        SdcpParams::load()
+    }
+    fn save_sdcp_params(&self, sdcp_params: &SdcpParams) -> ServiceResult<()> {
+        sdcp_params.save()
     }
     fn load_authenticator_id(&self, filename: &str) -> ServiceResult<AuthenticatorId> {
         AuthenticatorId::load_from(filename)

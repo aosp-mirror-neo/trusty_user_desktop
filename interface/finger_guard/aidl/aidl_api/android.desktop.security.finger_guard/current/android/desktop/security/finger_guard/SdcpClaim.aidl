@@ -40,6 +40,6 @@ parcelable SdcpClaim {
   byte[65] devicePublicKey;
   byte[64] deviceKeySignature;
   byte[65] ephemeralPublicKey;
-  byte[] firmwareHash;
+  byte[32] firmwareHash;
   byte[64] firmwareSignature;
 }

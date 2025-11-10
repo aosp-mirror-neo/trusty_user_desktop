@@ -19,7 +19,7 @@
 use android_desktop_security_finger_guard::aidl::android::desktop::security::finger_guard::{
     ClientSessionResponse::ClientSessionResponse, IClientSession::BnClientSession,
     IClientSession::IClientSession, InitResponse::InitResponse,
-    PrepareAuthSessionResponse::PrepareAuthSessionResponse,
+    PrepareAuthSessionResponse::PrepareAuthSessionResponse, SdcpClaim::SdcpClaim,
     SdcpClientSessionResponse::SdcpClientSessionResponse,
 };
 use binder::BinderFeatures;
@@ -94,10 +94,10 @@ macro_rules! ref_to_impl_export {
 
 /// Construct a handshake response.
 pub fn make_init_response(
-    server_public_key: Vec<u8>,
+    server_public_key: ref_to_impl_export!(InitResponse.serverPublicKey as Vec<u8>),
     pk_mac: ref_to_impl_export!(InitResponse.pkMac as Vec<u8>),
 ) -> InitResponse {
-    InitResponse { serverPublicKey: server_public_key, pkMac: pk_mac.export() }
+    InitResponse { serverPublicKey: server_public_key.export(), pkMac: pk_mac.export() }
 }
 
 /// Construct a session response.
@@ -118,9 +118,33 @@ pub fn make_client_session_response(
     }
 }
 
+/// Construct a SdcpClaim message.
+#[allow(clippy::too_many_arguments)]
+pub fn make_sdcp_claim(
+    nonce: ref_to_impl_export!(SdcpClaim.nonce as Vec<u8>),
+    model_public_key: ref_to_impl_export!(SdcpClaim.modelPublicKey as [u8; 65]),
+    model_key_sig: ref_to_impl_export!(SdcpClaim.modelKeySignature as [u8; 64]),
+    device_public_key: ref_to_impl_export!(SdcpClaim.devicePublicKey as [u8; 65]),
+    device_key_sig: ref_to_impl_export!(SdcpClaim.deviceKeySignature as [u8; 64]),
+    ephemeral_public_key: ref_to_impl_export!(SdcpClaim.ephemeralPublicKey as [u8; 65]),
+    firmware_hash: ref_to_impl_export!(SdcpClaim.firmwareHash as [u8; 32]),
+    firmware_sig: ref_to_impl_export!(SdcpClaim.firmwareSignature as [u8; 64]),
+) -> SdcpClaim {
+    SdcpClaim {
+        nonce: nonce.export(),
+        modelPublicKey: model_public_key.export(),
+        modelKeySignature: model_key_sig.export(),
+        devicePublicKey: device_public_key.export(),
+        deviceKeySignature: device_key_sig.export(),
+        ephemeralPublicKey: ephemeral_public_key.export(),
+        firmwareHash: firmware_hash.export(),
+        firmwareSignature: firmware_sig.export(),
+    }
+}
+
 /// Construct a sdcp session response.
 pub fn make_sdcp_client_session_response(
-    server_public_key: Vec<u8>,
+    server_public_key: ref_to_impl_export!(SdcpClientSessionResponse.serverPublicKey as Vec<u8>),
     nonce: ref_to_impl_export!(SdcpClientSessionResponse.nonce as Vec<u8>),
     wrapped_tpm_seed: Vec<u8>,
     iv: ref_to_impl_export!(SdcpClientSessionResponse.iv as Vec<u8>),
@@ -128,7 +152,7 @@ pub fn make_sdcp_client_session_response(
     client_session: Option<impl IClientSession>,
 ) -> SdcpClientSessionResponse {
     SdcpClientSessionResponse {
-        serverPublicKey: server_public_key,
+        serverPublicKey: server_public_key.export(),
         nonce: nonce.export(),
         wrappedTpmSeed: wrapped_tpm_seed,
         iv: iv.export(),
@@ -163,11 +187,12 @@ mod test {
 
     #[test]
     fn test_make_init_response() {
-        let public_key: Vec<u8> = (1..=32).collect();
+        let public_key_bytes: Vec<u8> = (1..=65).collect();
+        let public_key = crypto::P256Point::import(public_key_bytes.as_slice()).unwrap();
         let hmac_bytes: Vec<u8> = (1..=32).map(|x| x * 2).collect();
         let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
-        let response = make_init_response(public_key.clone(), &hmac);
-        assert_eq!(response.serverPublicKey, public_key);
+        let response = make_init_response(&public_key, &hmac);
+        assert_eq!(response.serverPublicKey, public_key_bytes);
         assert_eq!(response.pkMac, hmac_bytes);
     }
 

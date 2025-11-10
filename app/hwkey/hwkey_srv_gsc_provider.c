@@ -791,7 +791,7 @@ int hwkey_init_srv_provider(struct tipc_hset* hset, uint8_t* encrypt,
     running_ver = running_version;
 
     if (encrypt_size != sizeof(encrypt_key)) {
-        TLOGE("bad encryption key size\n");
+        TLOGE("bad encryption key size %zu %lu\n", encrypt_size, sizeof(encrypt_key));
         abort();
     }
     memcpy(encrypt_key, encrypt, sizeof(encrypt_key));

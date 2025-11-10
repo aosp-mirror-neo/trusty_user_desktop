@@ -28,6 +28,7 @@ pub mod hat;
 pub mod identifiers;
 pub mod lockout;
 pub mod rng;
+pub mod sdcp_pki;
 pub mod service;
 pub mod time;
 

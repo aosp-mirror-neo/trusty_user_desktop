@@ -25,16 +25,18 @@ use android_desktop_security_finger_guard::aidl::android::desktop::security::fin
     AuthenticationResult::AuthenticationResult, ClientSessionResponse::ClientSessionResponse,
     FinishEnrollSessionResponse::FinishEnrollSessionResponse, InitResponse::InitResponse,
     PrepareAuthSessionResponse::PrepareAuthSessionResponse,
-    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse,
+    PrepareEnrollSessionResponse::PrepareEnrollSessionResponse, SdcpClaim::SdcpClaim,
     SdcpClientSessionResponse::SdcpClientSessionResponse,
 };
-use openssl::bn::BigNumContext;
+use openssl::bn::{BigNum, BigNumContext};
 use openssl::derive::Deriver;
 use openssl::ec::{EcGroup, EcKey, EcPoint, PointConversionForm};
+use openssl::ecdsa::EcdsaSig;
 use openssl::hmac::HmacCtx;
 use openssl::md::Md;
 use openssl::nid::Nid;
 use openssl::pkey::{PKey, Private, Public};
+use openssl::sha::Sha256;
 use openssl::symm::Cipher;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -107,6 +109,9 @@ impl Nonce {
 impl_export!(Nonce(self) => ClientSessionResponse.nonce as Vec<u8> {
     self.bytes.to_vec()
 });
+impl_export!(Nonce(self) => SdcpClaim.nonce as Vec<u8> {
+    self.bytes.to_vec()
+});
 impl_export!(Nonce(self) => SdcpClientSessionResponse.nonce as Vec<u8> {
     self.bytes.to_vec()
 });
@@ -154,6 +159,122 @@ impl Secret {
     }
 }
 
+// Define a type for the uncompressed representation of the public key point on the EC P256
+// curve.
+blob_newtype!(P256Point, 65);
+
+impl P256Point {
+    /// Import a P256 point that was supplied as a blob of bytes. Can fail if the size is incorrect.
+    pub fn import(value: &[u8]) -> ServiceResult<Self> {
+        Ok(Self {
+            bytes: value.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
+                name: "EC p256 point",
+                expected: P256Point::SIZE,
+                actual: value.len(),
+            })?,
+        })
+    }
+    /// Convert to a created `EcKey<Public>`
+    pub fn to_ec_key(&self) -> ServiceResult<EcKey<Public>> {
+        let ec_key = (|| {
+            let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
+            let mut ctx = BigNumContext::new()?;
+            let ec_point = EcPoint::from_bytes(&group, &self.bytes, &mut ctx)?;
+            let public_key: EcKey<Public> = EcKey::from_public_key(&group, &ec_point)?;
+            Ok(public_key)
+        })()
+        .wrap_openssl_err("failed to convert into a EcKey public key")?;
+        Ok(ec_key)
+    }
+}
+
+impl From<P256Point> for [u8; 65] {
+    fn from(val: P256Point) -> [u8; 65] {
+        val.bytes
+    }
+}
+
+impl Hashable for P256Point {
+    fn update(&self, mut add_bytes: impl FnMut(&[u8])) {
+        add_bytes(&self.bytes)
+    }
+}
+
+impl P256SigVerifier for P256Point {
+    fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool> {
+        let ecdsa_sig = sig.to_ecdsa_sig()?;
+        let ec_key = self.to_ec_key()?;
+        ecdsa_sig
+            .verify(&dgst.bytes, &ec_key)
+            .wrap_openssl_err("failed to verify a ECDSA signature")
+    }
+}
+
+impl_export!(P256Point(self) => InitResponse.serverPublicKey as Vec<u8> {
+    self.bytes.to_vec()
+});
+impl_export!(P256Point(self) => SdcpClientSessionResponse.serverPublicKey as Vec<u8> {
+    self.bytes.to_vec()
+});
+impl_export!(P256Point(self) => SdcpClaim.modelPublicKey as [u8; 65] {
+    self.bytes
+});
+impl_export!(P256Point(self) => SdcpClaim.devicePublicKey as [u8; 65] {
+    self.bytes
+});
+impl_export!(P256Point(self) => SdcpClaim.ephemeralPublicKey as [u8; 65] {
+    self.bytes
+});
+
+// Define a type for the raw representation of a ECDSA P256 signature.
+blob_newtype!(P256Sig, 64);
+
+impl P256Sig {
+    /// Import a raw P256 signature that was supplied as a blob of bytes. Can fail if the size is incorrect.
+    pub fn import(value: &[u8]) -> ServiceResult<Self> {
+        Ok(Self {
+            bytes: value.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
+                name: "ECDSA p256 signature",
+                expected: P256Sig::SIZE,
+                actual: value.len(),
+            })?,
+        })
+    }
+    /// Convert to a created EcdsaSig.
+    pub fn to_ecdsa_sig(&self) -> ServiceResult<EcdsaSig> {
+        let sig = (|| {
+            let r = BigNum::from_slice(&self.bytes[0..32])?;
+            let s = BigNum::from_slice(&self.bytes[32..64])?;
+            EcdsaSig::from_private_components(r, s)
+        })()
+        .wrap_openssl_err("failed to convert into a EcdsaSig")?;
+        Ok(sig)
+    }
+}
+
+/// Trait which types can implement to verify a P256Sig.
+pub trait P256SigVerifier {
+    /// Verify the P256Sig signature `sig` on the message hash `dgst`, with Self providing a ec public key.
+    fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool>;
+}
+
+impl P256SigVerifier for EcKey<Public> {
+    fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool> {
+        let ecdsa_sig = sig.to_ecdsa_sig()?;
+        ecdsa_sig.verify(&dgst.bytes, self).wrap_openssl_err("failed to verify a ECDSA signature")
+    }
+}
+
+impl_export!(P256Sig(self) => SdcpClaim.modelKeySignature as [u8; 64] {
+    self.bytes
+});
+impl_export!(P256Sig(self) => SdcpClaim.deviceKeySignature as [u8; 64] {
+    self.bytes
+});
+impl_export!(P256Sig(self) => SdcpClaim.firmwareSignature as [u8; 64] {
+    self.bytes
+});
+
 /// The type of EC used by finger_guard.
 pub const NIST_P256_CURVE_NAME: Nid = Nid::X9_62_PRIME256V1;
 
@@ -164,32 +285,44 @@ pub fn ec_keygen() -> Result<EcKey<Private>, openssl::error::ErrorStack> {
     Ok(server_private_key)
 }
 
-/// Serialize a given EC private key into a blob of bytes.
+/// Export a given EC private key's public key.
 pub fn ec_public_key_serialization(
     private_key: &EcKey<Private>,
-) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+) -> Result<P256Point, openssl::error::ErrorStack> {
     let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
     let mut ctx = BigNumContext::new()?;
-    let server_public_key_bytes =
+    let public_key_bytes =
         private_key.public_key().to_bytes(&group, PointConversionForm::UNCOMPRESSED, &mut ctx)?;
-    Ok(server_public_key_bytes)
+    let public_key = P256Point::import(&public_key_bytes)
+        .expect("exported p256 uncomprsssed key should be 65 bytes");
+    Ok(public_key)
+}
+
+/// Generate a 64-byte P256Sig with the hash value in `dgst` using the EC private key.
+pub fn ecdsa_sign(dgst: &HashValue, ec_key: &EcKey<Private>) -> ServiceResult<P256Sig> {
+    let sig = (|| {
+        let ec_sig = EcdsaSig::sign(&dgst.bytes, ec_key)?;
+        let r_bytes = ec_sig.r().to_vec_padded(32).expect("r must be at most 32 bytes");
+        let s_bytes = ec_sig.s().to_vec_padded(32).expect("s must be at most 32 bytes");
+        let sig_bytes = [&r_bytes[..], &s_bytes[..]].concat();
+        Ok(P256Sig::import(&sig_bytes).expect("exact 64 bytes in sig_bytes."))
+    })()
+    .wrap_openssl_err("fail to create ecdsa signature")?;
+    Ok(sig)
 }
 
 /// Perform a DH exchange using a private and public key, returning the new private key.
 pub fn perform_ecdh(
     server_private_key: EcKey<Private>,
-    client_public_key_bytes: &[u8],
+    client_public_key: &P256Point,
 ) -> ServiceResult<Key> {
     // Perform all of the crypto operations to produce the new key.
+    let ec_key = client_public_key.to_ec_key()?;
     let pk = (|| {
         let server_private_key: PKey<Private> = server_private_key.try_into()?;
-        let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
-        let mut ctx = BigNumContext::new()?;
-        let client_public_point = EcPoint::from_bytes(&group, client_public_key_bytes, &mut ctx)?;
-        let client_public_key: PKey<Public> =
-            EcKey::from_public_key(&group, &client_public_point)?.try_into()?;
+        let peer_public_key: PKey<Public> = ec_key.try_into()?;
         let mut pk_deriver = Deriver::new(&server_private_key)?;
-        pk_deriver.set_peer(&client_public_key)?;
+        pk_deriver.set_peer(&peer_public_key)?;
         let pk = pk_deriver.derive_to_vec()?;
         Ok(pk)
     })()
@@ -288,7 +421,7 @@ impl HmacSignable for SensorSessionType {
     }
 }
 
-// Define a type for a the SHA-256 HMACs we use.
+// Define a type for the SHA-256 HMACs we use.
 blob_newtype!(Hmac, 32);
 // HMACs can also be used as keys, so we support Hmac->Key conversion.
 impl From<Hmac> for Key {
@@ -379,6 +512,79 @@ macro_rules! _compute_hmac {
 }
 pub use _compute_hmac as compute_hmac;
 
+// Define a type for SHA256 message digest.
+blob_newtype!(HashValue, 32);
+
+impl HashValue {
+    /// Import a SHA256 hash that was supplied as a blob of bytes. Can fail if the size is incorrect.
+    pub fn import(value: &[u8]) -> ServiceResult<Self> {
+        Ok(Self {
+            bytes: value.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
+                name: "SHA256 hash value",
+                expected: HashValue::SIZE,
+                actual: value.len(),
+            })?,
+        })
+    }
+}
+
+impl Hashable for HashValue {
+    fn update(&self, mut add_bytes: impl FnMut(&[u8])) {
+        add_bytes(&self.bytes)
+    }
+}
+
+impl_export!(HashValue(self) => SdcpClaim.firmwareHash as [u8; 32] {
+    self.bytes
+});
+
+/// Generator which can consume bytes and produce a Sha256.
+pub struct HashGenerator {
+    context: Sha256,
+}
+
+/// Trait which types can implement to support being part of a hashed message.
+pub trait Hashable {
+    /// Update the hash with the relevant bytes from Self.
+    fn update(&self, add_bytes: impl FnMut(&[u8]));
+}
+
+impl HashGenerator {
+    /// Construct a new hash generator.
+    pub fn new() -> Self {
+        Self { context: Sha256::new() }
+    }
+
+    /// Update the hash with the given hashable object.
+    pub fn update(&mut self, hashable: &impl Hashable) {
+        hashable.update(|bytes| self.context.update(bytes))
+    }
+
+    /// Complete the generation of the HMAC, returning the final result.
+    pub fn finish(self) -> HashValue {
+        HashValue { bytes: self.context.finish() }
+    }
+}
+
+impl Default for HashGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Macro which computes an Sha256 from a number of byte slices.
+#[macro_export]
+macro_rules! _compute_sha256 {
+    ($($hashable:expr),*) => {
+        {
+            let mut generator = $crate::crypto::HashGenerator::new();
+            $(generator.update($hashable);)*
+            generator.finish()
+        }
+    };
+}
+pub use _compute_sha256 as compute_sha256;
+
 /// Helper to compute the HMAC for the enrollment/authentication
 /// session messages from this service or from the sensor.
 pub fn sensor_session_message_hmac(
@@ -398,9 +604,9 @@ pub fn sensor_session_message_hmac(
 #[cfg(test)]
 mod test {
     use super::{
-        compute_hmac, decrypt_aes256_gcm, ec_keygen, ec_public_key_serialization,
+        compute_hmac, compute_sha256, decrypt_aes256_gcm, ec_keygen, ec_public_key_serialization,
         encrypt_aes256_gcm, perform_ecdh, Aes256Tag, Hmac, HmacGenerator, HmacSignable, Iv, Key,
-        Secret,
+        P256Point, P256Sig, P256SigVerifier, Secret,
     };
     use crate::error::ServiceResult;
     use std::array;
@@ -502,10 +708,10 @@ mod test {
             .expect("could not get client public key bytes");
         let server_public = ec_public_key_serialization(&server_private)
             .expect("could not get server public key bytes");
-        let client_key = perform_ecdh(client_private, server_public.as_slice())
-            .expect("client handshake failed");
-        let server_key = perform_ecdh(server_private, client_public.as_slice())
-            .expect("server handshake failed");
+        let client_key =
+            perform_ecdh(client_private, &server_public).expect("client handshake failed");
+        let server_key =
+            perform_ecdh(server_private, &client_public).expect("server handshake failed");
         // We should now have matching keys.
         assert_eq!(client_key.bytes, server_key.bytes);
     }
@@ -544,5 +750,66 @@ mod test {
         decrypt_aes256_gcm(&hmac, &iv, b"some_aad", &ciphertext, &Aes256Tag { bytes: [0; 16] })
             .err()
             .expect("decrypt worked with bad tag");
+    }
+
+    #[test]
+    fn test_parse_p256_public_key() {
+        let public_key_bytes: [u8; 65] = [
+            0x04, 0xfd, 0xc8, 0xb2, 0xe0, 0xa2, 0x95, 0x12, 0x3f, 0x4a, 0x5b, 0x77, 0x13, 0xbc,
+            0xc5, 0x2f, 0xf5, 0x50, 0x78, 0x19, 0x04, 0x4e, 0xa1, 0x48, 0x17, 0xb6, 0xa5, 0xb9,
+            0x94, 0xd7, 0xe7, 0x85, 0xff, 0x8c, 0xdd, 0x49, 0x09, 0x91, 0xda, 0xf4, 0x81, 0x5a,
+            0xa1, 0x89, 0xfc, 0xa6, 0xee, 0x26, 0x45, 0xdd, 0x6c, 0xf6, 0x6e, 0xb1, 0x61, 0x35,
+            0xdf, 0xa0, 0xec, 0xb5, 0x77, 0x44, 0xf7, 0xd2, 0x95,
+        ];
+        let p256_point = P256Point::import(&public_key_bytes).unwrap();
+        let _ = p256_point.to_ec_key();
+    }
+
+    #[test]
+    fn test_parse_p256sig() {
+        let sig: [u8; 64] = [
+            0x34, 0x51, 0x71, 0x9a, 0xab, 0x29, 0x1a, 0x3f, 0x37, 0x14, 0x03, 0xb2, 0xc3, 0x19,
+            0xcc, 0x40, 0xba, 0x18, 0x4e, 0xee, 0xcf, 0x8d, 0xbc, 0x9d, 0x23, 0x40, 0x20, 0xbe,
+            0x15, 0x24, 0xfd, 0xbd, 0xc1, 0xfb, 0xed, 0x69, 0x6d, 0xf5, 0xe9, 0xb5, 0xc6, 0x34,
+            0x6b, 0xa0, 0x27, 0x3c, 0x75, 0x65, 0xd9, 0xe1, 0x3d, 0x8a, 0xa4, 0xf7, 0xa0, 0x45,
+            0x57, 0x76, 0x47, 0x10, 0x67, 0xe0, 0xff, 0xa6,
+        ];
+        let p256_sig = P256Sig::import(&sig).unwrap();
+        let _ = p256_sig.to_ecdsa_sig().unwrap();
+    }
+
+    #[test]
+    fn test_verify_p256sig() {
+        // a dev firmware model key
+        let model_key_bytes: [u8; 65] = [
+            0x04, 0xdb, 0x68, 0x13, 0x51, 0xcf, 0xec, 0x9a, 0x92, 0xce, 0x00, 0xba, 0x17, 0xc6,
+            0xbe, 0xd2, 0xd8, 0x5b, 0x1d, 0xb8, 0xd6, 0xbf, 0x07, 0x82, 0xad, 0xe7, 0xc6, 0xbe,
+            0x69, 0xe2, 0x1d, 0x1a, 0x45, 0x7b, 0x40, 0x8c, 0xac, 0xc7, 0x4d, 0x89, 0x79, 0x98,
+            0x68, 0x74, 0x10, 0xcd, 0x45, 0xe4, 0xfb, 0xff, 0x62, 0x73, 0x0e, 0xbc, 0xc8, 0x7d,
+            0xac, 0x81, 0xf6, 0xb2, 0xba, 0x12, 0x6c, 0x1e, 0x8a,
+        ];
+        // the dev key signing key.
+        let ksk_public_key_bytes: [u8; 65] = [
+            0x04, 0xfd, 0xc8, 0xb2, 0xe0, 0xa2, 0x95, 0x12, 0x3f, 0x4a, 0x5b, 0x77, 0x13, 0xbc,
+            0xc5, 0x2f, 0xf5, 0x50, 0x78, 0x19, 0x04, 0x4e, 0xa1, 0x48, 0x17, 0xb6, 0xa5, 0xb9,
+            0x94, 0xd7, 0xe7, 0x85, 0xff, 0x8c, 0xdd, 0x49, 0x09, 0x91, 0xda, 0xf4, 0x81, 0x5a,
+            0xa1, 0x89, 0xfc, 0xa6, 0xee, 0x26, 0x45, 0xdd, 0x6c, 0xf6, 0x6e, 0xb1, 0x61, 0x35,
+            0xdf, 0xa0, 0xec, 0xb5, 0x77, 0x44, 0xf7, 0xd2, 0x95,
+        ];
+        // signature produced by the dev key signing process.
+        let sig: [u8; 64] = [
+            0x34, 0x51, 0x71, 0x9a, 0xab, 0x29, 0x1a, 0x3f, 0x37, 0x14, 0x03, 0xb2, 0xc3, 0x19,
+            0xcc, 0x40, 0xba, 0x18, 0x4e, 0xee, 0xcf, 0x8d, 0xbc, 0x9d, 0x23, 0x40, 0x20, 0xbe,
+            0x15, 0x24, 0xfd, 0xbd, 0xc1, 0xfb, 0xed, 0x69, 0x6d, 0xf5, 0xe9, 0xb5, 0xc6, 0x34,
+            0x6b, 0xa0, 0x27, 0x3c, 0x75, 0x65, 0xd9, 0xe1, 0x3d, 0x8a, 0xa4, 0xf7, 0xa0, 0x45,
+            0x57, 0x76, 0x47, 0x10, 0x67, 0xe0, 0xff, 0xa6,
+        ];
+        let p256_sig = P256Sig::import(&sig).unwrap();
+        let ksk_point = P256Point::import(&ksk_public_key_bytes).unwrap();
+        let ksk_key = ksk_point.to_ec_key().unwrap();
+        let model_key = P256Point::import(&model_key_bytes).unwrap();
+        let dgst = compute_sha256!(&model_key);
+        assert!(ksk_point.verify(&dgst, &p256_sig).unwrap());
+        assert!(ksk_key.verify(&dgst, &p256_sig).unwrap());
     }
 }
