@@ -18,24 +18,30 @@
 
 #include <lib/gsc_svc/gsc_svc.h>
 #include <storage_internal/super_block_mac_device.h>
+#include <trusty/time.h>
+
+#define MS_TO_NS(ms) ((ms)*1000ULL * 1000ULL)
 
 static int super_block_mac_get(const uint8_t index,
            uint8_t *flags,
            struct mac* mac) {
     int ret = gsc_svc_client_super_block_mac_read(index, flags, &mac->byte);
-    if (ret) {
-        return SUPER_BLOCK_MAC_DEVICE_ERROR_COMMUNICATION;
+    for(int i = 0; i < 600; ++i) {
+        if (!ret) {
+            /*
+            * Check the flags MSB to determine if the mac is initialized or not. If the
+            * bit is not set, notify the storage application by returning a specific
+            * error code.
+            */
+            if (!(*flags & 0x80)) {
+                return SUPER_BLOCK_MAC_DEVICE_ERROR_NOT_INITIALIZED;
+            } else {
+                return ret;
+            }
+        }
+        trusty_nanosleep(0, 0, MS_TO_NS(100));
+        ret = gsc_svc_client_super_block_mac_read(index, flags, &mac->byte);
     }
-
-    /*
-     * Check the flags MSB to determine if the mac is initialized or not. If the
-     * bit is not set, notify the storage application by returning a specific
-     * error code.
-     */
-    if (!(*flags & 0x80)) {
-        return SUPER_BLOCK_MAC_DEVICE_ERROR_NOT_INITIALIZED;
-    }
-
     return ret;
 }
 
