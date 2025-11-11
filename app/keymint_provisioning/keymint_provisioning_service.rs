@@ -113,8 +113,6 @@ impl IKeyMintProvisioning for KeyMintProvisioningService {
             return Err(binder_error::illegal_state(c"get certs"));
         };
 
-        log::info!("CERTS: {certs:?}");
-
         let Some(uds_cert_bytes) = certs.first() else {
             log::error!("UDS cert chain was empty");
             return Ok(false);
