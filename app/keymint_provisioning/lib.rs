@@ -31,11 +31,21 @@ service_dispatcher! {
     }
 }
 
+fn log_formatter(record: &log::Record) -> String {
+    // line number should be present, so keeping it simple by just returning a 0.
+    let line = record.line().unwrap_or(0);
+    let file = record.file().unwrap_or("unknown file");
+    format!("{}: {}:{} {}\n", record.level(), file, line, record.args())
+}
+
 const PORT_COUNT: usize = 1;
 const MAX_CONNECTION_COUNT: usize = 1;
 
 pub fn init_and_start_loop() -> Result<(), TipcError> {
-    trusty_log::init();
+    let config = trusty_log::TrustyLoggerConfig::default()
+        .with_min_level(log::Level::Info)
+        .format(log_formatter);
+    trusty_log::init_with_config(config);
 
     let mut dispatcher = KeyMintProvisioningServiceDispatcher::<PORT_COUNT>::new()
         .expect("Could not create dispatcher");
