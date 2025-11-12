@@ -55,11 +55,190 @@ pub type I64LE = I64<LE>;
 /// The ordinal value that is used for all strongbox commands
 const VENDOR_COMMAND_STRONGBOX: U32<BE> = U32::new(0x20000001);
 
+/// Helper function that rounds up to the nearest 4-byte word.
+const fn byte_len_with_word_padding(before: usize) -> usize {
+    (before + 3) & (!0x3usize)
+}
+
+/// Helper function to serialize a u32le length into a slice.
+fn copy_u32le(dest: &mut [u8], len: usize) -> Result<&mut [u8], Error> {
+    let (len_bytes, suffix) =
+        dest.split_at_mut_checked(size_of::<U32LE>()).ok_or(km_err!(EncodingError, ""))?;
+    len_bytes.copy_from_slice(
+        &U32LE::new(len.try_into().map_err(|_| km_err!(EncodingError, ""))?).to_bytes(),
+    );
+    Ok(suffix)
+}
+
+/// Helper function to serialize a u32le length prefixed slice.
+fn copy_u32le_prefixed_slice<'a>(
+    mut dest: &'a mut [u8],
+    data: &[u8],
+    word_padding: bool,
+) -> Result<&'a mut [u8], Error> {
+    dest = copy_u32le(dest, data.len())?;
+    let (dest, suffix) = dest
+        .split_at_mut_checked(if word_padding {
+            byte_len_with_word_padding(data.len())
+        } else {
+            data.len()
+        })
+        .ok_or(km_err!(EncodingError, ""))?;
+    dest.copy_from_slice(data);
+    Ok(suffix)
+}
+
 /// Helper function to deserialize a u32le length from a slice.
 fn get_u32le(dest: &mut [u8]) -> Result<(&mut [u8], &mut U32LE), Error> {
     let (len_bytes, suffix) =
         dest.split_at_mut_checked(size_of::<U32LE>()).ok_or(km_err!(EncodingError, ""))?;
     Ok((suffix, U32LE::mut_from_bytes(len_bytes).map_err(|_| km_err!(EncodingError, ""))?))
+}
+
+/// A GSC representation of kmr::rpc::MacedPublicKey
+pub struct MacedPublicKey {
+    /// Length of the following MACed key.
+    pub maced_key_len_bytes: U32LE,
+    /// The MACed public key data, padded to a 4-byte boundary.
+    pub maced_key: [u8],
+}
+
+impl MacedPublicKey {
+    /// The byte size of a MacedPublicKey with the specified key length in bytes.
+    pub const fn expected_size(key_len_bytes: usize) -> usize {
+        size_of::<U32LE>() + byte_len_with_word_padding(key_len_bytes)
+    }
+}
+
+/// Creates a certificate signing request to be sent to the provisioning server.
+/// Input Buffer (`buf`) Format:
+///
+/// The input buffer is a sequence of fields, all 32-bit aligned.
+/// - [ 4 bytes ] uint32_t key_count: Number of MACed public keys.
+///   @param in MacedPublicKey[] keysToSign contains the set of keys to certify.
+///   The IRemotelyProvisionedComponent must validate the MACs on each key.  If any
+///   entry in the array lacks a valid MAC, the method must return
+///   STATUS_INVALID_MAC.  This method must not accept test keys. If any entry in
+///   the array is a test key, the method must return
+/// - [ n times ] Repeated for each key:
+///   - [ 4 bytes ] uint32_t maced_key_len_bytes: Length of the following
+///     MACed key.
+///   - [ m bytes ] uint8_t maced_key[]: The MACed public key data, padded
+///     to a 4-byte boundary.
+///
+/// Strongbox-subset specific:
+/// - [ 4 bytes ] uint32_t device_info_len_bytes: Length of the DeviceInfo.
+/// - [ q bytes ] uint8_t device_info[]: The CBOR-encoded DeviceInfo data.
+///   In the DeviceInfo map fields:
+///    - "security_level": "strongbox",
+///    - "vb_state": "green",
+///    - "bootloader_state": "locked"
+///
+/// have to be placed last, as future version would append these fields based
+/// on the actual GSC state.
+pub mod generate_certificate_request_v2 {
+    use super::*;
+
+    /// Struct that captures the parameters needed to make a generate_certificate_request_v2::Request.
+    pub struct RequestBuildParams {
+        /// The request being converted.
+        pub request: kmr_wire::GenerateCertificateRequestV2Request,
+        /// The device info bytes that are associated with the request.
+        pub device_info: Vec<u8>,
+    }
+
+    /// The GSC equivalent of a kmr_wire::GenerateCertificateRequestV2Request.
+    #[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Request {
+        /// Number of MACed public keys.
+        pub key_count: U32LE,
+        /// Trailing bytes.
+        pub suffix: [u8],
+    }
+
+    impl_tpmv_request!(GenerateCertificateRequestV2Request);
+
+    impl TpmvRequestBuild for Request {
+        type BuildParams = RequestBuildParams;
+
+        type Err = Error;
+
+        fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
+            let static_size = 3 * size_of::<U32LE>();
+            let mut maced_keys_size = 0usize;
+            for key_to_sign in params.request.keys_to_sign.iter() {
+                maced_keys_size = maced_keys_size
+                    .checked_add(MacedPublicKey::expected_size(key_to_sign.maced_key.len()))
+                    .ok_or(km_err!(EncodingError, ""))?
+            }
+            static_size
+                .checked_add(maced_keys_size)
+                .ok_or(km_err!(EncodingError, ""))?
+                .checked_add(byte_len_with_word_padding(params.request.challenge.len()))
+                .ok_or(km_err!(EncodingError, ""))?
+                .checked_add(params.device_info.len())
+                .ok_or(km_err!(EncodingError, ""))?
+                .try_into()
+                .map_err(|_| km_err!(EncodingError, ""))
+        }
+
+        fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err> {
+            let RequestBuildParams { request, device_info } = params;
+            self.key_count = U32LE::new(
+                (request.keys_to_sign.len()).try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?,
+            );
+
+            let mut suffix = &mut self.suffix;
+            for key_to_sign in request.keys_to_sign.iter() {
+                suffix = copy_u32le_prefixed_slice(suffix, &key_to_sign.maced_key, true)?;
+            }
+
+            suffix = copy_u32le_prefixed_slice(suffix, &request.challenge, true)?;
+            suffix = copy_u32le_prefixed_slice(suffix, &device_info, false)?;
+
+            if !suffix.is_empty() {
+                return Err(km_err!(EncodingError, ""));
+            }
+
+            Ok(())
+        }
+    }
+
+    /// A struct of references to the various fields in a Request.
+    pub struct BufferedRequest<'a> {
+        /// Number of MACed public keys.
+        pub key_count: &'a mut U32LE,
+        /// A list of MACed public keys.
+        pub keys_to_sign: Vec<&'a mut MacedPublicKey>,
+        /// Length of the challenge.
+        pub challenge_len_bytes: &'a mut U32LE,
+        /// The challenge data, padded to a 4-byte boundary.
+        pub challenge: &'a [u8],
+        /// Length of the DeviceInfo.
+        pub device_info_length_bytes: &'a mut U32LE,
+        /// The CBOR-encoded DeviceInfo data.
+        pub device_info: &'a [u8],
+    }
+
+    /// The GSC equivalent of kmr_wire::GenerateCertificateRequestV2Response
+    #[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Response {
+        /// Returned bytes.
+        pub ret: [u8],
+    }
+
+    impl TryFrom<&mut Response> for kmr_wire::GenerateCertificateRequestV2Response {
+        type Error = Error;
+
+        /// Convert a response into a kmr_wire::GenerateCertificateRequestV2Response.
+        fn try_from(
+            response: &mut Response,
+        ) -> Result<kmr_wire::GenerateCertificateRequestV2Response, Error> {
+            Ok(kmr_wire::GenerateCertificateRequestV2Response { ret: response.ret.to_vec() })
+        }
+    }
 }
 
 /// Vendor TPM command representing a strongbox generate ecdsa P256 keypair request.

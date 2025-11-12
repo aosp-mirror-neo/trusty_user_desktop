@@ -76,6 +76,14 @@ impl StrongBox {
                     Err(err) => op_error_rsp(KeyMintOperation::OperationUpdate, err),
                 }
             }
+            PerformOpReq::RpcGenerateCertificateV2Request(req) => {
+                match rkp::generate_certificate_request_v2(req, &self.tpm) {
+                    Ok(resp) => op_ok_rsp(PerformOpRsp::RpcGenerateCertificateV2Request(resp)),
+                    Err(err) => {
+                        op_error_rsp(KeyMintOperation::RpcGenerateCertificateV2Request, err)
+                    }
+                }
+            }
             PerformOpReq::RpcGenerateEcdsaP256KeyPair(_) => {
                 let _ = rkp::generate_ecdsa_p256_keypair(&self.tpm);
                 error_rsp(ErrorCode::Unimplemented as i32)

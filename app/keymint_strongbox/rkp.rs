@@ -18,9 +18,31 @@ use android_system_desktop_security_gsc::aidl::android::system::desktop::securit
 use binder::Strong;
 use kmr_common::{km_err, Error};
 use kmr_wire::rpc::{EekCurve, HardwareInfo, MINIMUM_SUPPORTED_KEYS_IN_CSR};
+use kmr_wire::{GenerateCertificateRequestV2Request, GenerateCertificateRequestV2Response};
 use tpm_commands::strongbox::*;
 use tpm_commands::{TpmRequestMessage, TpmResponseHeader, TpmResponseMessage};
 use zerocopy::{FromBytes, IntoBytes};
+
+use crate::do_rpc;
+
+pub fn generate_certificate_request_v2(
+    request: GenerateCertificateRequestV2Request,
+    client: &Strong<dyn IGsc>,
+) -> Result<GenerateCertificateRequestV2Response, Error> {
+    do_rpc::<
+        generate_certificate_request_v2::Request,
+        generate_certificate_request_v2::Response,
+        generate_certificate_request_v2::RequestBuildParams,
+        GenerateCertificateRequestV2Response,
+    >(
+        generate_certificate_request_v2::RequestBuildParams {
+            request,
+            // TODO(b/451652543) Implement this.
+            device_info: Vec::new(),
+        },
+        client,
+    )
+}
 
 pub fn generate_ecdsa_p256_keypair(client: &Strong<dyn IGsc>) -> Result<Vec<u8>, Error> {
     let cmd = TpmRequestMessage::new(generate_ecdsa_p256_keypair::Request {});
