@@ -20,6 +20,17 @@ use crate::{TpmvRequest, NO_SESSION_TAG};
 use kmr_wire::*;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, BE, I32, U16, U32};
 
+macro_rules! impl_tpmv_request {
+    ($kmr_wire_req:ident) => {
+        impl TpmvRequest for Request {
+            const TAG: U16<BE> = NO_SESSION_TAG;
+            const COMMAND_CODE: U16<BE> = U16::new($kmr_wire_req::CODE as u16);
+            const ORDINAL: U32<BE> = VENDOR_COMMAND_STRONGBOX;
+            type TpmvResponse = Response;
+        }
+    };
+}
+
 /// The ordinal value that is used for all strongbox commands
 const VENDOR_COMMAND_STRONGBOX: U32<BE> = U32::new(0x20000001);
 
@@ -32,12 +43,7 @@ pub mod generate_ecdsa_p256_keypair {
     #[repr(C)]
     pub struct Request;
 
-    impl TpmvRequest for Request {
-        const TAG: U16<BE> = NO_SESSION_TAG;
-        const COMMAND_CODE: U16<BE> = U16::new(GenerateEcdsaP256KeyPairRequest::CODE as u16);
-        const ORDINAL: U32<BE> = VENDOR_COMMAND_STRONGBOX;
-        type TpmvResponse = Response;
-    }
+    impl_tpmv_request!(GenerateEcdsaP256KeyPairRequest);
 
     /// Represents a response from a [`Request`]
     #[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
@@ -82,12 +88,7 @@ pub mod get_hardware_info {
     #[repr(C)]
     pub struct Request;
 
-    impl TpmvRequest for Request {
-        const TAG: U16<BE> = NO_SESSION_TAG;
-        const COMMAND_CODE: U16<BE> = U16::new(GetHardwareInfoRequest::CODE as u16);
-        const ORDINAL: U32<BE> = VENDOR_COMMAND_STRONGBOX;
-        type TpmvResponse = Response;
-    }
+    impl_tpmv_request!(GetHardwareInfoRequest);
 
     /// Represents a response from a [`Request`]
     #[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
