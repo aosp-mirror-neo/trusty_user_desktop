@@ -84,9 +84,11 @@ impl StrongBox {
                     }
                 }
             }
-            PerformOpReq::RpcGenerateEcdsaP256KeyPair(_) => {
-                let _ = rkp::generate_ecdsa_p256_keypair(&self.tpm);
-                error_rsp(ErrorCode::Unimplemented as i32)
+            PerformOpReq::RpcGenerateEcdsaP256KeyPair(req) => {
+                match rkp::generate_ecdsa_p256_keypair(req, &self.tpm) {
+                    Ok(resp) => op_ok_rsp(PerformOpRsp::RpcGenerateEcdsaP256KeyPair(resp)),
+                    Err(err) => op_error_rsp(KeyMintOperation::RpcGenerateEcdsaP256KeyPair, err),
+                }
             }
             PerformOpReq::RpcGetHardwareInfo(_) => {
                 let _ = rkp::get_hardware_info(&self.tpm);

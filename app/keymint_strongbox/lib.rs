@@ -306,7 +306,13 @@ mod tests {
     #[test]
     fn generate_keypair() {
         let tpm = GscServiceClient::default().0;
-        assert_matches!(rkp::generate_ecdsa_p256_keypair(&tpm), Ok(_));
+        assert_matches!(
+            rkp::generate_ecdsa_p256_keypair(
+                GenerateEcdsaP256KeyPairRequest { test_mode: true },
+                &tpm
+            ),
+            Ok(_)
+        );
     }
 
     #[test]

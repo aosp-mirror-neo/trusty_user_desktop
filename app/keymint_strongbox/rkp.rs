@@ -18,7 +18,10 @@ use android_system_desktop_security_gsc::aidl::android::system::desktop::securit
 use binder::Strong;
 use kmr_common::{km_err, Error};
 use kmr_wire::rpc::{EekCurve, HardwareInfo, MINIMUM_SUPPORTED_KEYS_IN_CSR};
-use kmr_wire::{GenerateCertificateRequestV2Request, GenerateCertificateRequestV2Response};
+use kmr_wire::{
+    GenerateCertificateRequestV2Request, GenerateCertificateRequestV2Response,
+    GenerateEcdsaP256KeyPairRequest, GenerateEcdsaP256KeyPairResponse,
+};
 use tpm_commands::strongbox::*;
 use tpm_commands::{TpmRequestMessage, TpmResponseHeader, TpmResponseMessage};
 use zerocopy::{FromBytes, IntoBytes};
@@ -44,18 +47,16 @@ pub fn generate_certificate_request_v2(
     )
 }
 
-pub fn generate_ecdsa_p256_keypair(client: &Strong<dyn IGsc>) -> Result<Vec<u8>, Error> {
-    let cmd = TpmRequestMessage::new(generate_ecdsa_p256_keypair::Request {});
-    let rsp =
-        client.transmit(cmd.as_bytes()).map_err(|_| km_err!(SecureHwCommunicationFailed, ""))?;
-    let rsp = TpmResponseMessage::<generate_ecdsa_p256_keypair::Response>::ref_from_bytes(&rsp)
-        .map_err(|_| km_err!(SecureHwCommunicationFailed, ""))?;
-    if rsp.header.error_code == 0 {
-        let len = rsp.header.length.get() as usize - core::mem::size_of::<TpmResponseHeader>();
-        Ok(rsp.response.data[..len].to_vec())
-    } else {
-        Err(km_err!(SecureHwCommunicationFailed, "0x{:X}", rsp.header.error_code))
-    }
+pub fn generate_ecdsa_p256_keypair(
+    request: GenerateEcdsaP256KeyPairRequest,
+    client: &Strong<dyn IGsc>,
+) -> Result<GenerateEcdsaP256KeyPairResponse, Error> {
+    do_rpc::<
+        generate_ecdsa_p256_keypair::Request,
+        generate_ecdsa_p256_keypair::Response,
+        GenerateEcdsaP256KeyPairRequest,
+        GenerateEcdsaP256KeyPairResponse,
+    >(request, client)
 }
 
 pub fn _get_dice_chain(client: &Strong<dyn IGsc>) -> Result<Vec<u8>, Error> {

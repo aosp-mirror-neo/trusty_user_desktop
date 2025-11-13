@@ -91,8 +91,17 @@ fn copy_u32le_prefixed_slice<'a>(
 /// Helper function to deserialize a u32le length from a slice.
 fn get_u32le(dest: &mut [u8]) -> Result<(&mut [u8], &mut U32LE), Error> {
     let (len_bytes, suffix) =
-        dest.split_at_mut_checked(size_of::<U32LE>()).ok_or(km_err!(EncodingError, ""))?;
-    Ok((suffix, U32LE::mut_from_bytes(len_bytes).map_err(|_| km_err!(EncodingError, ""))?))
+        dest.split_at_mut_checked(size_of::<U32LE>()).ok_or(km_err!(EncodingError, "get_u32le"))?;
+    Ok((suffix, U32LE::mut_from_bytes(len_bytes).map_err(|_| km_err!(EncodingError, "U32LE"))?))
+}
+
+/// Helper function to deserialize a u32le byte length prefixed slice.
+fn get_u32le_prefixed_slice(dest: &mut [u8]) -> Result<(&mut [u8], &mut U32LE, &mut [u8]), Error> {
+    let (suffix, len) = get_u32le(dest)?;
+    let (ret, suffix) = suffix
+        .split_at_mut_checked(len.get() as usize)
+        .ok_or(km_err!(EncodingError, "u32le_prefixed_slice"))?;
+    Ok((suffix, len, ret))
 }
 
 /// A GSC representation of kmr::rpc::MacedPublicKey
@@ -246,18 +255,78 @@ pub mod generate_ecdsa_p256_keypair {
     use super::*;
 
     /// This command has no inputs, so Request is an empty struct.
-    #[derive(Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+    #[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
     #[repr(C)]
     pub struct Request;
 
     impl_tpmv_request!(GenerateEcdsaP256KeyPairRequest);
 
+    impl TpmvRequestBuild for Request {
+        type BuildParams = kmr_wire::GenerateEcdsaP256KeyPairRequest;
+
+        type Err = Error;
+
+        fn expected_size(_params: &Self::BuildParams) -> Result<u32, Self::Err> {
+            Ok(0u32)
+        }
+
+        fn init(&mut self, _params: Self::BuildParams) -> Result<(), Self::Err> {
+            Ok(())
+        }
+    }
+
     /// Represents a response from a [`Request`]
-    #[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
     #[repr(C)]
     pub struct Response {
-        /// A public key. The TA may treat this as opaque data to later be passed back to the GSC.
-        pub data: [u8],
+        /// suffix
+        pub suffix: [u8],
+    }
+
+    impl TryFrom<&mut Response> for kmr_wire::GenerateEcdsaP256KeyPairResponse {
+        type Error = Error;
+
+        /// Convert a response into a kmr_wire::GenerateEcdsaP256KeyPairResponse.
+        fn try_from(
+            response: &mut Response,
+        ) -> Result<kmr_wire::GenerateEcdsaP256KeyPairResponse, Error> {
+            let view = BufferedResponse::try_from(response)?;
+            Ok(kmr_wire::GenerateEcdsaP256KeyPairResponse {
+                maced_public_key: rpc::MacedPublicKey { maced_key: view.maced_key.to_vec() },
+                ret: view.key_blob.to_vec(),
+            })
+        }
+    }
+
+    /// A struct of references to the various fields in a Response.
+    pub struct BufferedResponse<'a> {
+        /// Key blob data.
+        pub key_blob: &'a mut [u8],
+        /// Size of MACed key in bytes.
+        pub maced_key_bytes: &'a mut U32LE,
+        /// MACed key bytes.
+        pub maced_key: &'a mut [u8],
+    }
+
+    impl<'a> TryFrom<&'a mut Response> for BufferedResponse<'a> {
+        type Error = Error;
+        fn try_from(response: &'a mut Response) -> Result<BufferedResponse<'a>, Self::Error> {
+            // Peek into key blob to get size that follows in words.
+            let key_blob_words = U32LE::ref_from_prefix(&response.suffix[0..size_of::<u32>()])
+                .map_err(|_| km_err!(EncodingError, "word length"))?
+                .0
+                .get() as usize;
+            let (key_blob, suffix) = response
+                .suffix
+                .split_at_mut_checked((key_blob_words + 1) * 4)
+                .ok_or(km_err!(EncodingError, "split response"))?;
+            let (suffix, maced_key_bytes, maced_key) = get_u32le_prefixed_slice(suffix)?;
+            if suffix.len() + maced_key.len() > byte_len_with_word_padding(maced_key.len()) {
+                return Err(km_err!(EncodingError, "trailing bytes"));
+            }
+
+            Ok(BufferedResponse { key_blob, maced_key_bytes, maced_key })
+        }
     }
 }
 
