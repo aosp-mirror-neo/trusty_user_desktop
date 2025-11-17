@@ -31,6 +31,7 @@ use crate::do_rpc;
 
 pub fn generate_certificate_request_v2(
     request: GenerateCertificateRequestV2Request,
+    device_info: Vec<u8>,
     client: &Strong<dyn IGsc>,
 ) -> Result<GenerateCertificateRequestV2Response, Error> {
     do_rpc::<
@@ -38,14 +39,7 @@ pub fn generate_certificate_request_v2(
         generate_certificate_request_v2::Response,
         generate_certificate_request_v2::RequestBuildParams,
         GenerateCertificateRequestV2Response,
-    >(
-        generate_certificate_request_v2::RequestBuildParams {
-            request,
-            // TODO(b/451652543) Implement this.
-            device_info: Vec::new(),
-        },
-        client,
-    )
+    >(generate_certificate_request_v2::RequestBuildParams { request, device_info }, client)
 }
 
 pub fn generate_ecdsa_p256_keypair(
