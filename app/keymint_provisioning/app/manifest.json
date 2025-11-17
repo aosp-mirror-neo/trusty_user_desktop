@@ -1,0 +1,15 @@
+{
+    "app_name": "keymint_provisioning_app",
+    "uuid": "17ef817e-35d9-4e0a-ab2a-78f8cc44ecce",
+    "min_heap": 114688,
+    "min_stack": 65536,
+    "start_ports": [
+        {
+            "name": "com.android.trusty.keymint.provisioning",
+            "flags": {
+                "allow_ta_connect": false,
+                "allow_ns_connect": true
+            }
+        }
+    ]
+}

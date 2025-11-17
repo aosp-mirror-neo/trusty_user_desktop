@@ -5,6 +5,13 @@
     "min_stack": 65536,
     "start_ports": [
         {
+            "name": "com.android.trusty.keymaster.strongbox",
+            "flags": {
+                "allow_ta_connect": false,
+                "allow_ns_connect": true
+            }
+        },
+        {
             "name": "com.android.trusty.keymint.strongbox",
             "flags": {
                 "allow_ta_connect": false,

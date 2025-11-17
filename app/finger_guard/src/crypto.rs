@@ -16,7 +16,6 @@
 
 //! Cryptographic operations used by the finger guard service.
 
-use crate::aidl::impl_export;
 use crate::error::{ServiceError, ServiceResult};
 use crate::hat::SignedHat;
 use crate::identifiers::SensorStateIndex;
@@ -66,7 +65,50 @@ impl<T> MapOpenSslErrExt<T> for Result<T, openssl::error::ErrorStack> {
 /// From and Into bytes traits from zerocopy. However, these traits should not be used directly
 /// by internal code to extract the raw bytes. Any operations that need to use the bytes should
 /// instead be defined on the generated type directly.
+///
+/// The macro can also be invoked with additional keyword parameters that specify additional
+/// features to be added to the type:
+///   - generate: add a `generate` function to security generate a new random value
+///   - import: add an `import` function that creates an instance using a slice of bytes
+///   - hmac_signable: implement HmacSignable using the bytes as the contents of the message
+///   - hashable: implement Hashable by hashing the bytes of the blob
 macro_rules! blob_newtype {
+    (@feature, $name:ident, generate) => {
+        impl $name {
+            /// Securely generate a new value.
+            pub fn generate() -> Self {
+                Self { bytes: rng::generate_random_buffer::<{ Self::SIZE }>() }
+            }
+        }
+    };
+    (@feature, $name:ident, import) => {
+        impl $name {
+            /// Import a value that was supplied as a blob of bytes. Can fail if the size is incorrect.
+            pub fn import(value: &[u8]) -> ServiceResult<Self> {
+                Ok(Self {
+                    bytes: value.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
+                        name: stringify!($name),
+                        expected: $name::SIZE,
+                        actual: value.len(),
+                    })?,
+                })
+            }
+        }
+    };
+    (@feature, $name:ident, hmac_signable) => {
+        impl HmacSignable for $name {
+            fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
+                add_bytes(&self.bytes)
+            }
+        }
+    };
+    (@feature, $name:ident, hashable) => {
+        impl Hashable for $name {
+            fn update(&self, mut add_bytes: impl FnMut(&[u8])) {
+                add_bytes(&self.bytes)
+            }
+        }
+    };
     ($name:ident, $size:literal) => {
         /// A binary blob of representing a cryptographic object.
         #[derive(FromBytes, IntoBytes, Immutable)]
@@ -83,104 +125,72 @@ macro_rules! blob_newtype {
             const SIZE: usize = $size;
         }
     };
+    ($name:ident, $size:literal, $($feature:ident),+) => {
+        blob_newtype!($name, $size);
+        $(blob_newtype!(@feature, $name, $feature);)+
+    };
+}
+
+/// Wrapper around impl_export for exporting blob newtypes.
+///
+/// This works the same way as the impl_export macro but without having to supply the body of the
+/// export function. It only accepts Vec<u8> and [u8] as the types to be exported. If you use [u8]
+/// the produced type is actually a fixed-size array but the macro will fill in the size.
+macro_rules! impl_blob_export {
+    ($impltype:ident($selfname:ident) => $external:ident.$field:ident as Vec<u8>) => {
+        crate::aidl::impl_export!($impltype($selfname) => $external.$field as Vec<u8> {
+            $selfname.bytes.to_vec()
+        });
+    };
+    ($impltype:ident($selfname:ident) => $external:ident.$field:ident as [u8]) => {
+        crate::aidl::impl_export!($impltype($selfname) => $external.$field as [u8; $impltype::SIZE] {
+            $selfname.bytes
+        });
+    };
 }
 
 // Define a type for a generic key.
 blob_newtype!(Key, 32);
 
 // Define a new type for nonces.
-blob_newtype!(Nonce, 32);
-impl Nonce {
-    /// Securely generate a new nonce.
-    pub fn generate() -> Self {
-        Self { bytes: rng::generate_random_buffer::<{ Self::SIZE }>() }
-    }
-    /// Import a nonce that was supplied as a blob of bytes. Can fail if the size is incorrect.
-    pub fn import(value: &[u8]) -> ServiceResult<Self> {
-        Ok(Self {
-            bytes: value.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
-                name: "nonce",
-                expected: Nonce::SIZE,
-                actual: value.len(),
-            })?,
-        })
-    }
-}
-impl_export!(Nonce(self) => ClientSessionResponse.nonce as Vec<u8> {
-    self.bytes.to_vec()
-});
-impl_export!(Nonce(self) => SdcpClaim.nonce as Vec<u8> {
-    self.bytes.to_vec()
-});
-impl_export!(Nonce(self) => SdcpClientSessionResponse.nonce as Vec<u8> {
-    self.bytes.to_vec()
-});
-impl_export!(Nonce(self) => PrepareAuthSessionResponse.nonce as [u8; 32] {
-    self.bytes
-});
-impl HmacSignable for Nonce {
-    fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
-        add_bytes(&self.bytes)
-    }
-}
+blob_newtype!(Nonce, 32, generate, hmac_signable, import);
+impl_blob_export!(Nonce(self) => ClientSessionResponse.nonce as Vec<u8>);
+impl_blob_export!(Nonce(self) => SdcpClaim.nonce as Vec<u8>);
+impl_blob_export!(Nonce(self) => SdcpClientSessionResponse.nonce as Vec<u8>);
+impl_blob_export!(Nonce(self) => PrepareAuthSessionResponse.nonce as [u8]);
 
 // Define a type for encryption IVs.
-blob_newtype!(Iv, 12);
-impl Iv {
-    /// Securely generate a new IV.
-    pub fn generate() -> Self {
-        Self { bytes: rng::generate_random_buffer::<{ Self::SIZE }>() }
-    }
-}
-impl_export!(Iv(self) => ClientSessionResponse.iv as Vec<u8> {
-    self.bytes.to_vec()
-});
-impl_export!(Iv(self) => SdcpClientSessionResponse.iv as Vec<u8> {
-    self.bytes.to_vec()
-});
+blob_newtype!(Iv, 12, generate);
+impl_blob_export!(Iv(self) => ClientSessionResponse.iv as Vec<u8>);
+impl_blob_export!(Iv(self) => SdcpClientSessionResponse.iv as Vec<u8>);
 
 // Define a type for tags used in AES-256 encryption.
 blob_newtype!(Aes256Tag, 16);
-impl_export!(Aes256Tag(self) => ClientSessionResponse.tag as Vec<u8> {
-    self.bytes.to_vec()
-});
-impl_export!(Aes256Tag(self) => SdcpClientSessionResponse.tag as Vec<u8> {
-    self.bytes.to_vec()
-});
+impl_blob_export!(Aes256Tag(self) => ClientSessionResponse.tag as Vec<u8>);
+impl_blob_export!(Aes256Tag(self) => SdcpClientSessionResponse.tag as Vec<u8>);
 
 // Define a new type for a secret. Note that while most of the blobs (e.g. nonces, keys) are
 // secrets, those ones have additional semantic intent: nonces should only be used once, keys
 // can be used to encrypt/decrypt data, and so on.
-blob_newtype!(Secret, 32);
-impl Secret {
-    /// Securely generate a new secret.
-    pub fn generate() -> Self {
-        Self { bytes: rng::generate_random_buffer::<{ Self::SIZE }>() }
-    }
-}
+blob_newtype!(Secret, 32, generate);
 
 // Define a type for the uncompressed representation of the public key point on the EC P256
 // curve.
-blob_newtype!(P256Point, 65);
+blob_newtype!(P256Point, 65, import, hashable);
+impl_blob_export!(P256Point(self) => InitResponse.serverPublicKey as Vec<u8>);
+impl_blob_export!(P256Point(self) => SdcpClientSessionResponse.serverPublicKey as Vec<u8>);
+impl_blob_export!(P256Point(self) => SdcpClaim.modelPublicKey as [u8]);
+impl_blob_export!(P256Point(self) => SdcpClaim.devicePublicKey as [u8]);
+impl_blob_export!(P256Point(self) => SdcpClaim.ephemeralPublicKey as [u8]);
 
-impl P256Point {
-    /// Import a P256 point that was supplied as a blob of bytes. Can fail if the size is incorrect.
-    pub fn import(value: &[u8]) -> ServiceResult<Self> {
-        Ok(Self {
-            bytes: value.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
-                name: "EC p256 point",
-                expected: P256Point::SIZE,
-                actual: value.len(),
-            })?,
-        })
-    }
-    /// Convert to a created `EcKey<Public>`
-    pub fn to_ec_key(&self) -> ServiceResult<EcKey<Public>> {
+impl TryFrom<&P256Point> for EcKey<Public> {
+    type Error = ServiceError;
+    fn try_from(value: &P256Point) -> ServiceResult<Self> {
         let ec_key = (|| {
             let group = EcGroup::from_curve_name(NIST_P256_CURVE_NAME)?;
             let mut ctx = BigNumContext::new()?;
-            let ec_point = EcPoint::from_bytes(&group, &self.bytes, &mut ctx)?;
-            let public_key: EcKey<Public> = EcKey::from_public_key(&group, &ec_point)?;
+            let ec_point = EcPoint::from_bytes(&group, &value.bytes, &mut ctx)?;
+            let public_key = EcKey::from_public_key(&group, &ec_point)?;
             Ok(public_key)
         })()
         .wrap_openssl_err("failed to convert into a EcKey public key")?;
@@ -188,63 +198,35 @@ impl P256Point {
     }
 }
 
+#[cfg(test)]
 impl From<P256Point> for [u8; 65] {
     fn from(val: P256Point) -> [u8; 65] {
         val.bytes
     }
 }
 
-impl Hashable for P256Point {
-    fn update(&self, mut add_bytes: impl FnMut(&[u8])) {
-        add_bytes(&self.bytes)
-    }
-}
-
 impl P256SigVerifier for P256Point {
     fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool> {
-        let ecdsa_sig = sig.to_ecdsa_sig()?;
-        let ec_key = self.to_ec_key()?;
+        let ecdsa_sig = EcdsaSig::try_from(sig)?;
+        let ec_key = EcKey::try_from(self)?;
         ecdsa_sig
             .verify(&dgst.bytes, &ec_key)
             .wrap_openssl_err("failed to verify a ECDSA signature")
     }
 }
 
-impl_export!(P256Point(self) => InitResponse.serverPublicKey as Vec<u8> {
-    self.bytes.to_vec()
-});
-impl_export!(P256Point(self) => SdcpClientSessionResponse.serverPublicKey as Vec<u8> {
-    self.bytes.to_vec()
-});
-impl_export!(P256Point(self) => SdcpClaim.modelPublicKey as [u8; 65] {
-    self.bytes
-});
-impl_export!(P256Point(self) => SdcpClaim.devicePublicKey as [u8; 65] {
-    self.bytes
-});
-impl_export!(P256Point(self) => SdcpClaim.ephemeralPublicKey as [u8; 65] {
-    self.bytes
-});
-
 // Define a type for the raw representation of a ECDSA P256 signature.
-blob_newtype!(P256Sig, 64);
+blob_newtype!(P256Sig, 64, import);
+impl_blob_export!(P256Sig(self) => SdcpClaim.modelKeySignature as [u8]);
+impl_blob_export!(P256Sig(self) => SdcpClaim.deviceKeySignature as [u8]);
+impl_blob_export!(P256Sig(self) => SdcpClaim.firmwareSignature as [u8]);
 
-impl P256Sig {
-    /// Import a raw P256 signature that was supplied as a blob of bytes. Can fail if the size is incorrect.
-    pub fn import(value: &[u8]) -> ServiceResult<Self> {
-        Ok(Self {
-            bytes: value.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
-                name: "ECDSA p256 signature",
-                expected: P256Sig::SIZE,
-                actual: value.len(),
-            })?,
-        })
-    }
-    /// Convert to a created EcdsaSig.
-    pub fn to_ecdsa_sig(&self) -> ServiceResult<EcdsaSig> {
+impl TryFrom<&P256Sig> for EcdsaSig {
+    type Error = ServiceError;
+    fn try_from(value: &P256Sig) -> ServiceResult<Self> {
         let sig = (|| {
-            let r = BigNum::from_slice(&self.bytes[0..32])?;
-            let s = BigNum::from_slice(&self.bytes[32..64])?;
+            let r = BigNum::from_slice(&value.bytes[0..32])?;
+            let s = BigNum::from_slice(&value.bytes[32..64])?;
             EcdsaSig::from_private_components(r, s)
         })()
         .wrap_openssl_err("failed to convert into a EcdsaSig")?;
@@ -260,20 +242,10 @@ pub trait P256SigVerifier {
 
 impl P256SigVerifier for EcKey<Public> {
     fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool> {
-        let ecdsa_sig = sig.to_ecdsa_sig()?;
+        let ecdsa_sig = EcdsaSig::try_from(sig)?;
         ecdsa_sig.verify(&dgst.bytes, self).wrap_openssl_err("failed to verify a ECDSA signature")
     }
 }
-
-impl_export!(P256Sig(self) => SdcpClaim.modelKeySignature as [u8; 64] {
-    self.bytes
-});
-impl_export!(P256Sig(self) => SdcpClaim.deviceKeySignature as [u8; 64] {
-    self.bytes
-});
-impl_export!(P256Sig(self) => SdcpClaim.firmwareSignature as [u8; 64] {
-    self.bytes
-});
 
 /// The type of EC used by finger_guard.
 pub const NIST_P256_CURVE_NAME: Nid = Nid::X9_62_PRIME256V1;
@@ -317,7 +289,7 @@ pub fn perform_ecdh(
     client_public_key: &P256Point,
 ) -> ServiceResult<Key> {
     // Perform all of the crypto operations to produce the new key.
-    let ec_key = client_public_key.to_ec_key()?;
+    let ec_key = EcKey::try_from(client_public_key)?;
     let pk = (|| {
         let server_private_key: PKey<Private> = server_private_key.try_into()?;
         let peer_public_key: PKey<Public> = ec_key.try_into()?;
@@ -437,15 +409,9 @@ impl From<Hmac> for AuthenticationResult {
         Self { authenticated: true, mac: value.bytes.to_vec() }
     }
 }
-impl_export!(Hmac(self) => SignedHat.mac as Vec<u8> {
-    self.bytes.to_vec()
-});
-impl_export!(Hmac(self) => InitResponse.pkMac as Vec<u8> {
-    self.bytes.to_vec()
-});
-impl_export!(Hmac(self) => PrepareAuthSessionResponse.mac as Vec<u8> {
-    self.bytes.to_vec()
-});
+impl_blob_export!(Hmac(self) => SignedHat.mac as Vec<u8>);
+impl_blob_export!(Hmac(self) => InitResponse.pkMac as Vec<u8>);
+impl_blob_export!(Hmac(self) => PrepareAuthSessionResponse.mac as Vec<u8>);
 impl From<Hmac> for PrepareEnrollSessionResponse {
     fn from(value: Hmac) -> Self {
         PrepareEnrollSessionResponse { mac: value.bytes.to_vec() }
@@ -513,30 +479,8 @@ macro_rules! _compute_hmac {
 pub use _compute_hmac as compute_hmac;
 
 // Define a type for SHA256 message digest.
-blob_newtype!(HashValue, 32);
-
-impl HashValue {
-    /// Import a SHA256 hash that was supplied as a blob of bytes. Can fail if the size is incorrect.
-    pub fn import(value: &[u8]) -> ServiceResult<Self> {
-        Ok(Self {
-            bytes: value.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
-                name: "SHA256 hash value",
-                expected: HashValue::SIZE,
-                actual: value.len(),
-            })?,
-        })
-    }
-}
-
-impl Hashable for HashValue {
-    fn update(&self, mut add_bytes: impl FnMut(&[u8])) {
-        add_bytes(&self.bytes)
-    }
-}
-
-impl_export!(HashValue(self) => SdcpClaim.firmwareHash as [u8; 32] {
-    self.bytes
-});
+blob_newtype!(HashValue, 32, import, hashable);
+impl_blob_export!(HashValue(self) => SdcpClaim.firmwareHash as [u8]);
 
 /// Generator which can consume bytes and produce a Sha256.
 pub struct HashGenerator {
@@ -605,8 +549,8 @@ pub fn sensor_session_message_hmac(
 mod test {
     use super::{
         compute_hmac, compute_sha256, decrypt_aes256_gcm, ec_keygen, ec_public_key_serialization,
-        encrypt_aes256_gcm, perform_ecdh, Aes256Tag, Hmac, HmacGenerator, HmacSignable, Iv, Key,
-        P256Point, P256Sig, P256SigVerifier, Secret,
+        encrypt_aes256_gcm, perform_ecdh, Aes256Tag, EcKey, EcdsaSig, Hmac, HmacGenerator,
+        HmacSignable, Iv, Key, P256Point, P256Sig, P256SigVerifier, Secret,
     };
     use crate::error::ServiceResult;
     use std::array;
@@ -762,7 +706,7 @@ mod test {
             0xdf, 0xa0, 0xec, 0xb5, 0x77, 0x44, 0xf7, 0xd2, 0x95,
         ];
         let p256_point = P256Point::import(&public_key_bytes).unwrap();
-        let _ = p256_point.to_ec_key();
+        assert!(EcKey::try_from(&p256_point).is_ok());
     }
 
     #[test]
@@ -775,7 +719,7 @@ mod test {
             0x57, 0x76, 0x47, 0x10, 0x67, 0xe0, 0xff, 0xa6,
         ];
         let p256_sig = P256Sig::import(&sig).unwrap();
-        let _ = p256_sig.to_ecdsa_sig().unwrap();
+        assert!(EcdsaSig::try_from(&p256_sig).is_ok());
     }
 
     #[test]
@@ -806,7 +750,7 @@ mod test {
         ];
         let p256_sig = P256Sig::import(&sig).unwrap();
         let ksk_point = P256Point::import(&ksk_public_key_bytes).unwrap();
-        let ksk_key = ksk_point.to_ec_key().unwrap();
+        let ksk_key = EcKey::try_from(&ksk_point).unwrap();
         let model_key = P256Point::import(&model_key_bytes).unwrap();
         let dgst = compute_sha256!(&model_key);
         assert!(ksk_point.verify(&dgst, &p256_sig).unwrap());

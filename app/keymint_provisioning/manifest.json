@@ -1,0 +1,6 @@
+{
+        "app_name": "keymint_provisioning_lib",
+        "uuid": "23481cb0-028d-4fbf-b8b6-42f0e8c96f1f",
+        "min_heap": 20480,
+        "min_stack": 20480
+}
