@@ -251,7 +251,7 @@ fn do_rpc<
     GRQ: TpmvRequestBuild<BuildParams = ARQ, Err = Error> + TpmvRequest<TpmvResponse = GRSP> + ?Sized,
     GRSP: FromBytes + IntoBytes + KnownLayout + Unaligned + ?Sized,
     ARQ,
-    ARSP: for<'a> TryFrom<&'a mut GRSP>,
+    ARSP: for<'a> TryFrom<&'a mut GRSP, Error = Error>,
 >(
     request: ARQ,
     client: &Strong<dyn IGsc>,
@@ -267,7 +267,7 @@ fn do_rpc<
     if rsp.header.error_code == 0 {
         let ret = GRSP::mut_from_bytes(&mut rsp.response)
             .map_err(|_| km_err!(EncodingError, "parsing keymint response"))?;
-        ret.try_into().map_err(|_| km_err!(EncodingError, ""))
+        ret.try_into()
     } else {
         Err(km_err!(SecureHwCommunicationFailed, "0x{:X}", rsp.header.error_code))
     }
@@ -277,40 +277,58 @@ fn do_rpc<
 mod tests {
     use super::*;
     use gsc_svc_client::GscServiceClient;
-    use kmr_wire::keymint::KeyPurpose;
-    use kmr_wire::BeginRequest;
+    use kmr_wire::keymint::*;
+    use kmr_wire::*;
+
+    /// TODO drop this when it is stabilized in std.
+    macro_rules! assert_matches {
+        ($first:expr, $($second:pat_param)|+ $(if $third:expr)?) => {
+            let a = $first;
+            if !matches!(&a, $($second)|+ $(if $third)?) {
+                panic!(
+                    "'{}' does not match '{}'; Got '{:?}'",
+                    stringify!($first),
+                    stringify!($($second)|+ $(if $third)?),
+                    a
+                );
+            }
+        };
+    }
+
     test::init!();
 
     #[test]
     fn get_hardware_info() {
         let tpm = GscServiceClient::default().0;
-        rkp::get_hardware_info(&tpm).unwrap();
+        assert_matches!(rkp::get_hardware_info(&tpm), Ok(_));
     }
 
     #[test]
-    fn generate_key() {
+    fn generate_keypair() {
         let tpm = GscServiceClient::default().0;
-        rkp::generate_ecdsa_p256_keypair(&tpm).unwrap();
+        assert_matches!(rkp::generate_ecdsa_p256_keypair(&tpm), Ok(_));
     }
 
     #[test]
     fn get_dice_chain() {
         let tpm = GscServiceClient::default().0;
-        rkp::_get_dice_chain(&tpm).unwrap();
+        assert_matches!(rkp::_get_dice_chain(&tpm), Ok(_));
     }
 
     #[test]
     fn operation() {
         let tpm = GscServiceClient::default().0;
-        operations::device_begin(
-            BeginRequest {
-                purpose: KeyPurpose::Sign,
-                key_blob: vec![0u8; 256usize],
-                params: Vec::new(),
-                auth_token: None,
-            },
-            &tpm,
-        )
-        .unwrap();
+        assert_matches!(
+            operations::device_begin(
+                BeginRequest {
+                    purpose: KeyPurpose::Sign,
+                    key_blob: vec![0u8; 256usize],
+                    params: Vec::new(),
+                    auth_token: None,
+                },
+                &tpm,
+            ),
+            Ok(_)
+        );
     }
 }
