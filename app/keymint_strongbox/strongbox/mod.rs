@@ -87,6 +87,12 @@ impl StrongBox {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceGenerateKey(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::DeviceGenerateKey, err),
             },
+            PerformOpReq::DeviceGetHardwareInfo(req) => {
+                match operations::device_get_hardware_info(req, &self.tpm) {
+                    Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceGetHardwareInfo(resp)),
+                    Err(err) => op_error_rsp(KeyMintOperation::DeviceGetHardwareInfo, err),
+                }
+            }
             PerformOpReq::OperationFinish(req) => {
                 match operations::operation_finish(req, &self.tpm) {
                     Ok(resp) => op_ok_rsp(PerformOpRsp::OperationFinish(resp)),
@@ -117,10 +123,7 @@ impl StrongBox {
                     Err(err) => op_error_rsp(KeyMintOperation::RpcGenerateEcdsaP256KeyPair, err),
                 }
             }
-            PerformOpReq::RpcGetHardwareInfo(_) => {
-                let _ = rkp::get_hardware_info(&self.tpm);
-                error_rsp(ErrorCode::Unimplemented as i32)
-            }
+            PerformOpReq::RpcGetHardwareInfo(_) => error_rsp(ErrorCode::Unimplemented as i32),
             PerformOpReq::SetAttestationIds(req) => {
                 if !self.set_attestation_id_info(req.ids) {
                     op_error_rsp(

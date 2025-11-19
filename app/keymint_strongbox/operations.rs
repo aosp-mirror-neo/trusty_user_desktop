@@ -20,7 +20,8 @@ use android_system_desktop_security_gsc::aidl::android::system::desktop::securit
 use binder::Strong;
 use kmr_common::Error;
 use kmr_wire::{
-    BeginRequest, BeginResponse, FinishRequest, FinishResponse, UpdateRequest, UpdateResponse,
+    BeginRequest, BeginResponse, FinishRequest, FinishResponse, GetHardwareInfoRequest,
+    GetHardwareInfoResponse, UpdateRequest, UpdateResponse,
 };
 use tpm_commands::strongbox::*;
 
@@ -31,6 +32,18 @@ pub fn device_begin(
     client: &Strong<dyn IGsc>,
 ) -> Result<BeginResponse, Error> {
     do_rpc::<begin::Request, begin::Response, BeginRequest, BeginResponse>(request, client)
+}
+
+pub fn device_get_hardware_info(
+    request: GetHardwareInfoRequest,
+    client: &Strong<dyn IGsc>,
+) -> Result<GetHardwareInfoResponse, Error> {
+    do_rpc::<
+        get_hardware_info::Request,
+        get_hardware_info::Response,
+        GetHardwareInfoRequest,
+        GetHardwareInfoResponse,
+    >(request, client)
 }
 
 pub fn operation_update(

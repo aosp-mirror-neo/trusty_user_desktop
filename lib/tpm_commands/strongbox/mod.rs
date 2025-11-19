@@ -20,7 +20,10 @@
 
 use crate::{TpmvRequest, TpmvRequestBuild, NO_SESSION_TAG};
 use kmr_common::{km_err_new, Error, ErrorKind};
-use kmr_wire::{keymint::KeyCreationResult, *};
+use kmr_wire::{
+    keymint::{KeyCreationResult, KeyMintHardwareInfo, SecurityLevel},
+    *,
+};
 use zerocopy::{
     FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, BE, I32, I64, LE, U16, U32,
 };
@@ -458,20 +461,34 @@ pub mod get_hardware_info {
     use super::*;
 
     /// This command has no inputs, so Request is an empty struct.
-    #[derive(Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+    #[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
     #[repr(C)]
     pub struct Request;
 
     impl_tpmv_request!(GetHardwareInfoRequest);
 
+    impl TpmvRequestBuild for Request {
+        type BuildParams = kmr_wire::GetHardwareInfoRequest;
+
+        type Err = Error;
+
+        fn expected_size(_params: &Self::BuildParams) -> Result<u32, Self::Err> {
+            Ok(0u32)
+        }
+
+        fn init(&mut self, _params: Self::BuildParams) -> Result<(), Self::Err> {
+            Ok(())
+        }
+    }
+
     /// Represents a response from a [`Request`]
-    #[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
     #[repr(C)]
     pub struct Response {
         /// Stronbox version
         pub version: I32<BE>,
         /// Keymint security level (KM_SECURITY_STRONGBOX = 2)
-        pub security_level: U32<BE>,
+        pub security_level: I32<BE>,
         /// Keymint name length (4)
         pub keymint_name_len: U32<BE>,
         /// Keymint name (CR50)
@@ -482,8 +499,30 @@ pub mod get_hardware_info {
         pub keymint_author: [u8; 8],
         /// Timestamp token required (false)
         pub timestamp_token_required: U32<BE>,
-        /// TODO: remove when firmware removes the extra bytes
-        pub unused: [u8; 7],
+    }
+
+    impl<'a> TryFrom<&'a mut Response> for GetHardwareInfoResponse {
+        type Error = Error;
+
+        fn try_from(resp: &'a mut Response) -> Result<Self, Self::Error> {
+            let name_len = resp.keymint_name_len.get() as usize;
+            let author_len = resp.keymint_author_len.get() as usize;
+            Ok(GetHardwareInfoResponse {
+                ret: KeyMintHardwareInfo {
+                    version_number: resp.version.get(),
+                    security_level: SecurityLevel::try_from(resp.security_level.get())
+                        .map_err(|_| km_err!(EncodingError, "security_level"))?,
+                    key_mint_name: String::from_utf8(resp.keymint_name[..name_len].to_vec())
+                        .map_err(|_| km_err!(EncodingError, "keymint_name"))?,
+                    key_mint_author_name: String::from_utf8(
+                        resp.keymint_author[..author_len].to_vec(),
+                    )
+                    .map_err(|_| km_err!(EncodingError, "keymint_author"))?,
+
+                    timestamp_token_required: resp.timestamp_token_required.get() != 0,
+                },
+            })
+        }
     }
 }
 

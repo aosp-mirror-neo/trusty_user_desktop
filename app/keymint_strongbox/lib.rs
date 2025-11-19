@@ -298,9 +298,12 @@ mod tests {
     test::init!();
 
     #[test]
-    fn get_hardware_info() {
+    fn device_get_hardware_info() {
         let tpm = GscServiceClient::default().0;
-        assert_matches!(rkp::get_hardware_info(&tpm), Ok(_));
+        assert_matches!(
+            operations::device_get_hardware_info(GetHardwareInfoRequest {}, &tpm),
+            Ok(_)
+        );
     }
 
     #[test]
