@@ -135,6 +135,7 @@ service_dispatcher! {
 /// Main loop handler for the KeyMint TA.
 pub fn handle_port_connections(hw_info: HardwareInfo, rpc_info: RpcInfo) -> Result<(), Error> {
     let sb_ta = Rc::new(RefCell::new(StrongBox::new(hw_info, rpc_info)?));
+
     let ns_service = KMService::new(sb_ta);
 
     let mut dispatcher = KMServiceDispatcher::<1>::new()

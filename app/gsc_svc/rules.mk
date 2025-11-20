@@ -44,6 +44,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/keymint-rust/wire \
 	trusty/user/desktop/lib/keymint_legacy_client \
+	trusty/user/desktop/lib/tpm_commands \
 
 MODULE_RUST_USE_CLIPPY := true
 MODULE_RUST_TESTS := true

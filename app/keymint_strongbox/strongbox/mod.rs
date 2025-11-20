@@ -27,7 +27,10 @@ use kmr_wire::{
     keymint::{BootInfo, ErrorCode, KeyParam, SecurityLevel, VerifiedBootState},
     *,
 };
-use log::{error, trace, warn};
+use log::{error, info, trace, warn};
+use tpm_commands::strongbox::enable_strongbox;
+use tpm_commands::{TpmRequestMessage, TpmResponseMessage};
+use zerocopy::{FromBytes, IntoBytes};
 
 pub struct StrongBox {
     tpm: Strong<dyn IGsc>,
@@ -37,6 +40,7 @@ pub struct StrongBox {
     hal_info: Option<HalInfo>,
     hw_info: HardwareInfo,
     rpc_info: RpcInfo,
+    enabled: bool,
 }
 
 impl StrongBox {
@@ -51,11 +55,46 @@ impl StrongBox {
             hal_info: None,
             hw_info,
             rpc_info,
+            enabled: false,
         })
+    }
+
+    pub fn init(&mut self) {
+        if self.enabled {
+            return;
+        }
+        loop {
+            // This command needs to be sent after gscd connects and before any other apps try to use
+            // the GSC. This can be accomplished by looping until a successful transmit is made.
+            // TODO: This may latency to overall boot due to synchronous operation
+            let cmd = TpmRequestMessage::new(enable_strongbox::Request { enable: 1 });
+            let rsp = self.tpm.transmit(cmd.as_bytes());
+            if let Ok(rsp) = rsp {
+                let rsp =
+                    TpmResponseMessage::<enable_strongbox::Response>::ref_from_bytes(&rsp).unwrap();
+                // 0x57F is returned if the GSC firmware hasn't added this command yet and SB is
+                // enabled by default.
+                if rsp.header.error_code == 0 || rsp.header.error_code == 0x57F {
+                    info!("gcsd successfully enabled Strongbox {:#x}", rsp.header.error_code);
+                    self.enabled = true;
+                    break;
+                } else {
+                    error!("gscd failed to enable Strongbox. TPM_RC: {:#x}", rsp.header.error_code);
+                }
+            } else {
+                error!("Failed to init SB. Retrying...");
+            }
+            // SAFETY: `clock_id` and `flags` are both zero, as required by the
+            // `trusty_nanosleep` docs.
+            unsafe {
+                trusty_sys::nanosleep(0, 0, 50000000);
+            }
+        }
     }
 
     /// Process a single serialized request, returning a serialized response.
     pub fn process(&mut self, req_data: &[u8]) -> Vec<u8> {
+        self.init();
         let (req_code, rsp) = match PerformOpReq::from_slice(req_data) {
             Ok(req) => {
                 trace!("-> TA: received request {:?}", req.code());
