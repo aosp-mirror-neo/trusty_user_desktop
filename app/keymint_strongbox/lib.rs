@@ -280,6 +280,7 @@ mod tests {
     use gsc_svc_client::GscServiceClient;
     use kmr_wire::keymint::*;
     use kmr_wire::*;
+    use std::fmt::Write;
 
     /// TODO drop this when it is stabilized in std.
     macro_rules! assert_matches {
@@ -294,6 +295,144 @@ mod tests {
                 );
             }
         };
+    }
+
+    macro_rules! expect_eq {
+        ($first:expr, $second:expr) => {{
+            let a = $first;
+            let b = $second;
+            if a != b {
+                log::error!(
+                    "line {}: '{:?}' ('{}') does not equal '{:?}' ('{}')",
+                    line!(),
+                    a,
+                    stringify!($first),
+                    b,
+                    stringify!($second),
+                );
+                false
+            } else {
+                true
+            }
+        }};
+    }
+
+    macro_rules! expect_ge {
+        ($first:expr, $second:expr) => {{
+            let a = $first;
+            let b = $second;
+            if a < b {
+                log::error!(
+                    "line {}: '{:?}' ('{}') not less than '{:?}' ('{}')",
+                    line!(),
+                    a,
+                    stringify!($first),
+                    b,
+                    stringify!($second),
+                );
+                false
+            } else {
+                true
+            }
+        }};
+    }
+
+    macro_rules! expect_lt {
+        ($first:expr, $second:expr) => {{
+            let a = $first;
+            let b = $second;
+            if a >= b {
+                log::error!(
+                    "line {}: '{:?}' ('{}') not less than '{:?}' ('{}')",
+                    line!(),
+                    a,
+                    stringify!($first),
+                    b,
+                    stringify!($second),
+                );
+                false
+            } else {
+                true
+            }
+        }};
+    }
+
+    fn validate_key_blob(key_blob: &[u8]) -> bool {
+        let mut success = true;
+        let mut buf = <[u32]>::ref_from_bytes(key_blob).expect("conversion failed");
+        let blob_words = buf[0] as usize;
+        buf = &buf[1..];
+
+        //     /* Blobs have a fixed elements in structure.
+        //     * see `process_gen_import_tags`
+        //     */
+        //     if (blob_words < KM_KEY_CHARACTERISTICS_WORDS + KM_AES_IV_WORDS +
+        //                 SHA256_DIGEST_WORDS)
+        //         return SBERR_InvalidKeyBlob;
+        success &= expect_ge!(blob_words, 12 + 4 + 8);
+
+        //     if (buf[0] != KM_SECURITY_STRONGBOX)
+        //         return SBERR_InvalidKeyBlob;
+        success &= expect_eq!(buf[0], 2);
+
+        //     hw_tag_words = buf[1];
+        let hw_tag_words = buf[1] as usize;
+        //     /* Skip KM_SECURITY_STRONGBOX word + size word */
+        //     tag_words = hw_tag_words + 2;
+        let mut tag_words = hw_tag_words + 2;
+        //     if (hw_tag_words >= blob_words)
+        //         return SBERR_InvalidKeyBlob;
+        success &= expect_lt!(hw_tag_words, blob_words);
+
+        //     if (buf[tag_words] != KM_SECURITY_KEYSTORE)
+        //         return SBERR_InvalidKeyBlob;
+        success &= expect_eq!(buf[tag_words], 100);
+
+        //     sw_tag_words = buf[tag_words + 1];
+        let sw_tag_words = buf[tag_words + 1] as usize;
+        //     if (sw_tag_words + tag_words >= blob_words)
+        //         return SBERR_InvalidKeyBlob;
+        success &= expect_lt!(tag_words + sw_tag_words, blob_words);
+
+        //     /* Skip KM_SECURITY_KEYSTORE word + size word */
+        //     tag_words += sw_tag_words + 2;
+        tag_words += sw_tag_words + 2;
+
+        //     /* Actual encrypted key blob size */
+        //     key_blob_size = buf[tag_words];
+        let key_blob_size = buf[tag_words] as usize;
+
+        //     if (key_blob_size / sizeof(uint32_t) + tag_words + 1 != blob_words)
+        //         return SBERR_InvalidKeyBlob;
+        success &= expect_eq!(key_blob_size / 4 + tag_words + 1, blob_words);
+
+        if !success {
+            error!("Failed key:");
+            log_bytes(&key_blob);
+        }
+        success
+    }
+
+    fn log_bytes(to_log: &[u8]) {
+        error!("{} bytes", to_log.len());
+        let mut buffer = String::with_capacity(32 + 3 - 2);
+        for (i, v) in to_log.iter().copied().enumerate() {
+            match i & 15 {
+                15 => {
+                    error!("{buffer:}{v:02x}");
+                    buffer.clear();
+                }
+                4 | 8 | 12 => {
+                    write!(&mut buffer, " {v:02x}").unwrap();
+                }
+                _ => {
+                    write!(&mut buffer, "{v:02x}").unwrap();
+                }
+            }
+        }
+        if !buffer.is_empty() {
+            error!("{buffer:}");
+        }
     }
 
     test::init!();
@@ -342,19 +481,94 @@ mod tests {
     }
 
     #[test]
-    fn operation() {
+    fn smoke_test() {
         let tpm = GscServiceClient::default().0;
-        assert_matches!(
-            device::begin(
-                BeginRequest {
-                    purpose: KeyPurpose::Sign,
-                    key_blob: vec![0u8; 256usize],
-                    params: Vec::new(),
-                    auth_token: None,
-                },
-                &tpm,
-            ),
-            Ok(_)
+
+        let ret = rkp::generate_ecdsa_p256_keypair(
+            GenerateEcdsaP256KeyPairRequest { test_mode: true },
+            &tpm,
         );
+        assert_matches!(ret.as_ref(), Ok(_));
+        let GenerateEcdsaP256KeyPairResponse { maced_public_key: _, ret: key_blob } = ret.unwrap();
+
+        validate_key_blob(&key_blob);
+
+        const APP_ID: &[u8] = &[0xAA, 0xBB, 0xCC, 0xDD];
+        const APP_DATA: &[u8] = &[0x11, 0x22, 0x33, 0x44];
+
+        let key_params = vec![
+            KeyParam::Algorithm(Algorithm::Ec),
+            KeyParam::KeySize(KeySizeInBits(256)),
+            KeyParam::Purpose(KeyPurpose::Sign),
+            KeyParam::Digest(Digest::Sha256),
+            KeyParam::AllowWhileOnBody,
+            KeyParam::UserId(0xF00),
+            KeyParam::ApplicationId(APP_ID.to_vec()),
+            KeyParam::ApplicationData(APP_DATA.to_vec()),
+        ];
+        let ret = device::generate_key(
+            GenerateKeyRequest {
+                key_params,
+                attestation_key: Some(AttestationKey {
+                    key_blob,
+                    attest_key_params: Vec::new(),
+                    issuer_subject_name: Vec::new(),
+                }),
+            },
+            &tpm,
+        );
+        assert_matches!(ret.as_ref(), Ok(_));
+        let GenerateKeyResponse {
+            ret:
+                KeyCreationResult {
+                    key_blob: signing_key_blob,
+                    key_characteristics: _,
+                    certificate_chain: _,
+                },
+        } = ret.unwrap();
+
+        validate_key_blob(&signing_key_blob);
+
+        let ret = device::begin(
+            BeginRequest {
+                purpose: KeyPurpose::Sign,
+                key_blob: signing_key_blob,
+                params: vec![
+                    KeyParam::ApplicationId(APP_ID.to_vec()),
+                    KeyParam::ApplicationData(APP_DATA.to_vec()),
+                ],
+                auth_token: None,
+            },
+            &tpm,
+        );
+        assert_matches!(ret.as_ref(), Ok(_));
+        let BeginResponse { ret: InternalBeginResult { challenge: _, params: _, op_handle } } =
+            ret.unwrap();
+
+        if let Err(err) = operation::update(
+            UpdateRequest {
+                op_handle,
+                input: b"0123456789ABCDEF0123456789ABCDEF".to_vec(),
+                auth_token: None,
+                timestamp_token: None,
+            },
+            &tpm,
+        ) {
+            panic!("update failed: {:?}", err);
+        }
+
+        if let Err(err) = operation::finish(
+            FinishRequest {
+                op_handle,
+                input: None,
+                signature: None,
+                auth_token: None,
+                timestamp_token: None,
+                confirmation_token: None,
+            },
+            &tpm,
+        ) {
+            panic!("finish failed: {:?}", err);
+        }
     }
 }
