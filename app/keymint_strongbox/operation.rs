@@ -19,43 +19,15 @@
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
 use binder::Strong;
 use kmr_common::Error;
-use kmr_wire::{
-    BeginRequest, BeginResponse, FinishRequest, FinishResponse, GetHardwareInfoRequest,
-    GetHardwareInfoResponse, UpdateRequest, UpdateResponse,
-};
+use kmr_wire::{FinishRequest, FinishResponse, UpdateRequest, UpdateResponse};
 use tpm_commands::strongbox::*;
 
 use crate::do_rpc;
 
-pub fn device_begin(
-    request: BeginRequest,
-    client: &Strong<dyn IGsc>,
-) -> Result<BeginResponse, Error> {
-    do_rpc::<begin::Request, begin::Response, BeginRequest, BeginResponse>(request, client)
-}
-
-pub fn device_get_hardware_info(
-    request: GetHardwareInfoRequest,
-    client: &Strong<dyn IGsc>,
-) -> Result<GetHardwareInfoResponse, Error> {
-    do_rpc::<
-        get_hardware_info::Request,
-        get_hardware_info::Response,
-        GetHardwareInfoRequest,
-        GetHardwareInfoResponse,
-    >(request, client)
-}
-
-pub fn operation_update(
-    request: UpdateRequest,
-    client: &Strong<dyn IGsc>,
-) -> Result<UpdateResponse, Error> {
+pub fn update(request: UpdateRequest, client: &Strong<dyn IGsc>) -> Result<UpdateResponse, Error> {
     do_rpc::<update::Request, update::Response, UpdateRequest, UpdateResponse>(request, client)
 }
 
-pub fn operation_finish(
-    request: FinishRequest,
-    client: &Strong<dyn IGsc>,
-) -> Result<FinishResponse, Error> {
+pub fn finish(request: FinishRequest, client: &Strong<dyn IGsc>) -> Result<FinishResponse, Error> {
     do_rpc::<finish::Request, finish::Response, FinishRequest, FinishResponse>(request, client)
 }

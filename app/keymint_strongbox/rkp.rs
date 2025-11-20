@@ -19,8 +19,7 @@ use binder::Strong;
 use kmr_common::{km_err, Error};
 use kmr_wire::{
     GenerateCertificateRequestV2Request, GenerateCertificateRequestV2Response,
-    GenerateEcdsaP256KeyPairRequest, GenerateEcdsaP256KeyPairResponse, GenerateKeyRequest,
-    GenerateKeyResponse,
+    GenerateEcdsaP256KeyPairRequest, GenerateEcdsaP256KeyPairResponse,
 };
 use tpm_commands::strongbox::*;
 use tpm_commands::{TpmRequestMessage, TpmResponseHeader, TpmResponseMessage};
@@ -51,15 +50,6 @@ pub fn generate_ecdsa_p256_keypair(
         GenerateEcdsaP256KeyPairRequest,
         GenerateEcdsaP256KeyPairResponse,
     >(request, client)
-}
-
-pub fn generate_key(
-    request: GenerateKeyRequest,
-    client: &Strong<dyn IGsc>,
-) -> Result<GenerateKeyResponse, Error> {
-    do_rpc::<generate_key::Request, generate_key::Response, GenerateKeyRequest, GenerateKeyResponse>(
-        request, client,
-    )
 }
 
 pub fn _get_dice_chain(client: &Strong<dyn IGsc>) -> Result<Vec<u8>, Error> {

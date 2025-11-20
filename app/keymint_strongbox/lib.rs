@@ -56,7 +56,8 @@ macro_rules! km_from_tpm {
 #[cfg(fake_strongbox)]
 mod fake_sb;
 
-mod operations;
+mod device;
+mod operation;
 mod rkp;
 mod strongbox;
 use strongbox::StrongBox;
@@ -300,10 +301,7 @@ mod tests {
     #[test]
     fn device_get_hardware_info() {
         let tpm = GscServiceClient::default().0;
-        assert_matches!(
-            operations::device_get_hardware_info(GetHardwareInfoRequest {}, &tpm),
-            Ok(_)
-        );
+        assert_matches!(device::get_hardware_info(GetHardwareInfoRequest {}, &tpm), Ok(_));
     }
 
     #[test]
@@ -320,7 +318,7 @@ mod tests {
         ];
         let tpm = GscServiceClient::default().0;
         assert_matches!(
-            rkp::generate_key(GenerateKeyRequest { key_params, attestation_key: None }, &tpm),
+            device::generate_key(GenerateKeyRequest { key_params, attestation_key: None }, &tpm),
             Ok(_)
         );
     }
@@ -347,7 +345,7 @@ mod tests {
     fn operation() {
         let tpm = GscServiceClient::default().0;
         assert_matches!(
-            operations::device_begin(
+            device::begin(
                 BeginRequest {
                     purpose: KeyPurpose::Sign,
                     key_blob: vec![0u8; 256usize],

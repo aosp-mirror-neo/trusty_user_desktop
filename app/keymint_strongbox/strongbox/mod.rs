@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::{operations, rkp};
+use crate::{device, operation, rkp};
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
 use binder::Strong;
 use gsc_svc_client::GscServiceClient;
@@ -79,32 +79,28 @@ impl StrongBox {
     }
     fn process_req(&mut self, req: PerformOpReq) -> PerformOpResponse {
         match req {
-            PerformOpReq::DeviceBegin(req) => match operations::device_begin(req, &self.tpm) {
+            PerformOpReq::DeviceBegin(req) => match device::begin(req, &self.tpm) {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceBegin(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::DeviceBegin, err),
             },
-            PerformOpReq::DeviceGenerateKey(req) => match rkp::generate_key(req, &self.tpm) {
+            PerformOpReq::DeviceGenerateKey(req) => match device::generate_key(req, &self.tpm) {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceGenerateKey(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::DeviceGenerateKey, err),
             },
             PerformOpReq::DeviceGetHardwareInfo(req) => {
-                match operations::device_get_hardware_info(req, &self.tpm) {
+                match device::get_hardware_info(req, &self.tpm) {
                     Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceGetHardwareInfo(resp)),
                     Err(err) => op_error_rsp(KeyMintOperation::DeviceGetHardwareInfo, err),
                 }
             }
-            PerformOpReq::OperationFinish(req) => {
-                match operations::operation_finish(req, &self.tpm) {
-                    Ok(resp) => op_ok_rsp(PerformOpRsp::OperationFinish(resp)),
-                    Err(err) => op_error_rsp(KeyMintOperation::OperationFinish, err),
-                }
-            }
-            PerformOpReq::OperationUpdate(req) => {
-                match operations::operation_update(req, &self.tpm) {
-                    Ok(resp) => op_ok_rsp(PerformOpRsp::OperationUpdate(resp)),
-                    Err(err) => op_error_rsp(KeyMintOperation::OperationUpdate, err),
-                }
-            }
+            PerformOpReq::OperationFinish(req) => match operation::finish(req, &self.tpm) {
+                Ok(resp) => op_ok_rsp(PerformOpRsp::OperationFinish(resp)),
+                Err(err) => op_error_rsp(KeyMintOperation::OperationFinish, err),
+            },
+            PerformOpReq::OperationUpdate(req) => match operation::update(req, &self.tpm) {
+                Ok(resp) => op_ok_rsp(PerformOpRsp::OperationUpdate(resp)),
+                Err(err) => op_error_rsp(KeyMintOperation::OperationUpdate, err),
+            },
             PerformOpReq::RpcGenerateCertificateV2Request(req) => match self.rpc_device_info_cbor()
             {
                 Ok(device_info) => {
