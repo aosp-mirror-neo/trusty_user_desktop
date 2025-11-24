@@ -18,6 +18,8 @@
 //! Trusty application.
 
 use alloc::{rc::Rc, vec::Vec};
+use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
+use binder::Strong;
 use core::{cell::RefCell, fmt};
 use kmr_common::{km_err, Error, ErrorKind, ErrorLocation};
 use kmr_ta::{HardwareInfo, RpcInfo, RpcInfoV3};
@@ -26,11 +28,35 @@ use tipc::{
     service_dispatcher, ConnectResult, Deserialize, Handle, Manager, MessageResult, PortCfg,
     Serialize, Serializer, Service, TipcError, Uuid,
 };
+use tpm_commands::{
+    TpmRequestBuildError, TpmRequestMessage, TpmResponseMessage, TpmvRequest, TpmvRequestBuild,
+};
 use trusty_std::alloc::TryAllocFrom;
+use zerocopy::{FromBytes, IntoBytes, KnownLayout, Unaligned};
+
+macro_rules! km_from_tpm {
+    { $ret:expr} => {{
+        let ret = $ret;
+        ret.map_err(|err| {
+            match err {
+                TpmRequestBuildError::Alloc => {
+                    km_err!(MemoryAllocationFailed, "")
+                },
+                TpmRequestBuildError::Size => {
+                    km_err!(EncodingError, "")
+                },
+                TpmRequestBuildError::Internal(err) => {
+                    err
+                },
+            }
+        })
+    }}
+}
 
 #[cfg(fake_strongbox)]
 mod fake_sb;
 
+mod operations;
 mod rkp;
 mod strongbox;
 use strongbox::StrongBox;
@@ -221,10 +247,38 @@ impl<'s> Serialize<'s> for KMMessage {
     }
 }
 
+fn do_rpc<
+    GRQ: TpmvRequestBuild<BuildParams = ARQ, Err = Error> + TpmvRequest<TpmvResponse = GRSP> + ?Sized,
+    GRSP: FromBytes + IntoBytes + KnownLayout + Unaligned + ?Sized,
+    ARQ,
+    ARSP: for<'a> TryFrom<&'a mut GRSP>,
+>(
+    request: ARQ,
+    client: &Strong<dyn IGsc>,
+) -> Result<ARSP, Error> {
+    let mut req_buffer = Vec::<u8>::new();
+    let req = km_from_tpm!(TpmRequestMessage::<GRQ>::new_in_vec(&mut req_buffer, request))?;
+
+    let mut resp_buffer = client
+        .transmit(req.as_bytes())
+        .map_err(|_| km_err!(SecureHwCommunicationFailed, "transmit"))?;
+    let rsp = TpmResponseMessage::<[u8]>::mut_from_bytes(&mut resp_buffer)
+        .map_err(|_| km_err!(EncodingError, "parsing tpm response"))?;
+    if rsp.header.error_code == 0 {
+        let ret = GRSP::mut_from_bytes(&mut rsp.response)
+            .map_err(|_| km_err!(EncodingError, "parsing keymint response"))?;
+        ret.try_into().map_err(|_| km_err!(EncodingError, ""))
+    } else {
+        Err(km_err!(SecureHwCommunicationFailed, "0x{:X}", rsp.header.error_code))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gsc_svc_client::GscServiceClient;
+    use kmr_wire::keymint::KeyPurpose;
+    use kmr_wire::BeginRequest;
     test::init!();
 
     #[test]
@@ -243,5 +297,20 @@ mod tests {
     fn get_dice_chain() {
         let tpm = GscServiceClient::default().0;
         rkp::_get_dice_chain(&tpm).unwrap();
+    }
+
+    #[test]
+    fn operation() {
+        let tpm = GscServiceClient::default().0;
+        operations::device_begin(
+            BeginRequest {
+                purpose: KeyPurpose::Sign,
+                key_blob: vec![0u8; 256usize],
+                params: Vec::new(),
+                auth_token: None,
+            },
+            &tpm,
+        )
+        .unwrap();
     }
 }
