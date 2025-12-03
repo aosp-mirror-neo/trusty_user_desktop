@@ -21,7 +21,7 @@
 use crate::{TpmvRequest, TpmvRequestBuild, NO_SESSION_TAG};
 use kmr_common::{km_err_new, Error, ErrorKind};
 use kmr_wire::{
-    keymint::{KeyCreationResult, KeyMintHardwareInfo, SecurityLevel},
+    keymint::{Certificate, KeyCreationResult, KeyMintHardwareInfo, SecurityLevel},
     *,
 };
 use zerocopy::{
@@ -409,10 +409,8 @@ pub mod generate_key {
     #[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
     #[repr(C)]
     pub struct Response {
-        /// Number of 4-byte words in the key blob.
-        pub key_blob_words: U32LE,
-        /// suffix
-        pub key_blob: [u8],
+        /// The returned key.
+        pub suffix: [u8],
     }
 
     impl TryFrom<&mut Response> for kmr_wire::GenerateKeyResponse {
@@ -420,13 +418,43 @@ pub mod generate_key {
 
         /// Convert a response into a kmr_wire::GenerateEcdsaP256KeyPairResponse.
         fn try_from(response: &mut Response) -> Result<kmr_wire::GenerateKeyResponse, Error> {
+            let view = BufferedResponse::try_from(response)?;
             Ok(kmr_wire::GenerateKeyResponse {
                 ret: KeyCreationResult {
-                    key_blob: response.key_blob.to_vec(),
+                    key_blob: view.key_blob.to_vec(),
                     key_characteristics: Vec::new(),
-                    certificate_chain: Vec::new(),
+                    certificate_chain: if view.cert_chain.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![Certificate { encoded_certificate: view.cert_chain.to_vec() }]
+                    },
                 },
             })
+        }
+    }
+
+    /// A struct of references to the various fields in a Response.
+    pub struct BufferedResponse<'a> {
+        /// The generated key.
+        pub key_blob: &'a mut [u8],
+        /// The certificate chain.
+        pub cert_chain: &'a mut [u8],
+    }
+
+    impl<'a> TryFrom<&'a mut Response> for BufferedResponse<'a> {
+        type Error = Error;
+        fn try_from(response: &'a mut Response) -> Result<BufferedResponse<'a>, Self::Error> {
+            // Peek into key blob to get size that follows in words.
+            let key_blob_words = U32LE::ref_from_prefix(&response.suffix[0..size_of::<u32>()])
+                .map_err(|_| km_err!(EncodingError, "word length"))?
+                .0
+                .get() as usize;
+            let (key_blob, cert_chain) = response
+                .suffix
+                .split_at_mut_checked((key_blob_words + 1) * 4)
+                .ok_or(km_err!(EncodingError, "split response"))?;
+
+            Ok(BufferedResponse { key_blob, cert_chain })
         }
     }
 }
@@ -529,7 +557,7 @@ pub mod get_hardware_info {
 /// Key purpose enum used in keymint operations.
 #[derive(Debug, Eq, IntoBytes, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
 #[repr(C)]
-pub struct KeyPurpose(I32<BE>);
+pub struct KeyPurpose(I32<LE>);
 
 impl KeyPurpose {
     /// Encrypt with the key.
@@ -581,8 +609,7 @@ pub mod begin {
     pub struct Request {
         /// The purpose of the operation (e.g., SIGN).
         pub purpose: KeyPurpose,
-        /// The size of the key blob that follows in 32-bit words.
-        pub key_blob_words: U32LE,
+        /// The size of the key blob that follows in 32-bit words (included in the key blob).
         /// Trailing bytes
         ///   pub key_blob: [u8; N],
         ///   pub additional_parameters_words: U32LE,
@@ -598,26 +625,28 @@ pub mod begin {
         type Err = Error;
 
         fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
-            let static_size = size_of::<KeyPurpose>() + 2 * size_of::<U32LE>();
-            if !params.params.is_empty() {
-                // Key parameters aren't implemented yet.
-                return Err(km_err!(Unimplemented, ""));
-            }
+            let static_size = size_of::<KeyPurpose>() + size_of::<U32LE>();
             static_size
                 .checked_add(params.key_blob.len())
+                .ok_or(km_err!(EncodingError, ""))?
+                .checked_add(key_param::expected_size(&params.params))
                 .ok_or(km_err!(EncodingError, ""))?
                 .try_into()
                 .map_err(|_| km_err!(EncodingError, ""))
         }
 
         fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err> {
-            self.key_blob_words = U32LE::new(
-                (params.key_blob.len() / 4).try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?,
-            );
-
-            let view = BufferedRequest::new(self, params.key_blob.len(), 0usize)?;
+            let additional_parameters_bytes = key_param::expected_size(&params.params);
+            self.purpose = params.purpose.into();
+            let view =
+                BufferedRequest::new(self, params.key_blob.len(), additional_parameters_bytes)?;
             view.key_blob.copy_from_slice(&params.key_blob);
-            *view.additional_parameters_words = U32LE::new(0);
+            *view.additional_parameters_words = U32LE::new(
+                (additional_parameters_bytes / 4)
+                    .try_into()
+                    .map_err(|_| km_err!(EncodingError, ""))?,
+            );
+            let _ = key_param::serialize_key_params(view.additional_parameters, &params.params);
             Ok(())
         }
     }
@@ -626,8 +655,6 @@ pub mod begin {
     pub struct BufferedRequest<'a> {
         /// The purpose of the operation (e.g., SIGN).
         pub purpose: &'a mut KeyPurpose,
-        /// The size of the key blob that follows in 32-bit words.
-        pub key_blob_words: &'a mut U32LE,
         /// The key blob generated by `generateKey`.
         pub key_blob: &'a mut [u8],
         /// The size of the additional parameters list that follows, in 32-bit words.
@@ -654,7 +681,6 @@ pub mod begin {
 
             Ok(BufferedRequest {
                 purpose: &mut request.purpose,
-                key_blob_words: &mut request.key_blob_words,
                 key_blob,
                 additional_parameters_words,
                 additional_parameters,
@@ -665,9 +691,13 @@ pub mod begin {
     impl<'a> TryFrom<&'a mut Request> for BufferedRequest<'a> {
         type Error = Error;
         fn try_from(request: &'a mut Request) -> Result<BufferedRequest<'a>, Error> {
+            let key_blob_words = U32LE::ref_from_prefix(&request.suffix[0..size_of::<u32>()])
+                .map_err(|_| km_err!(EncodingError, "word length"))?
+                .0
+                .get() as usize;
             let (key_blob, suffix) = request
                 .suffix
-                .split_at_mut_checked(request.key_blob_words.get() as usize * size_of::<U32LE>())
+                .split_at_mut_checked(key_blob_words * size_of::<U32LE>())
                 .ok_or(km_err!(EncodingError, ""))?;
             let (additional_parameters, additional_parameters_words) = get_u32le(suffix)?;
             if additional_parameters_words.get() as usize * size_of::<U32LE>()
@@ -678,7 +708,6 @@ pub mod begin {
 
             Ok(BufferedRequest {
                 purpose: &mut request.purpose,
-                key_blob_words: &mut request.key_blob_words,
                 key_blob,
                 additional_parameters_words,
                 additional_parameters,
@@ -798,6 +827,8 @@ pub mod update {
         }
 
         fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err> {
+            self.operation_id =
+                U32LE::new(params.op_handle.try_into().map_err(|_| km_err!(EncodingError, ""))?);
             self.update_size_bytes =
                 U32LE::new(params.input.len().try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?);
             self.input_data.copy_from_slice(&params.input);
@@ -881,6 +912,8 @@ pub mod finish {
         }
 
         fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err> {
+            self.operation_id =
+                U32LE::new(params.op_handle.try_into().map_err(|_| km_err!(EncodingError, ""))?);
             self.update_size_bytes = U32LE::new(
                 self.input_data.len().try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?,
             );
