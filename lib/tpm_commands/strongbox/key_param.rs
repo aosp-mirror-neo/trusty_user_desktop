@@ -16,13 +16,18 @@
 
 //! Structs and items that define TPM communications with the GSC
 
-use kmr_wire::keymint::{KeyParam, Tag};
+use kmr_common::Error;
+use kmr_wire::keymint::*;
+use kmr_wire::*;
+use std::any::type_name;
+use zerocopy::{FromBytes, IntoBytes};
 
 use super::byte_len_with_word_padding;
 
 const TAG_LEN_BITS: usize = 12;
 const TAG_LEN_SHIFT: i32 = 16;
 const TAG_LEN_MASK_BITS: usize = (1 << TAG_LEN_BITS) - 1;
+const TAG_LEN_MASK: u32 = (TAG_LEN_MASK_BITS << TAG_LEN_SHIFT) as u32;
 
 const fn include_byte_len(tag: Tag, len: usize) -> i32 {
     if len > TAG_LEN_MASK_BITS {
@@ -127,6 +132,123 @@ pub fn serialize_key_params_checked<'a>(
     } else {
         Some(serialize_key_params(out, params))
     }
+}
+
+fn parse_tag(tag_word: u32) -> Result<(Tag, TagType, usize), Error> {
+    let tag = Tag::n(i32::from_ne_bytes((tag_word & !TAG_LEN_MASK).to_ne_bytes()))
+        .ok_or_else(|| km_err!(EncodingError, "bad tag"))?;
+    Ok((tag, tag_type(tag), (tag_word as usize >> TAG_LEN_SHIFT) & TAG_LEN_MASK_BITS))
+}
+
+fn tag_int_helper<T: TryFrom<i32>>(v: u32) -> Result<T, Error> {
+    T::try_from(i32::from_ne_bytes(v.to_ne_bytes()))
+        .map_err(|_| km_err!(EncodingError, type_name::<T>()))
+}
+
+fn tag_vec_helper<F: FnOnce(Vec<u8>) -> KeyParam>(
+    cast: F,
+    buf: &[u32],
+    len_bytes: usize,
+) -> Result<(KeyParam, &[u32]), Error> {
+    let (buf, next) = buf
+        .split_at_checked(len_bytes.div_ceil(size_of::<u32>()) + 1)
+        .ok_or_else(|| km_err!(EncodingError, "not enough buffer for tag"))?;
+    Ok((cast(buf.as_bytes()[4..4 + len_bytes].to_vec()), next))
+}
+
+fn parse_key_param(buf: &[u32]) -> Result<(KeyParam, &[u32]), Error> {
+    let (tag, _tag_type, opt_len_bytes) = parse_tag(buf[0])?;
+    let (param, skip) = match tag {
+        Tag::Algorithm => (KeyParam::Algorithm(tag_int_helper(buf[1])?), 2),
+        Tag::AllowWhileOnBody => (KeyParam::AllowWhileOnBody, 1),
+        Tag::ApplicationData => {
+            return tag_vec_helper(KeyParam::ApplicationData, buf, opt_len_bytes);
+        }
+        Tag::ApplicationId => {
+            return tag_vec_helper(KeyParam::ApplicationId, buf, opt_len_bytes);
+        }
+        Tag::BootPatchlevel => (KeyParam::BootPatchlevel(buf[1]), 2),
+        Tag::Digest => (KeyParam::Digest(tag_int_helper(buf[1])?), 2),
+        Tag::KeySize => (KeyParam::KeySize(KeySizeInBits(buf[1])), 2),
+        Tag::Origin => (
+            KeyParam::Origin(match buf[1] {
+                0 => KeyOrigin::Generated,
+                1 => KeyOrigin::Imported,
+                3 => KeyOrigin::SecurelyImported,
+                _ => {
+                    return Err(km_err!(EncodingError, "bad origin"));
+                }
+            }),
+            2,
+        ),
+        Tag::OsPatchlevel => (KeyParam::OsPatchlevel(buf[1]), 2),
+        Tag::OsVersion => (KeyParam::OsVersion(buf[1]), 2),
+        Tag::Purpose => (KeyParam::Purpose(tag_int_helper(buf[1])?), 2),
+        Tag::UserId => (KeyParam::UserId(buf[1]), 2),
+        Tag::VendorPatchlevel => (KeyParam::VendorPatchlevel(buf[1]), 2),
+        _ => {
+            return Err(km_err!(Unimplemented, format!("unexpected tag: {tag:?}")));
+        }
+    };
+    Ok((
+        param,
+        buf.split_at_checked(skip)
+            .ok_or_else(|| km_err!(EncodingError, "not enough buffer for tag"))?
+            .1,
+    ))
+}
+
+fn parse_characteristics(buf: &[u32]) -> Result<(KeyCharacteristics, &[u32]), Error> {
+    let security_level = SecurityLevel::n(i32::from_ne_bytes(buf[0].to_ne_bytes()))
+        .ok_or_else(|| km_err!(EncodingError, "bad security level"))?;
+    let tag_words = buf[1] as usize;
+    let (mut buf, suffix) = buf
+        .split_at_checked(tag_words + 2)
+        .ok_or_else(|| km_err!(EncodingError, "not enough buffer for tags"))?;
+    buf = &buf[2..];
+
+    let mut authorizations = Vec::<KeyParam>::new();
+    loop {
+        if buf.is_empty() {
+            break;
+        }
+        let (param, new_buf) = parse_key_param(buf)?;
+        authorizations.push(param);
+        buf = new_buf;
+    }
+
+    Ok((KeyCharacteristics { security_level, authorizations }, suffix))
+}
+
+/// Extract theKeyCaracteristics from a key blob so they can be returned in the
+/// wire format.
+pub fn characteristics_from_key_blob(key_blob: &[u8]) -> Result<Vec<KeyCharacteristics>, Error> {
+    const KEY_CHARACTERISTICS_WORDS: usize = 12;
+    // Skip the first word because it is the total length.
+    let all_words = <[u32]>::ref_from_bytes(key_blob)
+        .map_err(|_| km_err!(EncodingError, "key_blob padding"))?;
+    let blob_words = all_words[0] as usize;
+    let buf = &all_words[1..];
+    if blob_words != buf.len() {
+        return Err(km_err!(EncodingError, "bad key_blob"));
+    }
+    if buf.len() < KEY_CHARACTERISTICS_WORDS {
+        return Err(km_err!(EncodingError, "key_blob too small"));
+    }
+
+    let mut ret = Vec::new();
+    let (mut hw_tags, buf) = parse_characteristics(buf)?;
+    let (sw_tags, _) = parse_characteristics(buf)?;
+
+    if hw_tags.security_level == sw_tags.security_level {
+        hw_tags.authorizations.extend(sw_tags.authorizations);
+        ret.push(hw_tags);
+    } else {
+        ret.push(hw_tags);
+        ret.push(sw_tags);
+    }
+
+    Ok(ret)
 }
 
 #[cfg(test)]

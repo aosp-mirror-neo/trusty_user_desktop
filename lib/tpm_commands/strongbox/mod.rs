@@ -19,7 +19,7 @@
 #![allow(clippy::result_unit_err)]
 
 use crate::{TpmvRequest, TpmvRequestBuild, NO_SESSION_TAG};
-use kmr_common::{km_err_new, Error, ErrorKind};
+use kmr_common::Error;
 use kmr_wire::{
     keymint::{Certificate, KeyCreationResult, KeyMintHardwareInfo, SecurityLevel},
     *,
@@ -28,12 +28,10 @@ use zerocopy::{
     FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, BE, I32, I64, LE, U16, U32,
 };
 
-pub mod key_param;
-
 /// This is a rewrite of the copy from kmr_common without alloc.
 macro_rules! km_err {
     { $error_code:ident, $msg:expr } => {
-        km_err_new!(ErrorKind::Hal(
+        kmr_common::km_err_new!(kmr_common::ErrorKind::Hal(
             kmr_wire::keymint::ErrorCode::$error_code,
             $msg.to_string(),
         ))
@@ -50,6 +48,8 @@ macro_rules! impl_tpmv_request {
         }
     };
 }
+
+pub mod key_param;
 
 /// Type alias to work around macro issues.
 pub type U32LE = U32<LE>;
@@ -352,6 +352,8 @@ pub mod generate_ecdsa_p256_keypair {
 ///   Note: that key blob include KeyCharacteristics as its part, but in AIDL
 ///   KeyCharacteristics are returned separately as key blob format is opaque.
 pub mod generate_key {
+    use crate::strongbox::key_param::characteristics_from_key_blob;
+
     use super::*;
 
     /// This command has no inputs, so Request is an empty struct.
@@ -422,7 +424,7 @@ pub mod generate_key {
             Ok(kmr_wire::GenerateKeyResponse {
                 ret: KeyCreationResult {
                     key_blob: view.key_blob.to_vec(),
-                    key_characteristics: Vec::new(),
+                    key_characteristics: characteristics_from_key_blob(view.key_blob)?,
                     certificate_chain: if view.cert_chain.is_empty() {
                         Vec::new()
                     } else {
