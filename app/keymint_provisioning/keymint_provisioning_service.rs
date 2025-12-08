@@ -241,14 +241,28 @@ impl IKeyMintProvisioning for KeyMintProvisioningService {
             log::error!("failed to create KeyMint legacy client");
             return Err(binder_error::illegal_state(c"create client"));
         };
-        let ids = SetAttestationIdsRequest {
+        // TODO: b/460182466 - Use this once the correct values are encoded.
+        let _ids = SetAttestationIdsRequest {
             brand,
             device,
             product,
-            serial,
+            // replace with real serial
+            serial: Vec::new(),
             manufacturer,
             model,
             imei: Vec::new(),
+            meid: Vec::new(),
+        };
+
+        let ids = SetAttestationIdsRequest {
+            brand: "google".as_bytes().to_vec(),
+            device: "brya".as_bytes().to_vec(),
+            product: "brya".as_bytes().to_vec(),
+            serial,
+            manufacturer: "Google".as_bytes().to_vec(),
+            model: "Brya".as_bytes().to_vec(),
+            // TODO: b/466129460 - Choose a dedicated value for AL devices without cellular
+            imei: b"867400022047199".to_vec(),
             meid: Vec::new(),
         };
         km.set_attestation_ids(ids).map_err(|e| {
