@@ -737,14 +737,14 @@ pub mod begin {
         /// Convert a response into a kmr_wire::BeginResponse.
         fn try_from(response: &mut Response) -> Result<kmr_wire::BeginResponse, Error> {
             let view = BufferedResponse::try_from(response)?;
-            if view.key_parameters_size_bytes.get() > 0 {
-                // This isn't supported yet.
-                return Err(km_err!(Unimplemented, ""));
-            }
+            let params = key_param::parse_key_params(
+                <[u32]>::ref_from_bytes(view.key_parameters)
+                    .map_err(|_| km_err!(EncodingError, "key parameters"))?,
+            )?;
             Ok(kmr_wire::BeginResponse {
                 ret: kmr_wire::InternalBeginResult {
                     challenge: view.challenge.get(),
-                    params: Vec::new(),
+                    params,
                     op_handle: view.operation_id.get() as i64,
                 },
             })
