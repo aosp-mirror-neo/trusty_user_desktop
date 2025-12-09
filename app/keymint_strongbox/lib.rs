@@ -481,6 +481,26 @@ mod tests {
     }
 
     #[test]
+    fn generate_certificate_request_v2() {
+        let tpm = GscServiceClient::default().0;
+
+        let ret = rkp::generate_ecdsa_p256_keypair(
+            GenerateEcdsaP256KeyPairRequest { test_mode: true },
+            &tpm,
+        );
+        assert_matches!(ret.as_ref(), Ok(_));
+        let GenerateEcdsaP256KeyPairResponse { maced_public_key, ret: _ } = ret.unwrap();
+
+        let challenge = b"1234567890abcdefghijklmnopqrstuv".to_vec();
+        let ret = rkp::generate_certificate_request_v2(
+            GenerateCertificateRequestV2Request { keys_to_sign: vec![maced_public_key], challenge },
+            vec![],
+            &tpm,
+        );
+        assert_matches!(ret.as_ref(), Ok(_));
+    }
+
+    #[test]
     fn smoke_test() {
         let tpm = GscServiceClient::default().0;
 

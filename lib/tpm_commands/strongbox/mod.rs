@@ -89,7 +89,7 @@ fn copy_u32le_prefixed_slice<'a>(
             data.len()
         })
         .ok_or(km_err!(EncodingError, ""))?;
-    dest.copy_from_slice(data);
+    dest[0..data.len()].copy_from_slice(data);
     Ok(suffix)
 }
 
