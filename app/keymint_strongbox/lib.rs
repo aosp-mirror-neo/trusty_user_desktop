@@ -23,7 +23,7 @@ use binder::Strong;
 use core::{cell::RefCell, fmt};
 use kmr_common::{km_err, Error, ErrorKind, ErrorLocation};
 use kmr_ta::{HardwareInfo, RpcInfo, RpcInfoV3};
-use log::{error, trace};
+use log::{debug, error, trace};
 use tipc::{
     service_dispatcher, ConnectResult, Deserialize, Handle, Manager, MessageResult, PortCfg,
     Serialize, Serializer, Service, TipcError, Uuid,
@@ -33,6 +33,11 @@ use tpm_commands::{
 };
 use trusty_std::alloc::TryAllocFrom;
 use zerocopy::{FromBytes, IntoBytes, KnownLayout, Unaligned};
+
+use kmr_wire::legacy::{
+    self, AppendUdsCertificateResponse, ClearUdsCertificateResponse, TrustyMessageId,
+    TrustyPerformOpReq, TrustyPerformOpRsp,
+};
 
 macro_rules! km_from_tpm {
     { $ret:expr} => {{
@@ -53,7 +58,7 @@ macro_rules! km_from_tpm {
     }}
 }
 
-#[cfg(fake_strongbox)]
+// #[cfg(fake_strongbox)]
 mod fake_sb;
 
 mod device;
@@ -65,11 +70,14 @@ use strongbox::StrongBox;
 /// Port that handles new style keymint messages from non-secure world
 const KM_NS_TIPC_SRV_PORT: &str = "com.android.trusty.keymint.strongbox";
 
+/// Port that handles legacy style keymint/keymaster messages
+const KM_NS_LEGACY_TIPC_SRV_PORT: &str = "com.android.trusty.keymaster.strongbox";
+
 /// Port count for this TA (as above).
-const PORT_COUNT: usize = 1;
+const PORT_COUNT: usize = 2;
 
 /// Only one connection: non-secure world hal.
-const MAX_CONNECTION_COUNT: usize = 1;
+const MAX_CONNECTION_COUNT: usize = 2;
 
 fn log_error(msg: fmt::Arguments, location: Option<ErrorLocation>) {
     match location {
@@ -127,6 +135,7 @@ const KEYMINT_MAX_MESSAGE_CONTENT_SIZE: usize = 4000;
 service_dispatcher! {
     enum KMServiceDispatcher {
         KMService,
+        KMLegacyService,
     }
 }
 
@@ -135,8 +144,9 @@ pub fn handle_port_connections(hw_info: HardwareInfo, rpc_info: RpcInfo) -> Resu
     let sb_ta = Rc::new(RefCell::new(StrongBox::new(hw_info, rpc_info)?));
 
     let ns_service = KMService::new(sb_ta);
+    let legacy_service = KMLegacyService::new();
 
-    let mut dispatcher = KMServiceDispatcher::<1>::new()
+    let mut dispatcher = KMServiceDispatcher::<2>::new()
         .map_err(|e| km_err!(UnknownError, "could not create multi-service dispatcher: {:?}", e))?;
     let cfg = PortCfg::new(KM_NS_TIPC_SRV_PORT)
         .map_err(|e| {
@@ -150,6 +160,21 @@ pub fn handle_port_connections(hw_info: HardwareInfo, rpc_info: RpcInfo) -> Resu
         .allow_ns_connect();
     dispatcher.add_service(Rc::new(ns_service), cfg).map_err(|e| {
         km_err!(UnknownError, "could not add non-secure service to dispatcher: {:?}", e)
+    })?;
+
+    let cfg = PortCfg::new(KM_NS_LEGACY_TIPC_SRV_PORT)
+        .map_err(|e| {
+            km_err!(
+                UnknownError,
+                "could not create port config for {}: {:?}",
+                KM_NS_LEGACY_TIPC_SRV_PORT,
+                e
+            )
+        })?
+        .allow_ta_connect()
+        .allow_ns_connect();
+    dispatcher.add_service(Rc::new(legacy_service), cfg).map_err(|e| {
+        km_err!(UnknownError, "could not add secure service to dispatcher: {:?}", e)
     })?;
 
     let buffer = [0u8; 4096];
@@ -216,6 +241,89 @@ impl Service for KMService {
         for resp in resp_vec {
             handle.send(&KMMessage(resp))?;
         }
+        Ok(MessageResult::MaintainConnection)
+    }
+}
+
+/// TIPC service implementation for communication with components outside Trusty (notably the
+/// bootloader and provisioning tools), using legacy (C++) message formats.
+struct KMLegacyService;
+
+impl KMLegacyService {
+    /// Create a service implementation.
+    fn new() -> Self {
+        KMLegacyService
+    }
+
+    /// Process an incoming request message, returning the corresponding response.
+    fn handle_message(&self, req_msg: TrustyPerformOpReq) -> Result<TrustyPerformOpRsp, Error> {
+        let _cmd_code = req_msg.code();
+
+        // Handling received message
+        match req_msg {
+            TrustyPerformOpReq::AppendUdsCertificate(req) => {
+                fake_sb::secure_storage_manager::append_uds_cert_chain(&req.cert_data)?;
+                Ok(TrustyPerformOpRsp::AppendUdsCertificate(AppendUdsCertificateResponse {}))
+            }
+            TrustyPerformOpReq::ClearUdsCertificate(..) => {
+                fake_sb::secure_storage_manager::maybe_delete_uds_cert_chain()?;
+                Ok(TrustyPerformOpRsp::ClearUdsCertificate(ClearUdsCertificateResponse {}))
+            }
+            _ => {
+                error!("KeyMint Strongbox TA: failed to process unimplemented legacy command!");
+                Err(km_err!(InvalidArgument, "unimplemented legacy command"))
+            }
+        }
+    }
+}
+
+impl Service for KMLegacyService {
+    type Connection = Context;
+    type Message = KMMessage;
+
+    fn on_connect(
+        &self,
+        _port: &PortCfg,
+        _handle: &Handle,
+        peer: &Uuid,
+    ) -> tipc::Result<ConnectResult<Self::Connection>> {
+        debug!("Accepted connection from uuid {peer:?}.");
+        Ok(ConnectResult::Accept(Context { uuid: *peer }))
+    }
+
+    fn on_message(
+        &self,
+        _connection: &Self::Connection,
+        handle: &Handle,
+        msg: Self::Message,
+    ) -> tipc::Result<MessageResult> {
+        debug!("Received legacy message.");
+        let req_msg = legacy::deserialize_trusty_req(&msg.0).map_err(|e| {
+            error!("Received error when parsing legacy message: {e:?}");
+            TipcError::InvalidData
+        })?;
+        let op = req_msg.code();
+
+        let resp = match self.handle_message(req_msg) {
+            Ok(resp_msg) => legacy::serialize_trusty_rsp(resp_msg).map_err(|e| {
+                error!("failed to serialize legacy response message: {e:?}");
+                TipcError::InvalidData
+            })?,
+            Err(e) => match e.kind() {
+                ErrorKind::Hal(rc, msg) => {
+                    log_error(format_args!("operation {op:?} failed {rc:?} {msg}"), e.location());
+                    legacy::serialize_trusty_error_rsp(op, *rc).map_err(|e| {
+                        error!("failed to serialize legacy error {rc:?} response message: {e:?}");
+                        TipcError::InvalidData
+                    })?
+                }
+                _ => {
+                    error!("error handling legacy message: {e:?}");
+                    return Err(TipcError::UnknownError);
+                }
+            },
+        };
+        handle.send(&KMMessage(resp))?;
         Ok(MessageResult::MaintainConnection)
     }
 }
@@ -476,7 +584,7 @@ mod tests {
     #[test]
     fn get_dice_chain() {
         let tpm = GscServiceClient::default().0;
-        assert_matches!(rkp::_get_dice_chain(&tpm), Ok(_));
+        assert_matches!(rkp::get_dice_chain(&tpm), Ok(_));
     }
 
     #[test]
