@@ -124,7 +124,7 @@ fn everything_with_a_shared_session() {
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
         &TestBlob(&nonce),
-        &TestBlob(&user_id.to_be_bytes()),
+        &TestBlob(&user_id.to_le_bytes()),
         &TestBlob(b"finger_guardenroll")
     ));
     assert!(hmac == prepare_resp.mac.as_slice());
@@ -138,7 +138,7 @@ fn everything_with_a_shared_session() {
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
         &TestBlob(&nonce),
-        &TestBlob(&user_id.to_be_bytes()),
+        &TestBlob(&user_id.to_le_bytes()),
         &TestBlob(b"finger_guardenroll_finish")
     ));
     assert!(hmac == finish_resp.mac.as_slice());
@@ -164,7 +164,7 @@ fn everything_with_a_shared_session() {
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
         &TestBlob(&nonce),
-        &TestBlob(&user_id.to_be_bytes()),
+        &TestBlob(&user_id.to_le_bytes()),
         &TestBlob(b"finger_guardauth")
     ));
     assert!(hmac == prepare_resp.mac.as_slice());
@@ -172,7 +172,7 @@ fn everything_with_a_shared_session() {
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
         &TestBlob(&prepare_resp.nonce),
-        &TestBlob(&user_id.to_be_bytes()),
+        &TestBlob(&user_id.to_le_bytes()),
         &TestBlob(b"fpmcuauth")
     ));
     let auth_result = AuthenticationResult::from(hmac);
