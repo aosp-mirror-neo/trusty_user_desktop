@@ -45,6 +45,7 @@
 #define HWKEY_MAX_NUM_CHANNELS 0
 
 static uint8_t encrypt_key[32];
+static uint8_t versioned_encrypt_key[32];
 static uint8_t attest_key[32];
 static int32_t rollback_ver;
 static int32_t running_ver;
@@ -196,8 +197,8 @@ static uint32_t root_of_trust_derive_key(bool shared,
         secret_key = attest_key;
         secret_key_len = sizeof(attest_key);
     } else {
-        secret_key = encrypt_key;
-        secret_key_len = sizeof(encrypt_key);
+        secret_key = versioned_encrypt_key;
+        secret_key_len = sizeof(versioned_encrypt_key);
     }
 
     if (!HKDF(key_buf, key_len, EVP_sha256(), secret_key, secret_key_len,
@@ -243,6 +244,9 @@ uint32_t derive_key_versioned_v1(
             rollback_versions[HWKEY_ROLLBACK_VERSION_OS_INDEX];
     int32_t os_rollback_version_current =
             get_current_os_rollback_version(rollback_version_source);
+    for(int i = 0; i < HWKEY_ROLLBACK_VERSION_INDEX_COUNT; ++i) {
+        TLOGE("VERSION: %u\n", rollback_versions[i]);
+    }
 
     if (os_rollback_version_current < 0) {
         rc = HWKEY_ERR_NOT_VALID;
@@ -782,7 +786,8 @@ static int hwkey_start_service(struct tipc_hset* hset) {
  *  Initialize Fake HWKEY service provider
  */
 int hwkey_init_srv_provider(struct tipc_hset* hset, uint8_t* encrypt,
-        size_t encrypt_size, uint8_t* attest, size_t attest_size,
+        size_t encrypt_size, uint8_t* versioned_encrypt,
+        size_t versioned_encrypt_size, uint8_t* attest, size_t attest_size,
         uint8_t* auth_token_key_seed, size_t auth_token_key_seed_size,
         int32_t rollback_version, int32_t running_version) {
     int rc;
@@ -796,6 +801,14 @@ int hwkey_init_srv_provider(struct tipc_hset* hset, uint8_t* encrypt,
     }
     memcpy(encrypt_key, encrypt, sizeof(encrypt_key));
     memset(encrypt, 0, encrypt_size);
+
+    if (versioned_encrypt_size != sizeof(versioned_encrypt_key)) {
+        TLOGE("bad versioned_encryption key size %zu %lu\n",
+                versioned_encrypt_size, sizeof(versioned_encrypt_key));
+        abort();
+    }
+    memcpy(versioned_encrypt_key, versioned_encrypt, sizeof(versioned_encrypt_key));
+    memset(versioned_encrypt, 0, versioned_encrypt_size);
 
     if (attest_size != sizeof(attest_key)) {
         TLOGE("bad attestion key size\n");
