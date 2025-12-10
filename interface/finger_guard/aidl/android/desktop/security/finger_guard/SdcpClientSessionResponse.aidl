@@ -20,10 +20,10 @@ import android.desktop.security.finger_guard.IClientSession;
 
 @VintfStability
 parcelable SdcpClientSessionResponse {
-    byte[] serverPublicKey;
-    byte[] nonce;
+    byte[65] serverPublicKey;
+    byte[32] nonce;
     byte[] wrappedTpmSeed;
-    byte[] iv;
-    byte[] tag;
+    byte[12] iv;
+    byte[16] tag;
     IClientSession clientSession;
 }

@@ -34,6 +34,6 @@
 package android.desktop.security.finger_guard;
 @VintfStability
 parcelable InitResponse {
-  byte[] serverPublicKey;
-  byte[] pkMac;
+  byte[65] serverPublicKey;
+  byte[32] pkMac;
 }

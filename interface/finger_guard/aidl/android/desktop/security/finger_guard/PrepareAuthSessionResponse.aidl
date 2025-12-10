@@ -30,5 +30,5 @@ parcelable PrepareAuthSessionResponse {
      * from the input of PrepareAuthSession, ta_name is the public name
      * identifying the FingerGuard TA, i.e. "finger_guard".
      */
-    byte[] mac;
+    byte[32] mac;
 }

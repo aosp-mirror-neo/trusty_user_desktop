@@ -49,5 +49,5 @@ parcelable HardwareAuthToken {
      *
      * Note that mac can be empty indicates the auth token is not yet signed and not valid.
      */
-    byte[] mac;
+    byte[32] mac;
 }

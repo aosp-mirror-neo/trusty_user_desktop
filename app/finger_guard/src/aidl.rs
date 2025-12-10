@@ -94,18 +94,18 @@ macro_rules! ref_to_impl_export {
 
 /// Construct a handshake response.
 pub fn make_init_response(
-    server_public_key: ref_to_impl_export!(InitResponse.serverPublicKey as Vec<u8>),
-    pk_mac: ref_to_impl_export!(InitResponse.pkMac as Vec<u8>),
+    server_public_key: ref_to_impl_export!(InitResponse.serverPublicKey as [u8; 65]),
+    pk_mac: ref_to_impl_export!(InitResponse.pkMac as [u8; 32]),
 ) -> InitResponse {
     InitResponse { serverPublicKey: server_public_key.export(), pkMac: pk_mac.export() }
 }
 
 /// Construct a session response.
 pub fn make_client_session_response(
-    nonce: ref_to_impl_export!(ClientSessionResponse.nonce as Vec<u8>),
+    nonce: ref_to_impl_export!(ClientSessionResponse.nonce as [u8; 32]),
     wrapped_tpm_seed: Vec<u8>,
-    iv: ref_to_impl_export!(ClientSessionResponse.iv as Vec<u8>),
-    tag: ref_to_impl_export!(ClientSessionResponse.tag as Vec<u8>),
+    iv: ref_to_impl_export!(ClientSessionResponse.iv as [u8; 12]),
+    tag: ref_to_impl_export!(ClientSessionResponse.tag as [u8; 16]),
     client_session: Option<impl IClientSession>,
 ) -> ClientSessionResponse {
     ClientSessionResponse {
@@ -121,7 +121,7 @@ pub fn make_client_session_response(
 /// Construct a SdcpClaim message.
 #[allow(clippy::too_many_arguments)]
 pub fn make_sdcp_claim(
-    nonce: ref_to_impl_export!(SdcpClaim.nonce as Vec<u8>),
+    nonce: ref_to_impl_export!(SdcpClaim.nonce as [u8; 32]),
     model_public_key: ref_to_impl_export!(SdcpClaim.modelPublicKey as [u8; 65]),
     model_key_sig: ref_to_impl_export!(SdcpClaim.modelKeySignature as [u8; 64]),
     device_public_key: ref_to_impl_export!(SdcpClaim.devicePublicKey as [u8; 65]),
@@ -144,11 +144,11 @@ pub fn make_sdcp_claim(
 
 /// Construct a sdcp session response.
 pub fn make_sdcp_client_session_response(
-    server_public_key: ref_to_impl_export!(SdcpClientSessionResponse.serverPublicKey as Vec<u8>),
-    nonce: ref_to_impl_export!(SdcpClientSessionResponse.nonce as Vec<u8>),
+    server_public_key: ref_to_impl_export!(SdcpClientSessionResponse.serverPublicKey as [u8; 65]),
+    nonce: ref_to_impl_export!(SdcpClientSessionResponse.nonce as [u8; 32]),
     wrapped_tpm_seed: Vec<u8>,
-    iv: ref_to_impl_export!(SdcpClientSessionResponse.iv as Vec<u8>),
-    tag: ref_to_impl_export!(SdcpClientSessionResponse.tag as Vec<u8>),
+    iv: ref_to_impl_export!(SdcpClientSessionResponse.iv as [u8; 12]),
+    tag: ref_to_impl_export!(SdcpClientSessionResponse.tag as [u8; 16]),
     client_session: Option<impl IClientSession>,
 ) -> SdcpClientSessionResponse {
     SdcpClientSessionResponse {
@@ -165,7 +165,7 @@ pub fn make_sdcp_client_session_response(
 /// Construct a new prepare_auth_session response.
 pub fn make_prepare_auth_session_response(
     nonce: ref_to_impl_export!(PrepareAuthSessionResponse.nonce as [u8; 32]),
-    mac: ref_to_impl_export!(PrepareAuthSessionResponse.mac as Vec<u8>),
+    mac: ref_to_impl_export!(PrepareAuthSessionResponse.mac as [u8; 32]),
 ) -> PrepareAuthSessionResponse {
     PrepareAuthSessionResponse { nonce: nonce.export(), mac: mac.export() }
 }
@@ -187,9 +187,9 @@ mod test {
 
     #[test]
     fn test_make_init_response() {
-        let public_key_bytes: Vec<u8> = (1..=65).collect();
+        let public_key_bytes: [u8; 65] = array::from_fn(|x| x as u8);
         let public_key = crypto::P256Point::import(public_key_bytes.as_slice()).unwrap();
-        let hmac_bytes: Vec<u8> = (1..=32).map(|x| x * 2).collect();
+        let hmac_bytes: [u8; 32] = array::from_fn(|x| x as u8 * 2);
         let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
         let response = make_init_response(&public_key, &hmac);
         assert_eq!(response.serverPublicKey, public_key_bytes);
@@ -222,7 +222,7 @@ mod test {
     fn test_make_prepare_auth_session_response() {
         let nonce_bytes: [u8; 32] = array::from_fn(|x| x as u8);
         let nonce = crypto::Nonce::read_from_bytes(&nonce_bytes).unwrap();
-        let hmac_bytes: Vec<u8> = (1..=32).map(|x| x * 2).collect();
+        let hmac_bytes: [u8; 32] = array::from_fn(|x| x as u8 * 2);
         let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
         let response = make_prepare_auth_session_response(&nonce, &hmac);
         assert_eq!(response.nonce, nonce_bytes);

@@ -35,5 +35,5 @@ package android.desktop.security.finger_guard;
 @VintfStability
 parcelable AuthenticationResult {
   boolean authenticated;
-  byte[] mac;
+  byte[32] mac;
 }

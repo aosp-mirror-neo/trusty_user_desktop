@@ -34,7 +34,7 @@
 package android.desktop.security.finger_guard;
 @VintfStability
 parcelable SdcpClaim {
-  byte[] nonce;
+  byte[32] nonce;
   byte[65] modelPublicKey;
   byte[64] modelKeySignature;
   byte[65] devicePublicKey;

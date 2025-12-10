@@ -35,7 +35,5 @@ parcelable AuthenticationResult {
      *
      * If authenticated = false: the MAC is empty.
      */
-    byte[] mac;
+    byte[32] mac;
 }
-
-
