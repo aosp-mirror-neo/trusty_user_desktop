@@ -24,13 +24,14 @@ use kmr_wire::{
     cbor,
     cbor::cbor,
     frp::ErrorCode as FrpErrorCode,
-    keymint::{BootInfo, ErrorCode, SecurityLevel, VerifiedBootState},
+    keymint::{BootInfo, ErrorCode, KeyParam, SecurityLevel, VerifiedBootState},
     *,
 };
 use log::{error, trace, warn};
 
 pub struct StrongBox {
     tpm: Strong<dyn IGsc>,
+    additional_attestation_info: Option<Vec<u8>>,
     attestation_id_info: Option<AttestationIdInfo>,
     boot_info: Option<BootInfo>,
     hal_info: Option<HalInfo>,
@@ -44,6 +45,7 @@ impl StrongBox {
 
         Ok(Self {
             tpm,
+            additional_attestation_info: None,
             attestation_id_info: None,
             boot_info: None,
             hal_info: None,
@@ -120,6 +122,34 @@ impl StrongBox {
                 }
             }
             PerformOpReq::RpcGetHardwareInfo(_) => error_rsp(ErrorCode::Unimplemented as i32),
+            PerformOpReq::SetAdditionalAttestationInfo(req) => {
+                for param in req.info {
+                    match param {
+                        KeyParam::ModuleHash(hash) => {
+                            if let Some(existing) = self.additional_attestation_info() {
+                                if existing == hash {
+                                    continue;
+                                }
+                            }
+                            if !self.set_additional_attestation_info(hash) {
+                                return op_error_rsp(
+                                    KeyMintOperation::SetAdditionalAttestationInfo,
+                                    km_err!(ModuleHashAlreadySet, ""),
+                                );
+                            }
+                        }
+                        _ => {
+                            return op_error_rsp(
+                                KeyMintOperation::SetAdditionalAttestationInfo,
+                                km_err!(InvalidTag, "unexpected tag"),
+                            )
+                        }
+                    }
+                }
+                op_ok_rsp(PerformOpRsp::SetAdditionalAttestationInfo(
+                    SetAdditionalAttestationInfoResponse {},
+                ))
+            }
             PerformOpReq::SetAttestationIds(req) => {
                 if !self.set_attestation_id_info(req.ids) {
                     op_error_rsp(
@@ -162,6 +192,19 @@ impl StrongBox {
                 }
             }
             _ => error_rsp(ErrorCode::Unimplemented as i32),
+        }
+    }
+
+    pub fn additional_attestation_info(&self) -> Option<&[u8]> {
+        self.additional_attestation_info.as_deref()
+    }
+
+    pub fn set_additional_attestation_info(&mut self, info: Vec<u8>) -> bool {
+        if self.additional_attestation_info.is_some() {
+            false
+        } else {
+            self.additional_attestation_info = Some(info);
+            true
         }
     }
 
