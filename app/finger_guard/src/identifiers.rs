@@ -60,7 +60,8 @@ impl SensorStateIndex {
 impl HmacSignable for SensorStateIndex {
     fn update(&self, mut add_bytes: impl FnMut(&[u8]) -> ServiceResult<()>) -> ServiceResult<()> {
         // Only the user id is incorporated into messages.
-        add_bytes(&self.user_id.to_be_bytes())
+        // Little-endian encoding is preferred by FPMCU.
+        add_bytes(&self.user_id.to_le_bytes())
     }
 }
 

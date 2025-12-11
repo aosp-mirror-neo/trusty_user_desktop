@@ -1069,7 +1069,7 @@ mod test {
         let hmac = crypto::compute_hmac!(
             &sk,
             &TestBlob(&nonce),
-            &TestBlob(&sup.userId.to_be_bytes()),
+            &TestBlob(&sup.userId.to_le_bytes()),
             &TestBlob(b"finger_guardenroll")
         )
         .unwrap();
@@ -1161,7 +1161,7 @@ mod test {
         let hmac = crypto::compute_hmac!(
             &sk,
             &TestBlob(&nonce),
-            &TestBlob(&sup.userId.to_be_bytes()),
+            &TestBlob(&sup.userId.to_le_bytes()),
             &TestBlob(b"finger_guardenroll_finish")
         )
         .unwrap();
@@ -1199,7 +1199,7 @@ mod test {
         let hmac = crypto::compute_hmac!(
             &sk,
             &TestBlob(&nonce),
-            &TestBlob(&sup.userId.to_be_bytes()),
+            &TestBlob(&sup.userId.to_le_bytes()),
             &TestBlob(b"finger_guardauth")
         )
         .unwrap();
@@ -1234,7 +1234,7 @@ mod test {
         let hmac = crypto::compute_hmac!(
             &sk,
             &TestBlob(&prepare_resp.nonce),
-            &TestBlob(&sup.userId.to_be_bytes()),
+            &TestBlob(&sup.userId.to_le_bytes()),
             &TestBlob(b"fpmcuauth")
         )
         .unwrap();
@@ -1357,7 +1357,7 @@ mod test {
         let hmac = crypto::compute_hmac!(
             &sk,
             &TestBlob(&prepare_resp.nonce),
-            &TestBlob(&sup.userId.to_be_bytes()),
+            &TestBlob(&sup.userId.to_le_bytes()),
             &TestBlob(b"fpmcuauth")
         )
         .unwrap();
