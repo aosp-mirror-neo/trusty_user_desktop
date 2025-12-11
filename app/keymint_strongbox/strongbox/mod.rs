@@ -25,6 +25,7 @@ use kmr_wire::{
     cbor::cbor,
     frp::ErrorCode as FrpErrorCode,
     keymint::{BootInfo, ErrorCode, KeyParam, SecurityLevel, VerifiedBootState},
+    rpc::{EekCurve, IRPC_V2, IRPC_V3, MINIMUM_SUPPORTED_KEYS_IN_CSR},
     *,
 };
 use log::{error, info, trace, warn};
@@ -164,7 +165,12 @@ impl StrongBox {
                     Err(err) => op_error_rsp(KeyMintOperation::RpcGenerateEcdsaP256KeyPair, err),
                 }
             }
-            PerformOpReq::RpcGetHardwareInfo(_) => error_rsp(ErrorCode::Unimplemented as i32),
+            PerformOpReq::RpcGetHardwareInfo(_) => match self.rpc_hardware_info() {
+                Ok(ret) => {
+                    op_ok_rsp(PerformOpRsp::RpcGetHardwareInfo(GetRpcHardwareInfoResponse { ret }))
+                }
+                Err(err) => op_error_rsp(KeyMintOperation::RpcGetHardwareInfo, err),
+            },
             PerformOpReq::SetAdditionalAttestationInfo(req) => {
                 for param in req.info {
                     match param {
@@ -292,6 +298,25 @@ impl StrongBox {
 
     pub fn hw_info(&self) -> &HardwareInfo {
         &self.hw_info
+    }
+
+    fn rpc_hardware_info(&self) -> Result<rpc::HardwareInfo, Error> {
+        match &self.rpc_info {
+            RpcInfo::V2(rpc_info_v2) => Ok(rpc::HardwareInfo {
+                version_number: IRPC_V2,
+                rpc_author_name: rpc_info_v2.author_name.to_string(),
+                supported_eek_curve: rpc_info_v2.supported_eek_curve,
+                unique_id: Some(rpc_info_v2.unique_id.to_string()),
+                supported_num_keys_in_csr: MINIMUM_SUPPORTED_KEYS_IN_CSR,
+            }),
+            RpcInfo::V3(rpc_info_v3) => Ok(kmr_wire::rpc::HardwareInfo {
+                version_number: IRPC_V3,
+                rpc_author_name: rpc_info_v3.author_name.to_string(),
+                supported_eek_curve: EekCurve::P256,
+                unique_id: Some(rpc_info_v3.unique_id.to_string()),
+                supported_num_keys_in_csr: rpc_info_v3.supported_num_of_keys_in_csr,
+            }),
+        }
     }
 
     pub fn rpc_info(&self) -> &RpcInfo {
