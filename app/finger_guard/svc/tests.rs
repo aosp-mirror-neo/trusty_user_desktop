@@ -83,10 +83,10 @@ fn everything_with_a_shared_session() {
     assert!(hmac == handshake.pkMac.as_slice());
 
     // Generate the client nonce.
-    let client_nonce = rng::generate_random_vec::<32>();
+    let client_nonce = rng::generate_random_buffer::<32>();
 
     // Start a new session with the server.
-    let session_response = assert_ok!(service.createClientSession(client_nonce.as_slice()));
+    let session_response = assert_ok!(service.createClientSession(&client_nonce));
     let session = session_response.clientSession.unwrap();
     let sk = assert_ok!(crypto::compute_hmac!(
         &pk,
@@ -119,7 +119,7 @@ fn everything_with_a_shared_session() {
         Instant::from_nanos(0),
     );
     let hat = assert_ok!(hat.sign(&auth_token_key));
-    let nonce = rng::generate_random_vec::<32>();
+    let nonce = rng::generate_random_buffer::<32>();
     let prepare_resp = assert_ok!(session.prepareEnrollSession(&sup, &hat, &nonce));
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,
@@ -129,7 +129,7 @@ fn everything_with_a_shared_session() {
     ));
     assert!(hmac == prepare_resp.mac.as_slice());
     let old_auth_id = assert_ok!(service.getAuthenticatorId(&sup));
-    let nonce = rng::generate_random_vec::<32>();
+    let nonce = rng::generate_random_buffer::<32>();
     let enrollment_result = EnrollmentResult { enrolled: true };
     let finish_resp = assert_ok!(session.finishEnrollSession(&sup, &enrollment_result, &nonce));
     // Ensure the authenticator id updates after enrollment.
@@ -151,7 +151,7 @@ fn everything_with_a_shared_session() {
         Instant::from_nanos(0),
     );
     let hat = assert_ok!(hat.sign(&auth_token_key));
-    let nonce = rng::generate_random_vec::<32>();
+    let nonce = rng::generate_random_buffer::<32>();
     let _ = assert_ok!(session.prepareEnrollSession(&sup, &hat, &nonce));
     let cancel_result = EnrollmentResult { enrolled: false };
     let _ = assert_ok!(session.finishEnrollSession(&sup, &cancel_result, &nonce));
@@ -159,7 +159,7 @@ fn everything_with_a_shared_session() {
 
     // ---- Start Authentication Test ----
     let challenge = 0xc4a11e49e_i64;
-    let nonce = rng::generate_random_vec::<32>();
+    let nonce = rng::generate_random_buffer::<32>();
     let prepare_resp = assert_ok!(session.prepareAuthSession(&sup, challenge, &nonce));
     let hmac = assert_ok!(crypto::compute_hmac!(
         &sk,

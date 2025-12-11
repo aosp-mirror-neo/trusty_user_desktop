@@ -34,8 +34,8 @@
 package android.desktop.security.finger_guard;
 @VintfStability
 interface IClientSession {
-  android.desktop.security.finger_guard.PrepareEnrollSessionResponse prepareEnrollSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in android.desktop.security.finger_guard.HardwareAuthToken hat, in byte[] nonce);
-  android.desktop.security.finger_guard.FinishEnrollSessionResponse finishEnrollSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in android.desktop.security.finger_guard.EnrollmentResult result, in byte[] nonce);
-  android.desktop.security.finger_guard.PrepareAuthSessionResponse prepareAuthSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in long hatChallenge, in byte[] nonce);
+  android.desktop.security.finger_guard.PrepareEnrollSessionResponse prepareEnrollSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in android.desktop.security.finger_guard.HardwareAuthToken hat, in byte[32] nonce);
+  android.desktop.security.finger_guard.FinishEnrollSessionResponse finishEnrollSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in android.desktop.security.finger_guard.EnrollmentResult result, in byte[32] nonce);
+  android.desktop.security.finger_guard.PrepareAuthSessionResponse prepareAuthSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in long hatChallenge, in byte[32] nonce);
   android.desktop.security.finger_guard.HardwareAuthToken finishAuthSession(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair, in android.desktop.security.finger_guard.AuthenticationResult result);
 }

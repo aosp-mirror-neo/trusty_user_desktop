@@ -185,7 +185,7 @@ impl<T: TrustyEnvironment> ClientSession<T> {
         &self,
         sensor_user_pair: &SensorUserPair,
         hat: &HardwareAuthToken,
-        nonce: &[u8],
+        nonce: &[u8; 32],
     ) -> ServiceResult<PrepareEnrollSessionResponse> {
         let (mut sensor_session, mut enrollment_challenges) =
             lock_state!(self.state, sensor_session, enrollment_challenges);
@@ -229,7 +229,7 @@ impl<T: TrustyEnvironment> ClientSession<T> {
         &self,
         sensor_user_pair: &SensorUserPair,
         result: &EnrollmentResult,
-        nonce: &[u8],
+        nonce: &[u8; 32],
     ) -> ServiceResult<FinishEnrollSessionResponse> {
         let (mut sensor_session, mut auth_rate_limiters) =
             lock_state!(self.state, sensor_session, auth_rate_limiters);
@@ -267,7 +267,7 @@ impl<T: TrustyEnvironment> ClientSession<T> {
         &self,
         sensor_user_pair: &SensorUserPair,
         challenge: i64,
-        nonce: &[u8],
+        nonce: &[u8; 32],
     ) -> ServiceResult<PrepareAuthSessionResponse> {
         let (mut sensor_session, mut auth_rate_limiters) =
             lock_state!(self.state, sensor_session, auth_rate_limiters);
@@ -361,7 +361,7 @@ impl<T: TrustyEnvironment> IClientSession for ClientSession<T> {
         &self,
         sensor_user_pair: &SensorUserPair,
         hat: &HardwareAuthToken,
-        nonce: &[u8],
+        nonce: &[u8; 32],
     ) -> binder::Result<PrepareEnrollSessionResponse> {
         service_result_to_binder_result(
             "prepareEnrollSession",
@@ -372,7 +372,7 @@ impl<T: TrustyEnvironment> IClientSession for ClientSession<T> {
         &self,
         sensor_user_pair: &SensorUserPair,
         result: &EnrollmentResult,
-        nonce: &[u8],
+        nonce: &[u8; 32],
     ) -> binder::Result<FinishEnrollSessionResponse> {
         service_result_to_binder_result(
             "finishEnrollSession",
@@ -383,7 +383,7 @@ impl<T: TrustyEnvironment> IClientSession for ClientSession<T> {
         &self,
         sensor_user_pair: &SensorUserPair,
         challenge: i64,
-        nonce: &[u8],
+        nonce: &[u8; 32],
     ) -> binder::Result<PrepareAuthSessionResponse> {
         service_result_to_binder_result(
             "prepareAuthSession",
@@ -483,7 +483,10 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         response.ok_or(ServiceError::StateAlreadyExists("init_params"))
     }
 
-    fn create_client_session(&self, client_nonce: &[u8]) -> ServiceResult<ClientSessionResponse> {
+    fn create_client_session(
+        &self,
+        client_nonce: &[u8; 32],
+    ) -> ServiceResult<ClientSessionResponse> {
         let client_nonce = crypto::Nonce::import(client_nonce)
             .map_err(|_| ServiceError::InvalidArg("client_nonce"))?;
         let Some(init_params) = self.state.init_params.get() else {
@@ -747,7 +750,10 @@ impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
     fn init(&self, client_public_key: &[u8]) -> binder::Result<InitResponse> {
         service_result_to_binder_result("init", Self::init_handshake(self, client_public_key))
     }
-    fn createClientSession(&self, client_nonce: &[u8]) -> binder::Result<ClientSessionResponse> {
+    fn createClientSession(
+        &self,
+        client_nonce: &[u8; 32],
+    ) -> binder::Result<ClientSessionResponse> {
         service_result_to_binder_result(
             "createClientSession",
             Self::create_client_session(self, client_nonce),
@@ -924,10 +930,9 @@ mod test {
         let clock = trusty.simulated_clock();
         let service = FingerGuardService::new(trusty);
 
-        let client_nonce_bytes = rng::generate_random_vec::<32>();
+        let client_nonce_bytes = rng::generate_random_buffer::<32>();
         let client_nonce = crypto::Nonce::import(&client_nonce_bytes).unwrap();
-        let client_session_response =
-            service.create_client_session(client_nonce_bytes.as_slice()).unwrap();
+        let client_session_response = service.create_client_session(&client_nonce_bytes).unwrap();
         let server_nonce = crypto::Nonce::import(&client_session_response.nonce).unwrap();
         let sk = crypto::compute_hmac!(&init_params.pk, &client_nonce, &server_nonce).unwrap();
 
@@ -1017,8 +1022,8 @@ mod test {
     #[test]
     fn test_multi_client_session_setup() {
         let (_, service, _, _, _) = service_setup();
-        let client_nonce_bytes = rng::generate_random_vec::<32>();
-        let _ = service.create_client_session(client_nonce_bytes.as_slice()).unwrap();
+        let client_nonce_bytes = rng::generate_random_buffer::<32>();
+        let _ = service.create_client_session(&client_nonce_bytes).unwrap();
     }
 
     #[test]
@@ -1064,7 +1069,7 @@ mod test {
             Instant::from_nanos(0),
         );
         let hat = hat.sign(&auth_token_key).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let session_resp = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
         let hmac = crypto::compute_hmac!(
             &sk,
@@ -1088,7 +1093,7 @@ mod test {
             Instant::from_nanos(0),
         );
         let hat = hat.sign(&auth_token_key).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         assert!(client_session.prepareEnrollSession(&sup, &hat, &nonce).is_err());
     }
 
@@ -1107,7 +1112,7 @@ mod test {
         );
         let fake_key = crypto::Key::read_from_bytes(&[0; 32]).unwrap();
         let fake_hat = hat.sign(&fake_key).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         assert!(client_session.prepareEnrollSession(&sup, &fake_hat, &nonce).is_err());
         // Verify the challange is invalidated.
         assert_eq!(service.revoke_challenge(&sup, challenge).unwrap(), 0);
@@ -1127,10 +1132,10 @@ mod test {
         let hat = hat.sign(&auth_token_key).unwrap();
         // Repeatedly prepare and cancel enrollments with the valid |hat|.
         for _ in 0..2 {
-            let nonce = rng::generate_random_vec::<32>();
+            let nonce = rng::generate_random_buffer::<32>();
             let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
             let enrollment_result = EnrollmentResult { enrolled: false };
-            let nonce = rng::generate_random_vec::<32>();
+            let nonce = rng::generate_random_buffer::<32>();
             let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
         }
     }
@@ -1148,11 +1153,11 @@ mod test {
             Instant::from_nanos(0),
         );
         let hat = hat.sign(&auth_token_key).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
 
         // Test: finish_enroll_session should succeed.
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
         let finish_resp =
             client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
@@ -1184,15 +1189,15 @@ mod test {
             Instant::from_nanos(0),
         );
         let hat = hat.sign(&auth_token_key).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
         let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
 
         // Test: prepare_auth_session should succeed.
         let challenge = 0xc4a11e49e_i64;
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let prepare_resp = client_session.prepareAuthSession(&sup, challenge, &nonce).unwrap();
 
         // Verify: check that response hmac should match the computation.
@@ -1220,14 +1225,14 @@ mod test {
             Instant::from_nanos(0),
         );
         let hat = hat.sign(&auth_token_key).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
         let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
         let auth_id = service.read_authenticator_id(&sup).unwrap();
         let challenge = 0xc4a11e49e_i64;
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let prepare_resp = client_session.prepareAuthSession(&sup, challenge, &nonce).unwrap();
 
         // Test: finish_auth_session with a good auth result should succeed.
@@ -1270,16 +1275,16 @@ mod test {
             Instant::from_nanos(0),
         );
         let hat = hat.sign(&auth_token_key).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
         let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
         simulated_clock.advance_time(lockout::DEFAULT_AUTH_TIMEOUT_WINDOW);
 
         // Test: prepare_auth_session should fail.
         let challenge = 0xc4a11e49e_i64;
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         assert!(client_session.prepareAuthSession(&sup, challenge, &nonce).is_err());
     }
 
@@ -1296,15 +1301,15 @@ mod test {
             Instant::from_nanos(0),
         );
         let hat = hat.sign(&auth_token_key).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
         let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
         let challenge = 0xc4a11e49e_i64;
         for _ in 0..5 {
             let _ = client_session
-                .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
+                .prepareAuthSession(&sup, challenge, &rng::generate_random_buffer::<32>())
                 .unwrap();
             let _ = client_session
                 .finishAuthSession(
@@ -1316,7 +1321,7 @@ mod test {
 
         // Test: prepare_auth_session should fail.
         assert!(client_session
-            .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
+            .prepareAuthSession(&sup, challenge, &rng::generate_random_buffer::<32>())
             .is_err());
     }
 
@@ -1334,15 +1339,15 @@ mod test {
             Instant::from_nanos(0),
         );
         let hat = hat.sign(&auth_token_key).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let _ = client_session.prepareEnrollSession(&sup, &hat, &nonce).unwrap();
-        let nonce = rng::generate_random_vec::<32>();
+        let nonce = rng::generate_random_buffer::<32>();
         let enrollment_result = EnrollmentResult { enrolled: true };
         let _ = client_session.finishEnrollSession(&sup, &enrollment_result, &nonce).unwrap();
         let challenge = 0xc4a11e49e_i64;
         for _ in 0..4 {
             let _ = client_session
-                .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
+                .prepareAuthSession(&sup, challenge, &rng::generate_random_buffer::<32>())
                 .unwrap();
             let _ = client_session
                 .finishAuthSession(
@@ -1352,7 +1357,7 @@ mod test {
                 .unwrap();
         }
         let prepare_resp = client_session
-            .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
+            .prepareAuthSession(&sup, challenge, &rng::generate_random_buffer::<32>())
             .unwrap();
         let hmac = crypto::compute_hmac!(
             &sk,
@@ -1370,7 +1375,7 @@ mod test {
         // Test: another 4 failed auth attempts should be allowed.
         for _ in 0..4 {
             let _ = client_session
-                .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
+                .prepareAuthSession(&sup, challenge, &rng::generate_random_buffer::<32>())
                 .unwrap();
             let _ = client_session
                 .finishAuthSession(
@@ -1457,7 +1462,7 @@ mod test {
         let challenge = 0xc4a11e49e_i64;
         for _ in 0..4 {
             let _ = client_session
-                .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
+                .prepareAuthSession(&sup, challenge, &rng::generate_random_buffer::<32>())
                 .unwrap();
             let _ = client_session
                 .finishAuthSession(
@@ -1479,7 +1484,7 @@ mod test {
         // Test: another 4 failed auth attempts should be allowed.
         for _ in 0..4 {
             let _ = client_session
-                .prepareAuthSession(&sup, challenge, &rng::generate_random_vec::<32>())
+                .prepareAuthSession(&sup, challenge, &rng::generate_random_buffer::<32>())
                 .unwrap();
             let _ = client_session
                 .finishAuthSession(
@@ -1666,8 +1671,8 @@ mod test {
         let device_public_key = crypto::ec_public_key_serialization(&device_private_key).unwrap();
         let device_public_key_bytes: [u8; 65] = device_public_key.into();
         let _ = service.init_handshake(&device_public_key_bytes).unwrap();
-        let client_nonce_bytes = rng::generate_random_vec::<32>();
-        assert!(service.create_client_session(client_nonce_bytes.as_slice()).is_err());
+        let client_nonce_bytes = rng::generate_random_buffer::<32>();
+        assert!(service.create_client_session(&client_nonce_bytes).is_err());
     }
 
     #[test]
