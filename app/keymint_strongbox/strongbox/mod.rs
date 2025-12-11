@@ -120,6 +120,10 @@ impl StrongBox {
     }
     fn process_req(&mut self, req: PerformOpReq) -> PerformOpResponse {
         match req {
+            PerformOpReq::DeviceAddRngEntropy(_req) => {
+                // The GSC has a HWRNG so this is a no-op.
+                op_ok_rsp(PerformOpRsp::DeviceAddRngEntropy(AddRngEntropyResponse {}))
+            }
             PerformOpReq::DeviceBegin(req) => match device::begin(req, &self.tpm) {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceBegin(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::DeviceBegin, err),
