@@ -198,6 +198,20 @@ fn parse_key_param(buf: &[u32]) -> Result<(KeyParam, &[u32]), Error> {
     ))
 }
 
+/// Parse key parameters returned by the GSC.
+pub fn parse_key_params(mut buf: &[u32]) -> Result<Vec<KeyParam>, Error> {
+    let mut params = Vec::<KeyParam>::new();
+    loop {
+        if buf.is_empty() {
+            break;
+        }
+        let (param, new_buf) = parse_key_param(buf)?;
+        params.push(param);
+        buf = new_buf;
+    }
+    Ok(params)
+}
+
 fn parse_characteristics(buf: &[u32]) -> Result<(KeyCharacteristics, &[u32]), Error> {
     let security_level = SecurityLevel::n(i32::from_ne_bytes(buf[0].to_ne_bytes()))
         .ok_or_else(|| km_err!(EncodingError, "bad security level"))?;
@@ -207,16 +221,7 @@ fn parse_characteristics(buf: &[u32]) -> Result<(KeyCharacteristics, &[u32]), Er
         .ok_or_else(|| km_err!(EncodingError, "not enough buffer for tags"))?;
     buf = &buf[2..];
 
-    let mut authorizations = Vec::<KeyParam>::new();
-    loop {
-        if buf.is_empty() {
-            break;
-        }
-        let (param, new_buf) = parse_key_param(buf)?;
-        authorizations.push(param);
-        buf = new_buf;
-    }
-
+    let authorizations = parse_key_params(buf)?;
     Ok((KeyCharacteristics { security_level, authorizations }, suffix))
 }
 

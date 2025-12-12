@@ -31,8 +31,9 @@
 /*
  *  Main application event loop
  */
-int run_hwkey(uint8_t* encrypt, size_t encrypt_size, uint8_t* attest,
-        size_t attest_size, uint8_t* auth_token_key_seed,
+int run_hwkey(uint8_t* encrypt, size_t encrypt_size,
+        uint8_t* versioned_encrypt, size_t versioned_encrypt_size,
+        uint8_t* attest, size_t attest_size, uint8_t* auth_token_key_seed,
         size_t auth_token_key_seed_size, int32_t rollback_version,
         int32_t running_version) {
     int rc;
@@ -48,7 +49,8 @@ int run_hwkey(uint8_t* encrypt, size_t encrypt_size, uint8_t* attest,
     }
 
     /* initialize service providers */
-    rc = hwkey_init_srv_provider(hset, encrypt, encrypt_size, attest,
+    rc = hwkey_init_srv_provider(hset, encrypt, encrypt_size,
+            versioned_encrypt, versioned_encrypt_size, attest,
             attest_size, auth_token_key_seed, auth_token_key_seed_size,
             rollback_version, running_version);
     if (rc != NO_ERROR) {
