@@ -34,5 +34,5 @@
 package android.desktop.security.finger_guard;
 @VintfStability
 parcelable PrepareEnrollSessionResponse {
-  byte[] mac;
+  byte[32] mac;
 }

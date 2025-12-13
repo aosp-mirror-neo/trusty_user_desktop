@@ -874,7 +874,7 @@ mod test {
             let ephemeral_private_key = crypto::ec_keygen().unwrap();
             let ephemeral_public_key =
                 crypto::ec_public_key_serialization(&ephemeral_private_key).unwrap();
-            let client_nonce_bytes = rng::generate_random_vec::<32>();
+            let client_nonce_bytes = rng::generate_random_buffer::<32>();
             let client_nonce = crypto::Nonce::import(&client_nonce_bytes).unwrap();
             let firmware_sig = crypto::ecdsa_sign(
                 &crypto::compute_sha256!(
@@ -1309,7 +1309,7 @@ mod test {
             let _ = client_session
                 .finishAuthSession(
                     &sup,
-                    &AuthenticationResult { authenticated: false, mac: vec![] },
+                    &AuthenticationResult { authenticated: false, mac: [0; 32] },
                 )
                 .unwrap();
         }
@@ -1347,7 +1347,7 @@ mod test {
             let _ = client_session
                 .finishAuthSession(
                     &sup,
-                    &AuthenticationResult { authenticated: false, mac: vec![] },
+                    &AuthenticationResult { authenticated: false, mac: [0; 32] },
                 )
                 .unwrap();
         }
@@ -1375,7 +1375,7 @@ mod test {
             let _ = client_session
                 .finishAuthSession(
                     &sup,
-                    &AuthenticationResult { authenticated: false, mac: vec![] },
+                    &AuthenticationResult { authenticated: false, mac: [0; 32] },
                 )
                 .unwrap();
         }
@@ -1462,7 +1462,7 @@ mod test {
             let _ = client_session
                 .finishAuthSession(
                     &sup,
-                    &AuthenticationResult { authenticated: false, mac: vec![] },
+                    &AuthenticationResult { authenticated: false, mac: [0; 32] },
                 )
                 .unwrap();
         }
@@ -1484,7 +1484,7 @@ mod test {
             let _ = client_session
                 .finishAuthSession(
                     &sup,
-                    &AuthenticationResult { authenticated: false, mac: vec![] },
+                    &AuthenticationResult { authenticated: false, mac: [0; 32] },
                 )
                 .unwrap();
         }

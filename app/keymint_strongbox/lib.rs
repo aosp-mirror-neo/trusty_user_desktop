@@ -102,19 +102,17 @@ fn start_impl() {
 
     log::warn!("Hello from KeyMint StrongBox TA!");
 
-    // TODO(b/449803592): Fill in the correct info
     let hw_info = HardwareInfo {
         version_number: 3,
         security_level: kmr_common::wire::keymint::SecurityLevel::Strongbox,
-        impl_name: "TEE KeyMint strongbox",
-        author_name: "Google",
-        unique_id: "TEE KeyMint strongbox",
+        impl_name: "CR50",
+        author_name: "GOOGLE",
+        unique_id: "CR50",
     };
 
-    // TODO(b/449803592): Fill in the correct info
     let rpc_info_v3 = RpcInfoV3 {
-        author_name: "Google",
-        unique_id: "TEE KeyMint strongbox TA",
+        author_name: "GOOGLE",
+        unique_id: "Cr50",
         fused: false,
         supported_num_of_keys_in_csr: kmr_wire::rpc::MINIMUM_SUPPORTED_KEYS_IN_CSR,
     };
@@ -135,6 +133,7 @@ service_dispatcher! {
 /// Main loop handler for the KeyMint TA.
 pub fn handle_port_connections(hw_info: HardwareInfo, rpc_info: RpcInfo) -> Result<(), Error> {
     let sb_ta = Rc::new(RefCell::new(StrongBox::new(hw_info, rpc_info)?));
+
     let ns_service = KMService::new(sb_ta);
 
     let mut dispatcher = KMServiceDispatcher::<1>::new()

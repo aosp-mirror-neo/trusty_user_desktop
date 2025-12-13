@@ -72,7 +72,7 @@ pub const EMPTY_HAT: SignedHat = SignedHat {
     authenticatorId: 0,
     authenticatorType: 0,
     timestamp: 0,
-    mac: vec![],
+    mac: [0; 32],
 };
 
 /// Newtype for authenticator type as a bit mask in HardwareAuthToken.

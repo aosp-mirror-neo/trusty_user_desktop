@@ -30,6 +30,6 @@ parcelable FinishEnrollSessionResponse {
      * If the EnrollmentResult has a false |enrolled| bit, i.e. the enrollment
      * is either canceled or failed, return a empty MAC.
      */
-    byte[] mac;
+    byte[32] mac;
 }
 

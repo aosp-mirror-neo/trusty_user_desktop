@@ -21,7 +21,7 @@ parcelable SdcpClaim {
     /**
      * Client side nonce for session key derivation.
      */
-    byte[] nonce;
+    byte[32] nonce;
 
     /**
      * Per-model public key pk_m: 65-byte uncompressed point representation.

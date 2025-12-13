@@ -25,9 +25,13 @@ use kmr_wire::{
     cbor::cbor,
     frp::ErrorCode as FrpErrorCode,
     keymint::{BootInfo, ErrorCode, KeyParam, SecurityLevel, VerifiedBootState},
+    rpc::{EekCurve, IRPC_V2, IRPC_V3, MINIMUM_SUPPORTED_KEYS_IN_CSR},
     *,
 };
-use log::{error, trace, warn};
+use log::{error, info, trace, warn};
+use tpm_commands::strongbox::enable_strongbox;
+use tpm_commands::{TpmRequestMessage, TpmResponseMessage};
+use zerocopy::{FromBytes, IntoBytes};
 
 pub struct StrongBox {
     tpm: Strong<dyn IGsc>,
@@ -37,6 +41,7 @@ pub struct StrongBox {
     hal_info: Option<HalInfo>,
     hw_info: HardwareInfo,
     rpc_info: RpcInfo,
+    enabled: bool,
 }
 
 impl StrongBox {
@@ -51,11 +56,46 @@ impl StrongBox {
             hal_info: None,
             hw_info,
             rpc_info,
+            enabled: false,
         })
+    }
+
+    pub fn init(&mut self) {
+        if self.enabled {
+            return;
+        }
+        loop {
+            // This command needs to be sent after gscd connects and before any other apps try to use
+            // the GSC. This can be accomplished by looping until a successful transmit is made.
+            // TODO: This may latency to overall boot due to synchronous operation
+            let cmd = TpmRequestMessage::new(enable_strongbox::Request { enable: 1 });
+            let rsp = self.tpm.transmit(cmd.as_bytes());
+            if let Ok(rsp) = rsp {
+                let rsp =
+                    TpmResponseMessage::<enable_strongbox::Response>::ref_from_bytes(&rsp).unwrap();
+                // 0x57F is returned if the GSC firmware hasn't added this command yet and SB is
+                // enabled by default.
+                if rsp.header.error_code == 0 || rsp.header.error_code == 0x57F {
+                    info!("gcsd successfully enabled Strongbox {:#x}", rsp.header.error_code);
+                    self.enabled = true;
+                    break;
+                } else {
+                    error!("gscd failed to enable Strongbox. TPM_RC: {:#x}", rsp.header.error_code);
+                }
+            } else {
+                error!("Failed to init SB. Retrying...");
+            }
+            // SAFETY: `clock_id` and `flags` are both zero, as required by the
+            // `trusty_nanosleep` docs.
+            unsafe {
+                trusty_sys::nanosleep(0, 0, 50000000);
+            }
+        }
     }
 
     /// Process a single serialized request, returning a serialized response.
     pub fn process(&mut self, req_data: &[u8]) -> Vec<u8> {
+        self.init();
         let (req_code, rsp) = match PerformOpReq::from_slice(req_data) {
             Ok(req) => {
                 trace!("-> TA: received request {:?}", req.code());
@@ -81,6 +121,10 @@ impl StrongBox {
     }
     fn process_req(&mut self, req: PerformOpReq) -> PerformOpResponse {
         match req {
+            PerformOpReq::DeviceAddRngEntropy(_req) => {
+                // The GSC has a HWRNG so this is a no-op.
+                op_ok_rsp(PerformOpRsp::DeviceAddRngEntropy(AddRngEntropyResponse {}))
+            }
             PerformOpReq::DeviceBegin(req) => match device::begin(req, &self.tpm) {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceBegin(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::DeviceBegin, err),
@@ -121,7 +165,12 @@ impl StrongBox {
                     Err(err) => op_error_rsp(KeyMintOperation::RpcGenerateEcdsaP256KeyPair, err),
                 }
             }
-            PerformOpReq::RpcGetHardwareInfo(_) => error_rsp(ErrorCode::Unimplemented as i32),
+            PerformOpReq::RpcGetHardwareInfo(_) => match self.rpc_hardware_info() {
+                Ok(ret) => {
+                    op_ok_rsp(PerformOpRsp::RpcGetHardwareInfo(GetRpcHardwareInfoResponse { ret }))
+                }
+                Err(err) => op_error_rsp(KeyMintOperation::RpcGetHardwareInfo, err),
+            },
             PerformOpReq::SetAdditionalAttestationInfo(req) => {
                 for param in req.info {
                     match param {
@@ -249,6 +298,25 @@ impl StrongBox {
 
     pub fn hw_info(&self) -> &HardwareInfo {
         &self.hw_info
+    }
+
+    fn rpc_hardware_info(&self) -> Result<rpc::HardwareInfo, Error> {
+        match &self.rpc_info {
+            RpcInfo::V2(rpc_info_v2) => Ok(rpc::HardwareInfo {
+                version_number: IRPC_V2,
+                rpc_author_name: rpc_info_v2.author_name.to_string(),
+                supported_eek_curve: rpc_info_v2.supported_eek_curve,
+                unique_id: Some(rpc_info_v2.unique_id.to_string()),
+                supported_num_keys_in_csr: MINIMUM_SUPPORTED_KEYS_IN_CSR,
+            }),
+            RpcInfo::V3(rpc_info_v3) => Ok(kmr_wire::rpc::HardwareInfo {
+                version_number: IRPC_V3,
+                rpc_author_name: rpc_info_v3.author_name.to_string(),
+                supported_eek_curve: EekCurve::P256,
+                unique_id: Some(rpc_info_v3.unique_id.to_string()),
+                supported_num_keys_in_csr: rpc_info_v3.supported_num_of_keys_in_csr,
+            }),
+        }
     }
 
     pub fn rpc_info(&self) -> &RpcInfo {

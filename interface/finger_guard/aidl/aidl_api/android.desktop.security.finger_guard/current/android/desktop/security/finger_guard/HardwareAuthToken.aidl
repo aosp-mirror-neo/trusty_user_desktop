@@ -40,5 +40,5 @@ parcelable HardwareAuthToken {
   long authenticatorId;
   int authenticatorType = 0;
   long timestamp;
-  byte[] mac;
+  byte[32] mac;
 }

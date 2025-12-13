@@ -255,6 +255,31 @@ pub mod generate_certificate_request_v2 {
     }
 }
 
+/// Vendor TPM command to enable strongbox
+pub mod enable_strongbox {
+    use super::*;
+
+    /// This command has no inputs, so Request is an empty struct.
+    #[derive(Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Request {
+        /// Flag to enable strongbox.
+        pub enable: u8,
+    }
+
+    impl TpmvRequest for Request {
+        const TAG: U16<BE> = NO_SESSION_TAG;
+        const COMMAND_CODE: U16<BE> = U16::new(0x05u16);
+        const ORDINAL: U32<BE> = crate::VENDOR_COMMAND_ORDINAL;
+        type TpmvResponse = Response;
+    }
+
+    /// Represents a response from a [`Request`]
+    #[derive(Debug, Eq, FromBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Response;
+}
+
 /// Vendor TPM command representing a strongbox generate ecdsa P256 keypair request.
 pub mod generate_ecdsa_p256_keypair {
     use super::*;

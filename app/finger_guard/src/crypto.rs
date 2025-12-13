@@ -154,20 +154,20 @@ blob_newtype!(Key, 32);
 
 // Define a new type for nonces.
 blob_newtype!(Nonce, 32, generate, hmac_signable, import);
-impl_blob_export!(Nonce(self) => ClientSessionResponse.nonce as Vec<u8>);
-impl_blob_export!(Nonce(self) => SdcpClaim.nonce as Vec<u8>);
-impl_blob_export!(Nonce(self) => SdcpClientSessionResponse.nonce as Vec<u8>);
+impl_blob_export!(Nonce(self) => ClientSessionResponse.nonce as [u8]);
+impl_blob_export!(Nonce(self) => SdcpClaim.nonce as [u8]);
+impl_blob_export!(Nonce(self) => SdcpClientSessionResponse.nonce as [u8]);
 impl_blob_export!(Nonce(self) => PrepareAuthSessionResponse.nonce as [u8]);
 
 // Define a type for encryption IVs.
 blob_newtype!(Iv, 12, generate);
-impl_blob_export!(Iv(self) => ClientSessionResponse.iv as Vec<u8>);
-impl_blob_export!(Iv(self) => SdcpClientSessionResponse.iv as Vec<u8>);
+impl_blob_export!(Iv(self) => ClientSessionResponse.iv as [u8]);
+impl_blob_export!(Iv(self) => SdcpClientSessionResponse.iv as [u8]);
 
 // Define a type for tags used in AES-256 encryption.
 blob_newtype!(Aes256Tag, 16);
-impl_blob_export!(Aes256Tag(self) => ClientSessionResponse.tag as Vec<u8>);
-impl_blob_export!(Aes256Tag(self) => SdcpClientSessionResponse.tag as Vec<u8>);
+impl_blob_export!(Aes256Tag(self) => ClientSessionResponse.tag as [u8]);
+impl_blob_export!(Aes256Tag(self) => SdcpClientSessionResponse.tag as [u8]);
 
 // Define a new type for a secret. Note that while most of the blobs (e.g. nonces, keys) are
 // secrets, those ones have additional semantic intent: nonces should only be used once, keys
@@ -177,8 +177,8 @@ blob_newtype!(Secret, 32, generate);
 // Define a type for the uncompressed representation of the public key point on the EC P256
 // curve.
 blob_newtype!(P256Point, 65, import, hashable);
-impl_blob_export!(P256Point(self) => InitResponse.serverPublicKey as Vec<u8>);
-impl_blob_export!(P256Point(self) => SdcpClientSessionResponse.serverPublicKey as Vec<u8>);
+impl_blob_export!(P256Point(self) => InitResponse.serverPublicKey as [u8]);
+impl_blob_export!(P256Point(self) => SdcpClientSessionResponse.serverPublicKey as [u8]);
 impl_blob_export!(P256Point(self) => SdcpClaim.modelPublicKey as [u8]);
 impl_blob_export!(P256Point(self) => SdcpClaim.devicePublicKey as [u8]);
 impl_blob_export!(P256Point(self) => SdcpClaim.ephemeralPublicKey as [u8]);
@@ -406,20 +406,20 @@ impl From<Hmac> for AuthenticationResult {
     fn from(value: Hmac) -> Self {
         // An HMAC is only provided on a successful authentication, so the authenticated bit is
         // assumed to be true if you're constructing a result from an HMAC.
-        Self { authenticated: true, mac: value.bytes.to_vec() }
+        Self { authenticated: true, mac: value.bytes }
     }
 }
-impl_blob_export!(Hmac(self) => SignedHat.mac as Vec<u8>);
-impl_blob_export!(Hmac(self) => InitResponse.pkMac as Vec<u8>);
-impl_blob_export!(Hmac(self) => PrepareAuthSessionResponse.mac as Vec<u8>);
+impl_blob_export!(Hmac(self) => SignedHat.mac as [u8]);
+impl_blob_export!(Hmac(self) => InitResponse.pkMac as [u8]);
+impl_blob_export!(Hmac(self) => PrepareAuthSessionResponse.mac as [u8]);
 impl From<Hmac> for PrepareEnrollSessionResponse {
     fn from(value: Hmac) -> Self {
-        PrepareEnrollSessionResponse { mac: value.bytes.to_vec() }
+        PrepareEnrollSessionResponse { mac: value.bytes }
     }
 }
 impl From<Hmac> for FinishEnrollSessionResponse {
     fn from(value: Hmac) -> Self {
-        FinishEnrollSessionResponse { mac: value.bytes.to_vec() }
+        FinishEnrollSessionResponse { mac: value.bytes }
     }
 }
 

@@ -170,7 +170,7 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
     trusty_log::init();
     let inner_tunnel = Arc::new(GscTunnelInner::new());
     let tunnel = GscTunnel::new(inner_tunnel.clone());
-    let proxy = GscProxy::new(inner_tunnel);
+    let proxy = GscProxy::new(inner_tunnel.clone());
 
     let mut dispatcher =
         GscDispatcher::<PORT_COUNT>::new().expect("Could not create test dispatcher");
