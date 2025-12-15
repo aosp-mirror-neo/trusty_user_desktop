@@ -269,7 +269,7 @@ pub mod enable_strongbox {
 
     impl TpmvRequest for Request {
         const TAG: U16<BE> = NO_SESSION_TAG;
-        const COMMAND_CODE: U16<BE> = U16::new(0x05u16);
+        const COMMAND_CODE: U16<BE> = U16::new(0x50u16);
         const ORDINAL: U32<BE> = crate::VENDOR_COMMAND_ORDINAL;
         type TpmvResponse = Response;
     }
