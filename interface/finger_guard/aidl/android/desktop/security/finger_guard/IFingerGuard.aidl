@@ -46,7 +46,7 @@ interface IFingerGuard {
      * IClientSession can be used to perform authenticated operations as
      * IClientSession#PrepareEnrollSession, IClientSession#FinishEnrollSession, etc.
      */
-    ClientSessionResponse createClientSession(in byte[] clientNonce);
+    ClientSessionResponse createClientSession(in byte[32] clientNonce);
     /**
      * Return the session key encrypted TPM seed, and an instance of the IClientSession.
      *
