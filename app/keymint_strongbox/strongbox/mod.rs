@@ -129,6 +129,10 @@ impl StrongBox {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceBegin(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::DeviceBegin, err),
             },
+            // For SBS there's nothing to do here.
+            PerformOpReq::DeviceDeleteKey(_) => {
+                op_ok_rsp(PerformOpRsp::DeviceDeleteKey(DeleteKeyResponse {}))
+            }
             PerformOpReq::DeviceGenerateKey(req) => match device::generate_key(req, &self.tpm) {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceGenerateKey(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::DeviceGenerateKey, err),
