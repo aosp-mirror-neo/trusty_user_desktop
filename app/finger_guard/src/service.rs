@@ -757,16 +757,10 @@ fn service_result_to_binder_result<T>(
 impl<T: TrustyEnvironment> Interface for FingerGuardService<T> {}
 
 impl<T: TrustyEnvironment> IFingerGuard for FingerGuardService<T> {
-    fn init(&self, client_public_key: &[u8]) -> binder::Result<InitResponse> {
+    fn init(&self, client_public_key: &[u8; 65]) -> binder::Result<InitResponse> {
         service_result_to_binder_result(
             "init",
-            Self::init_handshake(
-                self,
-                client_public_key.try_into().map_err(|e| {
-                    error!("init failed: {e:?}");
-                    binder::Status::from(binder::StatusCode::BAD_VALUE)
-                })?,
-            ),
+            Self::init_handshake(self, client_public_key.into()),
         )
     }
     fn createClientSession(

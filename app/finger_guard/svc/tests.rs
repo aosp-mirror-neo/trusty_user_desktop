@@ -63,11 +63,12 @@ fn everything_with_a_shared_session() {
         PointConversionForm::UNCOMPRESSED,
         &mut ctx
     ));
+    let client_public_key_bytes: [u8; 65] = assert_ok!(client_public_key_bytes.try_into());
 
     // ECDH with the server. If the service has already done a handshake then it's not
     // possible to run this test, skip it and move on.
     let service = assert_ok!(finger_guard_api::connect_finger_guard());
-    let handshake = match service.init(client_public_key_bytes.as_slice()) {
+    let handshake = match service.init(&client_public_key_bytes) {
         Err(status) if status.transaction_error() == binder::StatusCode::ALREADY_EXISTS => {
             skip!("service already bound to a controller")
         }

@@ -35,7 +35,7 @@ interface IFingerGuard {
      * Once the PK is established, it will be persisted and block further
      * init calls until the device is powerwashed.
      */
-    InitResponse init(in byte[] clientPublicKey);
+    InitResponse init(in byte[65] clientPublicKey);
     /**
      * Return the nonce for a common shared session key, the session key
      * encrypted TPM seed, and an instance of the IClientSession.
