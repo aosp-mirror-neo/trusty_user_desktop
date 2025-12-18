@@ -174,6 +174,11 @@ impl_blob_export!(Aes256Tag(self) => SdcpClientSessionResponse.tag as [u8]);
 // can be used to encrypt/decrypt data, and so on.
 blob_newtype!(Secret, 32, generate);
 
+// Define a new type for a Secret encrypted by a symmetric key.
+blob_newtype!(WrappedSecret, 32);
+impl_blob_export!(WrappedSecret(self) => ClientSessionResponse.wrappedTpmSeed as [u8]);
+impl_blob_export!(WrappedSecret(self) => SdcpClientSessionResponse.wrappedTpmSeed as [u8]);
+
 // Define a type for the uncompressed representation of the public key point on the EC P256
 // curve.
 blob_newtype!(P256Point, 65, import, hashable);
@@ -316,9 +321,9 @@ pub fn encrypt_aes256_gcm(
     iv: &Iv,
     aad: &[u8],
     data: &Secret,
-) -> Result<(Vec<u8>, Aes256Tag), openssl::error::ErrorStack> {
+) -> ServiceResult<(WrappedSecret, Aes256Tag)> {
     let mut tag = Aes256Tag { bytes: [0u8; Aes256Tag::SIZE] };
-    openssl::symm::encrypt_aead(
+    let enc_data = openssl::symm::encrypt_aead(
         Cipher::aes_256_gcm(),
         &key.bytes,
         Some(&iv.bytes),
@@ -326,7 +331,16 @@ pub fn encrypt_aes256_gcm(
         &data.bytes,
         &mut tag.bytes,
     )
-    .map(|enc_data| (enc_data, tag))
+    .wrap_openssl_err("encryption operation failed")?;
+    let len = enc_data.len();
+    let wrapped_secret = WrappedSecret {
+        bytes: enc_data.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
+            name: "wrapped_secret",
+            expected: WrappedSecret::SIZE,
+            actual: len,
+        })?,
+    };
+    Ok((wrapped_secret, tag))
 }
 
 /// Decrypt a message using AES256-GCM with the given Hmac as a key.
@@ -334,7 +348,7 @@ pub fn decrypt_aes256_gcm(
     key: &Hmac,
     iv: &Iv,
     aad: &[u8],
-    data: &[u8],
+    data: &WrappedSecret,
     tag: &Aes256Tag,
 ) -> ServiceResult<Secret> {
     let secret = openssl::symm::decrypt_aead(
@@ -342,7 +356,7 @@ pub fn decrypt_aes256_gcm(
         &key.bytes,
         Some(&iv.bytes),
         aad,
-        data,
+        &data.bytes,
         &tag.bytes,
     )
     .wrap_openssl_err("decryption operation failed")?;
@@ -668,7 +682,7 @@ mod test {
         let plaintext = Secret { bytes: array::from_fn(|i| i as u8) };
         let (ciphertext, tag) =
             encrypt_aes256_gcm(&hmac, &iv, b"some_aad", &plaintext).expect("encryption failed");
-        assert_ne!(plaintext.bytes, ciphertext.as_slice());
+        assert_ne!(plaintext.bytes, ciphertext.bytes);
         let decrypted = decrypt_aes256_gcm(&hmac, &iv, b"some_aad", &ciphertext, &tag)
             .expect("decryption failed");
         assert_eq!(plaintext.bytes, decrypted.bytes);

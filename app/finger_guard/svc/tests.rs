@@ -97,9 +97,11 @@ fn everything_with_a_shared_session() {
     // Decrypt the wrapped tpm seed.
     let iv = assert_ok!(crypto::Iv::read_from_bytes(session_response.iv.as_slice()));
     let tag = assert_ok!(crypto::Aes256Tag::read_from_bytes(session_response.tag.as_slice()));
-    let encrypted_tpm_seed = session_response.wrappedTpmSeed;
+    let encrypted_tpm_seed = assert_ok!(crypto::WrappedSecret::read_from_bytes(
+        session_response.wrappedTpmSeed.as_slice()
+    ));
     let aad = b"tpm_seed";
-    assert_ok!(crypto::decrypt_aes256_gcm(&sk, &iv, aad, encrypted_tpm_seed.as_slice(), &tag,));
+    assert_ok!(crypto::decrypt_aes256_gcm(&sk, &iv, aad, &encrypted_tpm_seed, &tag,));
 
     // Convert the HMAC into a key.
     let sk = crypto::Key::from(sk);

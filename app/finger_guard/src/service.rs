@@ -522,12 +522,11 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             &iv,
             b"tpm_seed", // aad = "tpm_seed"
             &init_params.tpm_seed,
-        )
-        .wrap_openssl_err("failed to encrypt tpm_seed")?;
+        )?;
         let client_session = ClientSession { state: Arc::clone(&self.state), sk: new_sk.into() };
         let session_response = aidl::make_client_session_response(
             &nonce,
-            wrapped_tpm_seed,
+            &wrapped_tpm_seed,
             &iv,
             &tag,
             Some(client_session),
@@ -591,13 +590,12 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             &iv,
             b"tpm_seed", // aad = "tpm_seed"
             &sdcp_params.tpm_seed,
-        )
-        .wrap_openssl_err("failed to encrypt tpm_seed")?;
+        )?;
         let client_session = ClientSession { state: Arc::clone(&self.state), sk: new_sk.into() };
         let session_response = aidl::make_sdcp_client_session_response(
             &server_public_key,
             &nonce,
-            wrapped_tpm_seed,
+            &wrapped_tpm_seed,
             &iv,
             &tag,
             Some(client_session),
@@ -959,10 +957,12 @@ mod test {
         let iv = crypto::Iv::read_from_bytes(client_session_response.iv.as_slice()).unwrap();
         let tag =
             crypto::Aes256Tag::read_from_bytes(client_session_response.tag.as_slice()).unwrap();
-        let encrypted_tpm_seed = client_session_response.wrappedTpmSeed;
+        let encrypted_tpm_seed = crypto::WrappedSecret::read_from_bytes(
+            client_session_response.wrappedTpmSeed.as_slice(),
+        )
+        .unwrap();
         let aad = b"tpm_seed";
-        let _ =
-            crypto::decrypt_aes256_gcm(&sk, &iv, aad, encrypted_tpm_seed.as_slice(), &tag).unwrap();
+        let _ = crypto::decrypt_aes256_gcm(&sk, &iv, aad, &encrypted_tpm_seed, &tag).unwrap();
 
         // Convert the HMAC into a key.
         let sk = crypto::Key::from(sk);
@@ -997,10 +997,12 @@ mod test {
         let iv = crypto::Iv::read_from_bytes(client_session_response.iv.as_slice()).unwrap();
         let tag =
             crypto::Aes256Tag::read_from_bytes(client_session_response.tag.as_slice()).unwrap();
-        let encrypted_tpm_seed = client_session_response.wrappedTpmSeed;
+        let encrypted_tpm_seed = crypto::WrappedSecret::read_from_bytes(
+            client_session_response.wrappedTpmSeed.as_slice(),
+        )
+        .unwrap();
         let aad = b"tpm_seed";
-        let _ =
-            crypto::decrypt_aes256_gcm(&sk, &iv, aad, encrypted_tpm_seed.as_slice(), &tag).unwrap();
+        let _ = crypto::decrypt_aes256_gcm(&sk, &iv, aad, &encrypted_tpm_seed, &tag).unwrap();
         (clock, service, auth_token_key, sdcp_client_state)
     }
 

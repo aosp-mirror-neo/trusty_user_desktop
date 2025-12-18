@@ -103,14 +103,14 @@ pub fn make_init_response(
 /// Construct a session response.
 pub fn make_client_session_response(
     nonce: ref_to_impl_export!(ClientSessionResponse.nonce as [u8; 32]),
-    wrapped_tpm_seed: Vec<u8>,
+    wrapped_tpm_seed: ref_to_impl_export!(ClientSessionResponse.wrappedTpmSeed as [u8; 32]),
     iv: ref_to_impl_export!(ClientSessionResponse.iv as [u8; 12]),
     tag: ref_to_impl_export!(ClientSessionResponse.tag as [u8; 16]),
     client_session: Option<impl IClientSession>,
 ) -> ClientSessionResponse {
     ClientSessionResponse {
         nonce: nonce.export(),
-        wrappedTpmSeed: wrapped_tpm_seed,
+        wrappedTpmSeed: wrapped_tpm_seed.export(),
         iv: iv.export(),
         tag: tag.export(),
         clientSession: client_session
@@ -146,7 +146,7 @@ pub fn make_sdcp_claim(
 pub fn make_sdcp_client_session_response(
     server_public_key: ref_to_impl_export!(SdcpClientSessionResponse.serverPublicKey as [u8; 65]),
     nonce: ref_to_impl_export!(SdcpClientSessionResponse.nonce as [u8; 32]),
-    wrapped_tpm_seed: Vec<u8>,
+    wrapped_tpm_seed: ref_to_impl_export!(SdcpClientSessionResponse.wrappedTpmSeed as [u8; 32]),
     iv: ref_to_impl_export!(SdcpClientSessionResponse.iv as [u8; 12]),
     tag: ref_to_impl_export!(SdcpClientSessionResponse.tag as [u8; 16]),
     client_session: Option<impl IClientSession>,
@@ -154,7 +154,7 @@ pub fn make_sdcp_client_session_response(
     SdcpClientSessionResponse {
         serverPublicKey: server_public_key.export(),
         nonce: nonce.export(),
-        wrappedTpmSeed: wrapped_tpm_seed,
+        wrappedTpmSeed: wrapped_tpm_seed.export(),
         iv: iv.export(),
         tag: tag.export(),
         clientSession: client_session
@@ -200,20 +200,22 @@ mod test {
     fn test_make_client_session_response() {
         let nonce_bytes: [u8; 32] = array::from_fn(|x| x as u8);
         let nonce = crypto::Nonce::read_from_bytes(&nonce_bytes).unwrap();
-        let wrapped_tpm_seed: Vec<u8> = (1..=32).map(|x| x * 2).collect();
+        let wrapped_tpm_seed_bytes: [u8; 32] = array::from_fn(|x| x as u8 * 2);
+        let wrapped_tpm_seed =
+            crypto::WrappedSecret::read_from_bytes(&wrapped_tpm_seed_bytes).unwrap();
         let iv_bytes: [u8; 12] = array::from_fn(|x| x as u8 * 3);
         let iv = crypto::Iv::read_from_bytes(&iv_bytes).unwrap();
         let tag_bytes: [u8; 16] = array::from_fn(|x| x as u8 * 4);
         let tag = crypto::Aes256Tag::read_from_bytes(&tag_bytes).unwrap();
         let response = make_client_session_response(
             &nonce,
-            wrapped_tpm_seed.clone(),
+            &wrapped_tpm_seed,
             &iv,
             &tag,
             None::<BpClientSession>,
         );
         assert_eq!(response.nonce, nonce_bytes);
-        assert_eq!(response.wrappedTpmSeed, wrapped_tpm_seed);
+        assert_eq!(response.wrappedTpmSeed, wrapped_tpm_seed_bytes);
         assert_eq!(response.iv, iv_bytes);
         assert_eq!(response.tag, tag_bytes);
     }
