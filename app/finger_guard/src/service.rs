@@ -213,7 +213,7 @@ impl<T: TrustyEnvironment> ClientSession<T> {
         let secure_user_id = SecureUserId::from(hat.userId);
         self.state.trusty.save_user_id(&secure_user_id, &sid_file)?;
         // Start a new enroll session.
-        let nonce = crypto::Nonce::import(nonce)?;
+        let nonce = crypto::Nonce::from(nonce);
         let hmac = crypto::sensor_session_message_hmac(
             &self.sk,
             &nonce,
@@ -242,7 +242,7 @@ impl<T: TrustyEnvironment> ClientSession<T> {
         // If the enrollment succeeds, compute a sensor message mac with |sensor_challenge|.
         // Otherwise, return an empty response.
         if result.enrolled {
-            let nonce = crypto::Nonce::import(nonce)?;
+            let nonce = crypto::Nonce::from(nonce);
             let hmac = crypto::sensor_session_message_hmac(
                 &self.sk,
                 &nonce,
@@ -282,7 +282,7 @@ impl<T: TrustyEnvironment> ClientSession<T> {
         // If the attempt is not rate limited, the current attempt count is returned and
         // ignored for now.
         let _ = arl.increment_attempt_counter().wrap_lockout_status_err()?;
-        let nonce = crypto::Nonce::import(nonce)?;
+        let nonce = crypto::Nonce::from(nonce);
         let hmac = crypto::sensor_session_message_hmac(
             &self.sk,
             &nonce,
@@ -487,7 +487,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
             let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
             let server_public_key = crypto::ec_public_key_serialization(&server_private_key)
                 .wrap_openssl_err("failed to serialize server public key")?;
-            let client_public_key = crypto::P256Point::import(client_public_key_bytes)?;
+            let client_public_key = crypto::P256Point::try_from(client_public_key_bytes)?;
             // Use our new server key to do a DH exchange with the client public key.
             let pk = crypto::perform_ecdh(server_private_key, &client_public_key)?;
             let mac = crypto::compute_hmac!(&pk, &HandshakeMessage)?;
@@ -505,8 +505,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         &self,
         client_nonce: &[u8; 32],
     ) -> ServiceResult<ClientSessionResponse> {
-        let client_nonce = crypto::Nonce::import(client_nonce)
-            .map_err(|_| ServiceError::InvalidArg("client_nonce"))?;
+        let client_nonce = crypto::Nonce::from(client_nonce);
         let Some(init_params) = self.get_init_params() else {
             return Err(ServiceError::StateUnavailable("init_params"));
         };
@@ -543,19 +542,19 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         if self.get_init_params().is_some() {
             return Err(ServiceError::StateAlreadyExists("init_params"));
         }
-        let model_key = crypto::P256Point::import(&sdcp_claim.modelPublicKey)?;
-        let model_key_sig = crypto::P256Sig::import(&sdcp_claim.modelKeySignature)?;
+        let model_key = crypto::P256Point::from(&sdcp_claim.modelPublicKey);
+        let model_key_sig = crypto::P256Sig::from(&sdcp_claim.modelKeySignature);
         if !sdcp_pki::verify_public_key_signature(&model_key, &model_key_sig)? {
             return Err(ServiceError::InvalidArg("sdcp model key signature"));
         }
-        let device_key = crypto::P256Point::import(&sdcp_claim.devicePublicKey)?;
-        let device_key_sig = crypto::P256Sig::import(&sdcp_claim.deviceKeySignature)?;
+        let device_key = crypto::P256Point::from(&sdcp_claim.devicePublicKey);
+        let device_key_sig = crypto::P256Sig::from(&sdcp_claim.deviceKeySignature);
         if !model_key.verify(&crypto::compute_sha256!(&device_key), &device_key_sig)? {
             return Err(ServiceError::InvalidArg("sdcp device key signature"));
         }
-        let firmware_hash = crypto::HashValue::import(&sdcp_claim.firmwareHash)?;
-        let ephemeral_public_key = crypto::P256Point::import(&sdcp_claim.ephemeralPublicKey)?;
-        let firmware_sig = crypto::P256Sig::import(&sdcp_claim.firmwareSignature)?;
+        let firmware_hash = crypto::HashValue::from(&sdcp_claim.firmwareHash);
+        let ephemeral_public_key = crypto::P256Point::from(&sdcp_claim.ephemeralPublicKey);
+        let firmware_sig = crypto::P256Sig::from(&sdcp_claim.firmwareSignature);
         if !device_key.verify(
             &crypto::compute_sha256!(&SdcpHashHeader, &firmware_hash, &ephemeral_public_key),
             &firmware_sig,
@@ -564,7 +563,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         }
 
         let sdcp_params = self.state.sdcp_params.get_or_try_init(|| {
-            let device_public_key = crypto::P256Point::import(&sdcp_claim.devicePublicKey)?;
+            let device_public_key = crypto::P256Point::from(&sdcp_claim.devicePublicKey);
             // Save the device public key along with a new TPM seed out to storage.
             let sdcp_params =
                 SdcpParams { device_public_key, tpm_seed: crypto::Secret::generate() };
@@ -574,8 +573,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         if sdcp_params.device_public_key != &sdcp_claim.devicePublicKey {
             return Err(ServiceError::StateAlreadyExists("inconsistent device key"));
         }
-        let client_nonce = crypto::Nonce::import(&sdcp_claim.nonce)
-            .map_err(|_| ServiceError::InvalidArg("client_nonce"))?;
+        let client_nonce = crypto::Nonce::from(&sdcp_claim.nonce);
         let nonce = crypto::Nonce::generate();
         // Generate a fresh public+private key pair.
         let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
@@ -880,8 +878,8 @@ mod test {
                 &model_private_key,
             )
             .unwrap();
-            let firmware_hash_bytes = rng::generate_random_vec::<32>();
-            let firmware_hash = crypto::HashValue::import(&firmware_hash_bytes).unwrap();
+            let firmware_hash_bytes = rng::generate_random_buffer::<32>();
+            let firmware_hash = crypto::HashValue::from(&firmware_hash_bytes);
             Self {
                 model_public_key,
                 model_key_sig,
@@ -897,7 +895,7 @@ mod test {
             let ephemeral_public_key =
                 crypto::ec_public_key_serialization(&ephemeral_private_key).unwrap();
             let client_nonce_bytes = rng::generate_random_buffer::<32>();
-            let client_nonce = crypto::Nonce::import(&client_nonce_bytes).unwrap();
+            let client_nonce = crypto::Nonce::from(&client_nonce_bytes);
             let firmware_sig = crypto::ecdsa_sign(
                 &crypto::compute_sha256!(
                     &SdcpHashHeader,
@@ -947,9 +945,9 @@ mod test {
         let service = FingerGuardService::new(trusty);
 
         let client_nonce_bytes = rng::generate_random_buffer::<32>();
-        let client_nonce = crypto::Nonce::import(&client_nonce_bytes).unwrap();
+        let client_nonce = crypto::Nonce::from(&client_nonce_bytes);
         let client_session_response = service.create_client_session(&client_nonce_bytes).unwrap();
-        let server_nonce = crypto::Nonce::import(&client_session_response.nonce).unwrap();
+        let server_nonce = crypto::Nonce::from(&client_session_response.nonce);
         let sk = crypto::compute_hmac!(&init_params.pk, &client_nonce, &server_nonce).unwrap();
 
         // Decrypt the wrapped tpm seed, AEAD ensures the decryption succeeds and outputs only
@@ -985,10 +983,9 @@ mod test {
         let sdcp_client_state = SdcpClientState::new();
         let (sdcp_claim, ephemeral_private_key) = sdcp_client_state.generate_sdcp_claim();
         let client_session_response = service.create_sdcp_client_session(&sdcp_claim).unwrap();
-        let client_nonce = crypto::Nonce::import(&sdcp_claim.nonce).unwrap();
-        let server_nonce = crypto::Nonce::import(&client_session_response.nonce).unwrap();
-        let server_public_key =
-            crypto::P256Point::import(&client_session_response.serverPublicKey).unwrap();
+        let client_nonce = crypto::Nonce::from(&sdcp_claim.nonce);
+        let server_nonce = crypto::Nonce::from(&client_session_response.nonce);
+        let server_public_key = crypto::P256Point::from(&client_session_response.serverPublicKey);
         let pk = crypto::perform_ecdh(ephemeral_private_key, &server_public_key).unwrap();
         let sk = crypto::compute_hmac!(&pk, &client_nonce, &server_nonce, &SdcpContext).unwrap();
 

@@ -188,7 +188,7 @@ mod test {
     #[test]
     fn test_make_init_response() {
         let public_key_bytes: [u8; 65] = array::from_fn(|x| x as u8);
-        let public_key = crypto::P256Point::import(public_key_bytes.as_slice()).unwrap();
+        let public_key = crypto::P256Point::from(&public_key_bytes);
         let hmac_bytes: [u8; 32] = array::from_fn(|x| x as u8 * 2);
         let hmac = crypto::Hmac::read_from_bytes(hmac_bytes.as_slice()).unwrap();
         let response = make_init_response(&public_key, &hmac);

@@ -73,7 +73,7 @@ fn everything_with_a_shared_session() {
         }
         result => assert_ok!(result),
     };
-    let server_public_key = crypto::P256Point::import(&handshake.serverPublicKey).unwrap();
+    let server_public_key = crypto::P256Point::from(&handshake.serverPublicKey);
 
     // Derive PK from the client side.
     let pk = assert_ok!(crypto::perform_ecdh(client_private_key, &server_public_key));
