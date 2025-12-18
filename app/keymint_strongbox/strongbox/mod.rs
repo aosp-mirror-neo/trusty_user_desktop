@@ -23,7 +23,6 @@ use kmr_ta::{HalInfo, HardwareInfo, RpcInfo};
 use kmr_wire::{
     cbor,
     cbor::cbor,
-    frp::ErrorCode as FrpErrorCode,
     keymint::{BootInfo, ErrorCode, KeyParam, SecurityLevel, VerifiedBootState},
     rpc::*,
     *,
@@ -416,34 +415,19 @@ fn op_error_rsp(op: KeyMintOperation, err: Error) -> PerformOpResponse {
         // The IRemotelyProvisionedComponent HAL uses its own error space.
         let rpc_err: rpc::ErrorCode = match err.kind() {
             ErrorKind::Cbor(_) | ErrorKind::Der(_) | ErrorKind::Alloc(_) => rpc::ErrorCode::Failed,
-            ErrorKind::Hal(_, _) | ErrorKind::Frp(_, _) => {
+            ErrorKind::Hal(_, _) => {
                 error!("encountered non-RKP error on RKP method! {err:?}");
                 rpc::ErrorCode::Failed
             }
             ErrorKind::Rpc(e, _) => *e,
         };
         error_rsp(rpc_err as i32)
-    } else if kmr_wire::is_frp_operation(op) {
-        // The IFactoryResetProtection HAL uses its own error space.
-        let frp_err: FrpErrorCode = match err.kind() {
-            ErrorKind::Cbor(_) | ErrorKind::Der(_) | ErrorKind::Alloc(_) => FrpErrorCode::Failed,
-            ErrorKind::Hal(_, _) | ErrorKind::Rpc(_, _) => {
-                error!("encountered non-FRP error on FRP method! {err:?}");
-                FrpErrorCode::Failed
-            }
-            ErrorKind::Frp(e, _) => *e,
-        };
-        error_rsp(frp_err as i32)
     } else {
         let hal_err = match err.kind() {
             ErrorKind::Cbor(_) | ErrorKind::Der(_) => ErrorCode::InvalidArgument,
             ErrorKind::Hal(e, _) => *e,
             ErrorKind::Rpc(_, _) => {
                 error!("encountered RKP error on non-RKP method! {err:?}");
-                ErrorCode::InvalidArgument
-            }
-            ErrorKind::Frp(_, _) => {
-                error!("encountered FRP error on non-FRP method! {err:?}");
                 ErrorCode::InvalidArgument
             }
             ErrorKind::Alloc(_) => ErrorCode::MemoryAllocationFailed,

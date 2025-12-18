@@ -106,8 +106,6 @@ pub fn start() {
         tup: Box::new(kmr_ta::device::TrustedPresenceUnsupported),
         legacy_key: None,
         rpc: Box::new(TrustyRpc::new(&mut TrustyRng)),
-        frp_secret_storage: None,
-        frp_data_storage: None,
     };
 
     handle_port_connections(hw_info, RpcInfo::V3(rpc_info_v3), imp, dev)
