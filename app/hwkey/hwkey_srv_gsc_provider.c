@@ -244,9 +244,6 @@ uint32_t derive_key_versioned_v1(
             rollback_versions[HWKEY_ROLLBACK_VERSION_OS_INDEX];
     int32_t os_rollback_version_current =
             get_current_os_rollback_version(rollback_version_source);
-    for(int i = 0; i < HWKEY_ROLLBACK_VERSION_INDEX_COUNT; ++i) {
-        TLOGE("VERSION: %u\n", rollback_versions[i]);
-    }
 
     if (os_rollback_version_current < 0) {
         rc = HWKEY_ERR_NOT_VALID;
