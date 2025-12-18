@@ -476,12 +476,20 @@ pub mod generate_key {
                 .map_err(|_| km_err!(EncodingError, "word length"))?
                 .0
                 .get() as usize;
-            let (key_blob, cert_chain) = response
+            let (key_blob, suffix) = response
                 .suffix
                 .split_at_mut_checked((key_blob_words + 1) * 4)
                 .ok_or(km_err!(EncodingError, "split response"))?;
-
-            Ok(BufferedResponse { key_blob, cert_chain })
+            let (cert_chain_bytes, suffix) =
+                suffix.split_at_mut_checked(4).ok_or(km_err!(EncodingError, "split response"))?;
+            let cert_chain_bytes = U32LE::ref_from_prefix(cert_chain_bytes)
+                .map_err(|_| km_err!(EncodingError, "cert length"))?
+                .0
+                .get() as usize;
+            if suffix.len() < cert_chain_bytes {
+                return Err(km_err!(EncodingError, "cert underflow"));
+            }
+            Ok(BufferedResponse { key_blob, cert_chain: &mut suffix[0..cert_chain_bytes] })
         }
     }
 }
