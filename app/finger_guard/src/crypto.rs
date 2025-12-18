@@ -208,13 +208,6 @@ impl TryFrom<&P256Point> for EcKey<Public> {
     }
 }
 
-#[cfg(test)]
-impl From<P256Point> for [u8; 65] {
-    fn from(val: P256Point) -> [u8; 65] {
-        val.bytes
-    }
-}
-
 impl P256SigVerifier for P256Point {
     fn verify(&self, dgst: &HashValue, sig: &P256Sig) -> ServiceResult<bool> {
         let ecdsa_sig = EcdsaSig::try_from(sig)?;
