@@ -436,20 +436,8 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     pub fn new(trusty: T) -> Self {
         Self {
             state: Arc::new(ServiceState {
-                init_params: match trusty.load_init_params() {
-                    Ok(loaded_params) => OnceCell::with_value(loaded_params),
-                    Err(e) => {
-                        error!("failed to load init_params: {e:?}");
-                        OnceCell::new()
-                    }
-                },
-                sdcp_params: match trusty.load_sdcp_params() {
-                    Ok(loaded_params) => OnceCell::with_value(loaded_params),
-                    Err(e) => {
-                        error!("failed to load sdcp_params: {e:?}");
-                        OnceCell::new()
-                    }
-                },
+                init_params: OnceCell::new(),
+                sdcp_params: OnceCell::new(),
                 sensor_session: Default::default(),
                 auth_token_key: Default::default(),
                 enrollment_challenges: Default::default(),
@@ -460,11 +448,41 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         }
     }
 
+    fn get_init_params(&self) -> Option<&InitParams> {
+        self.state
+            .init_params
+            .get_or_try_init(|| {
+                self.state
+                    .trusty
+                    .load_init_params()
+                    .inspect_err(|e| error!("failed to load init_params: {e:?}"))
+            })
+            .ok()
+    }
+
+    fn get_sdcp_params(&self) -> Option<&SdcpParams> {
+        self.state
+            .sdcp_params
+            .get_or_try_init(|| {
+                self.state
+                    .trusty
+                    .load_sdcp_params()
+                    .inspect_err(|e| error!("failed to load sdcp_params: {e:?}"))
+            })
+            .ok()
+    }
+
     fn init_handshake(&self, client_public_key_bytes: &[u8]) -> ServiceResult<InitResponse> {
         // Fetch the existing init params, or generate a fresh set of them if none exist. The
         // response will only be populated if the get_or_try_init does a new handshake.
         let mut response = None;
         self.state.init_params.get_or_try_init(|| {
+            // Try to load any existing stored init params first.
+            if let Ok(init_params) = self.state.trusty.load_init_params() {
+                // Note that we do not set `response` here because having pre-existing parameters
+                // is a success for initializing init_params, but a failure for init_handshake.
+                return Ok(init_params);
+            }
             // Generate a fresh public+private key pair.
             let server_private_key = crypto::ec_keygen().wrap_openssl_err("failed to ec keygen")?;
             let server_public_key = crypto::ec_public_key_serialization(&server_private_key)
@@ -489,11 +507,11 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     ) -> ServiceResult<ClientSessionResponse> {
         let client_nonce = crypto::Nonce::import(client_nonce)
             .map_err(|_| ServiceError::InvalidArg("client_nonce"))?;
-        let Some(init_params) = self.state.init_params.get() else {
+        let Some(init_params) = self.get_init_params() else {
             return Err(ServiceError::StateUnavailable("init_params"));
         };
         // Reject non-sdcp session creation if an SDCP session has been established.
-        if self.state.sdcp_params.get().is_some() {
+        if self.get_sdcp_params().is_some() {
             return Err(ServiceError::StateAlreadyExists("sdcp_params"));
         }
         let nonce = crypto::Nonce::generate();
@@ -523,7 +541,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
     ) -> ServiceResult<SdcpClientSessionResponse> {
         // TODO(b/451630059): consider to pin firmware hash in SdcpParams so we don't need to
         // maintain an allowlist of possible firmware hash values.
-        if self.state.init_params.get().is_some() {
+        if self.get_init_params().is_some() {
             return Err(ServiceError::StateAlreadyExists("init_params"));
         }
         let model_key = crypto::P256Point::import(&sdcp_claim.modelPublicKey)?;
