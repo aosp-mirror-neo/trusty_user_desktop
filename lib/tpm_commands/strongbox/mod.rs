@@ -24,6 +24,8 @@ use kmr_wire::{
     keymint::{Certificate, KeyCreationResult, KeyMintHardwareInfo, SecurityLevel},
     *,
 };
+use openssl::bn::BigNum;
+use openssl::ecdsa::EcdsaSig;
 use zerocopy::{
     FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, BE, I32, I64, LE, U16, U32,
 };
@@ -978,7 +980,18 @@ pub mod finish {
 
         /// Convert a response into a kmr_wire::FinishResponse.
         fn try_from(response: &mut Response) -> Result<kmr_wire::FinishResponse, Error> {
-            Ok(kmr_wire::FinishResponse { ret: response.ret.to_vec() })
+            if response.ret.len() != 64 {
+                return Err(km_err!(EncodingError, "unexpected signature size"));
+            }
+            let r = BigNum::from_slice(&response.ret[0..32])
+                .map_err(|_| km_err!(EncodingError, "bignum"))?;
+            let s = BigNum::from_slice(&response.ret[32..])
+                .map_err(|_| km_err!(EncodingError, "bignum"))?;
+            let ret = EcdsaSig::from_private_components(r, s)
+                .map_err(|_| km_err!(EncodingError, "from components"))?
+                .to_der()
+                .map_err(|_| km_err!(EncodingError, "to der"))?;
+            Ok(kmr_wire::FinishResponse { ret })
         }
     }
 }

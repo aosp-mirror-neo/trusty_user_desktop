@@ -19,6 +19,7 @@ rust_defaults {
         "libkmr_wire",
         "liblog_rust",
         "libopen_enum",
+        "libopenssl",
         "libthiserror",
         "libzerocopy",
     ],

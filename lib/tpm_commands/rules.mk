@@ -32,6 +32,7 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,zerocopy) \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/keymint-rust/wire \
+	trusty/user/base/lib/openssl-rust \
 	trusty/user/base/lib/trusty-std \
 
 MODULE_RUST_USE_CLIPPY := true
