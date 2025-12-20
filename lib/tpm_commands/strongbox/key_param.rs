@@ -38,22 +38,36 @@ const fn include_byte_len(tag: Tag, len: usize) -> i32 {
 }
 
 fn expected_size_one(param: &KeyParam) -> usize {
-    let value = match param {
-        KeyParam::Algorithm(_) => size_of::<i32>(),
-        KeyParam::AllowWhileOnBody => 0usize,
-        KeyParam::ApplicationData(d) | KeyParam::ApplicationId(d) => {
-            return byte_len_with_word_padding(d.len())
-                .checked_add(size_of::<i32>())
-                .expect("overflow");
-        }
-        KeyParam::Digest(_) => size_of::<i32>(),
-        KeyParam::KeySize(_) => size_of::<u32>(),
-        KeyParam::Purpose(_) => size_of::<i32>(),
-        KeyParam::UserId(_) => size_of::<u32>(),
-        _ => {
-            log::error!("Unexpected param: {:?}", param);
-            return 0;
-        }
+    let value = match tag_type(param.tag()) {
+        TagType::Bool => 0usize,
+        TagType::Enum => size_of::<i32>(),
+        TagType::EnumRep => size_of::<i32>(),
+        TagType::Uint => size_of::<u32>(),
+        TagType::Date => size_of::<i64>(),
+        TagType::Ulong => size_of::<u64>(),
+        TagType::UlongRep => size_of::<u64>(),
+        _ => match param {
+            KeyParam::ApplicationData(value)
+            | KeyParam::ApplicationId(value)
+            | KeyParam::AttestationApplicationId(value)
+            | KeyParam::AttestationChallenge(value)
+            | KeyParam::AttestationIdBrand(value)
+            | KeyParam::AttestationIdDevice(value)
+            | KeyParam::AttestationIdProduct(value)
+            | KeyParam::AttestationIdManufacturer(value)
+            | KeyParam::AttestationIdModel(value)
+            | KeyParam::AttestationIdSerial(value)
+            | KeyParam::CertificateSerial(value)
+            | KeyParam::CertificateSubject(value) => {
+                return byte_len_with_word_padding(value.len())
+                    .checked_add(size_of::<i32>())
+                    .expect("overflow");
+            }
+            _ => {
+                log::error!("Unexpected param: {:?}", param);
+                return 0;
+            }
+        },
     };
     value + size_of::<i32>()
 }
@@ -81,10 +95,26 @@ fn serialize_i32(slice: &mut [u8], tag: Tag, val: i32) -> &mut [u8] {
     suffix
 }
 
+fn serialize_i64(slice: &mut [u8], tag: Tag, val: i64) -> &mut [u8] {
+    let (out, suffix) = slice.split_at_mut(size_of::<i32>());
+    out.copy_from_slice(&(tag as i32).to_le_bytes());
+    let (out, suffix) = suffix.split_at_mut(size_of::<i64>());
+    out.copy_from_slice(&val.to_le_bytes());
+    suffix
+}
+
 fn serialize_u32(slice: &mut [u8], tag: Tag, val: u32) -> &mut [u8] {
     let (out, suffix) = slice.split_at_mut(size_of::<i32>());
     out.copy_from_slice(&(tag as i32).to_le_bytes());
     let (out, suffix) = suffix.split_at_mut(size_of::<u32>());
+    out.copy_from_slice(&val.to_le_bytes());
+    suffix
+}
+
+fn serialize_u64(slice: &mut [u8], tag: Tag, val: u64) -> &mut [u8] {
+    let (out, suffix) = slice.split_at_mut(size_of::<i32>());
+    out.copy_from_slice(&(tag as i32).to_le_bytes());
+    let (out, suffix) = suffix.split_at_mut(size_of::<u64>());
     out.copy_from_slice(&val.to_le_bytes());
     suffix
 }
@@ -99,17 +129,79 @@ fn serialize_u8_vec<'a>(slice: &'a mut [u8], tag: Tag, val: &[u8]) -> &'a mut [u
 
 fn serialize<'a>(out: &'a mut [u8], param: &KeyParam) -> &'a mut [u8] {
     match param {
+        // TagType::Bool
+        KeyParam::AllowWhileOnBody
+        | KeyParam::BootloaderOnly
+        | KeyParam::CallerNonce
+        | KeyParam::EarlyBootOnly
+        | KeyParam::NoAuthRequired
+        | KeyParam::RollbackResistance
+        | KeyParam::TrustedUserPresenceRequired
+        | KeyParam::TrustedConfirmationRequired
+        | KeyParam::StorageKey => serialize_bool(out, param.tag()),
+
+        // TagType::Enum
         KeyParam::Algorithm(a) => serialize_i32(out, param.tag(), *a as i32),
-        KeyParam::AllowWhileOnBody => serialize_bool(out, param.tag()),
-        KeyParam::ApplicationData(d) => serialize_u8_vec(out, param.tag(), d),
-        KeyParam::ApplicationId(a) => serialize_u8_vec(out, param.tag(), a),
+        KeyParam::EcCurve(c) => serialize_i32(out, param.tag(), *c as i32),
+        KeyParam::Origin(o) => serialize_i32(out, param.tag(), *o as i32),
+        KeyParam::UserAuthType(t) => serialize_i32(out, param.tag(), *t as i32),
+
+        // TagType::EnumRep
+        KeyParam::BlockMode(m) => serialize_i32(out, param.tag(), *m as i32),
         KeyParam::Digest(d) => serialize_i32(out, param.tag(), *d as i32),
-        KeyParam::KeySize(s) => serialize_u32(out, param.tag(), s.0),
+        KeyParam::Padding(p) => serialize_i32(out, param.tag(), *p as i32),
         KeyParam::Purpose(p) => serialize_i32(out, param.tag(), *p as i32),
-        KeyParam::UserId(u) => serialize_u32(out, param.tag(), *u),
+        KeyParam::RsaOaepMgfDigest(d) => serialize_i32(out, param.tag(), *d as i32),
+
+        // TagType::Uint
+        KeyParam::KeySize(s) => serialize_u32(out, param.tag(), s.0),
+        KeyParam::AuthTimeout(value)
+        | KeyParam::BootPatchlevel(value)
+        | KeyParam::MaxUsesPerBoot(value)
+        | KeyParam::MinMacLength(value)
+        | KeyParam::OsPatchlevel(value)
+        | KeyParam::OsVersion(value)
+        | KeyParam::UserId(value)
+        | KeyParam::VendorPatchlevel(value) => serialize_u32(out, param.tag(), *value),
+
+        //TagType::Date
+        KeyParam::CertificateNotAfter(date_time)
+        | KeyParam::CertificateNotBefore(date_time)
+        | KeyParam::CreationDatetime(date_time) => {
+            serialize_i64(out, param.tag(), date_time.ms_since_epoch)
+        }
+
+        // TagType::Ulong
+        KeyParam::RsaPublicExponent(e) => serialize_u64(out, param.tag(), e.0),
+
+        // TagType::UlongRep
+        KeyParam::UserSecureId(id) => serialize_u64(out, param.tag(), *id),
+
+        // TAgType::BigNum
+        KeyParam::CertificateSerial(value) => serialize_u8_vec(out, param.tag(), value),
+
+        // TagType::Bytes
+        KeyParam::ApplicationData(value)
+        | KeyParam::ApplicationId(value)
+        | KeyParam::AttestationApplicationId(value)
+        | KeyParam::AttestationChallenge(value)
+        | KeyParam::AttestationIdBrand(value)
+        | KeyParam::AttestationIdDevice(value)
+        | KeyParam::AttestationIdProduct(value)
+        | KeyParam::AttestationIdManufacturer(value)
+        | KeyParam::AttestationIdModel(value)
+        | KeyParam::AttestationIdSerial(value)
+        | KeyParam::CertificateSubject(value) => serialize_u8_vec(out, param.tag(), value),
+
         _ => {
             log::error!("Unexpected param: {:?}", param);
-            out
+            let size = expected_size_one(param);
+            if size == 0 {
+                out
+            } else {
+                out[0..size].fill(0);
+                &mut out[expected_size_one(param)..]
+            }
         }
     }
 }
@@ -140,6 +232,17 @@ fn parse_tag(tag_word: u32) -> Result<(Tag, TagType, usize), Error> {
     Ok((tag, tag_type(tag), (tag_word as usize >> TAG_LEN_SHIFT) & TAG_LEN_MASK_BITS))
 }
 
+fn tag_datetime_helper(buf: &[u32]) -> Result<DateTime, Error> {
+    Ok(DateTime {
+        ms_since_epoch: <i64>::from_ne_bytes(
+            buf[0..2]
+                .as_bytes()
+                .try_into()
+                .map_err(|_| km_err!(EncodingError, "datetime buffer size"))?,
+        ),
+    })
+}
+
 fn tag_int_helper<T: TryFrom<i32>>(v: u32) -> Result<T, Error> {
     T::try_from(i32::from_ne_bytes(v.to_ne_bytes()))
         .map_err(|_| km_err!(EncodingError, type_name::<T>()))
@@ -159,33 +262,108 @@ fn tag_vec_helper<F: FnOnce(Vec<u8>) -> KeyParam>(
 fn parse_key_param(buf: &[u32]) -> Result<(KeyParam, &[u32]), Error> {
     let (tag, _tag_type, opt_len_bytes) = parse_tag(buf[0])?;
     let (param, skip) = match tag {
-        Tag::Algorithm => (KeyParam::Algorithm(tag_int_helper(buf[1])?), 2),
+        // TagType::Bool
         Tag::AllowWhileOnBody => (KeyParam::AllowWhileOnBody, 1),
+        Tag::BootloaderOnly => (KeyParam::BootloaderOnly, 1),
+        Tag::CallerNonce => (KeyParam::CallerNonce, 1),
+        Tag::EarlyBootOnly => (KeyParam::EarlyBootOnly, 1),
+        Tag::NoAuthRequired => (KeyParam::NoAuthRequired, 1),
+        Tag::RollbackResistance => (KeyParam::RollbackResistance, 1),
+        Tag::TrustedUserPresenceRequired => (KeyParam::TrustedUserPresenceRequired, 1),
+        Tag::TrustedConfirmationRequired => (KeyParam::TrustedConfirmationRequired, 1),
+        Tag::StorageKey => (KeyParam::StorageKey, 1),
+
+        // TagType::Enum
+        Tag::Algorithm => (KeyParam::Algorithm(tag_int_helper(buf[1])?), 2),
+        Tag::EcCurve => (KeyParam::EcCurve(tag_int_helper(buf[1])?), 2),
+        Tag::Origin => (KeyParam::Origin(tag_int_helper(buf[1])?), 2),
+        Tag::UserAuthType => (KeyParam::UserAuthType(tag_int_helper(buf[1])?), 2),
+
+        // TagType::EnumRep
+        Tag::BlockMode => (KeyParam::BlockMode(tag_int_helper(buf[1])?), 2),
+        Tag::Digest => (KeyParam::Digest(tag_int_helper(buf[1])?), 2),
+        Tag::Padding => (KeyParam::Padding(tag_int_helper(buf[1])?), 2),
+        Tag::Purpose => (KeyParam::Purpose(tag_int_helper(buf[1])?), 2),
+        Tag::RsaOaepMgfDigest => (KeyParam::RsaOaepMgfDigest(tag_int_helper(buf[1])?), 2),
+
+        // TagType::Uint
+        Tag::AuthTimeout => (KeyParam::AuthTimeout(buf[1]), 2),
+        Tag::BootPatchlevel => (KeyParam::BootPatchlevel(buf[1]), 2),
+        Tag::KeySize => (KeyParam::KeySize(KeySizeInBits(buf[1])), 2),
+        Tag::MaxUsesPerBoot => (KeyParam::MaxUsesPerBoot(buf[1]), 2),
+        Tag::MinMacLength => (KeyParam::MinMacLength(buf[1]), 2),
+        Tag::OsPatchlevel => (KeyParam::OsPatchlevel(buf[1]), 2),
+        Tag::OsVersion => (KeyParam::OsVersion(buf[1]), 2),
+        Tag::UserId => (KeyParam::UserId(buf[1]), 2),
+        Tag::VendorPatchlevel => (KeyParam::VendorPatchlevel(buf[1]), 2),
+
+        // TagType::Date
+        Tag::CertificateNotAfter => {
+            (KeyParam::CertificateNotAfter(tag_datetime_helper(&buf[1..3])?), 3)
+        }
+        Tag::CertificateNotBefore => {
+            (KeyParam::CertificateNotBefore(tag_datetime_helper(&buf[1..3])?), 3)
+        }
+        Tag::CreationDatetime => (KeyParam::CreationDatetime(tag_datetime_helper(&buf[1..3])?), 3),
+
+        // TagType::Ulong
+        Tag::RsaPublicExponent => (
+            KeyParam::RsaPublicExponent(RsaExponent(<u64>::from_ne_bytes(
+                // unwrap is ok here because size_of::<u64>() == size_of::<[u32; 2]>()
+                buf[1..3].as_bytes().try_into().unwrap(),
+            ))),
+            3,
+        ),
+
+        // TagType::UlongRep
+        Tag::UserSecureId => (
+            KeyParam::UserSecureId(<u64>::from_ne_bytes(
+                // unwrap is ok here because size_of::<u64>() == size_of::<[u32; 2]>()
+                buf[1..3].as_bytes().try_into().unwrap(),
+            )),
+            3,
+        ),
+
+        // TagType::BigNum
+        Tag::CertificateSerial => {
+            return tag_vec_helper(KeyParam::CertificateSerial, buf, opt_len_bytes);
+        }
+
+        // TagType::Bytes
         Tag::ApplicationData => {
             return tag_vec_helper(KeyParam::ApplicationData, buf, opt_len_bytes);
         }
         Tag::ApplicationId => {
             return tag_vec_helper(KeyParam::ApplicationId, buf, opt_len_bytes);
         }
-        Tag::BootPatchlevel => (KeyParam::BootPatchlevel(buf[1]), 2),
-        Tag::Digest => (KeyParam::Digest(tag_int_helper(buf[1])?), 2),
-        Tag::KeySize => (KeyParam::KeySize(KeySizeInBits(buf[1])), 2),
-        Tag::Origin => (
-            KeyParam::Origin(match buf[1] {
-                0 => KeyOrigin::Generated,
-                1 => KeyOrigin::Imported,
-                3 => KeyOrigin::SecurelyImported,
-                _ => {
-                    return Err(km_err!(EncodingError, "bad origin"));
-                }
-            }),
-            2,
-        ),
-        Tag::OsPatchlevel => (KeyParam::OsPatchlevel(buf[1]), 2),
-        Tag::OsVersion => (KeyParam::OsVersion(buf[1]), 2),
-        Tag::Purpose => (KeyParam::Purpose(tag_int_helper(buf[1])?), 2),
-        Tag::UserId => (KeyParam::UserId(buf[1]), 2),
-        Tag::VendorPatchlevel => (KeyParam::VendorPatchlevel(buf[1]), 2),
+        Tag::AttestationApplicationId => {
+            return tag_vec_helper(KeyParam::AttestationApplicationId, buf, opt_len_bytes);
+        }
+        Tag::AttestationChallenge => {
+            return tag_vec_helper(KeyParam::AttestationChallenge, buf, opt_len_bytes);
+        }
+        Tag::AttestationIdBrand => {
+            return tag_vec_helper(KeyParam::AttestationIdBrand, buf, opt_len_bytes);
+        }
+        Tag::AttestationIdDevice => {
+            return tag_vec_helper(KeyParam::AttestationIdDevice, buf, opt_len_bytes);
+        }
+        Tag::AttestationIdProduct => {
+            return tag_vec_helper(KeyParam::AttestationIdProduct, buf, opt_len_bytes);
+        }
+        Tag::AttestationIdManufacturer => {
+            return tag_vec_helper(KeyParam::AttestationIdManufacturer, buf, opt_len_bytes);
+        }
+        Tag::AttestationIdModel => {
+            return tag_vec_helper(KeyParam::AttestationIdModel, buf, opt_len_bytes);
+        }
+        Tag::AttestationIdSerial => {
+            return tag_vec_helper(KeyParam::AttestationIdSerial, buf, opt_len_bytes);
+        }
+        Tag::CertificateSubject => {
+            return tag_vec_helper(KeyParam::CertificateSubject, buf, opt_len_bytes);
+        }
+
         _ => {
             return Err(km_err!(Unimplemented, format!("unexpected tag: {tag:?}")));
         }
@@ -398,6 +576,8 @@ mod test {
             KeyParam::UserId(0xF00),
             KeyParam::ApplicationId(vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE]),
             KeyParam::ApplicationData(vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
+            KeyParam::CreationDatetime(DateTime { ms_since_epoch: 1765505306934 }),
+            KeyParam::RsaPublicExponent(RsaExponent(13)),
         ];
 
         let params_len_bytes = expected_size(&key_params);
