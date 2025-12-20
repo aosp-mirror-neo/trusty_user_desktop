@@ -63,17 +63,18 @@ fn everything_with_a_shared_session() {
         PointConversionForm::UNCOMPRESSED,
         &mut ctx
     ));
+    let client_public_key_bytes: [u8; 65] = assert_ok!(client_public_key_bytes.try_into());
 
     // ECDH with the server. If the service has already done a handshake then it's not
     // possible to run this test, skip it and move on.
     let service = assert_ok!(finger_guard_api::connect_finger_guard());
-    let handshake = match service.init(client_public_key_bytes.as_slice()) {
+    let handshake = match service.init(&client_public_key_bytes) {
         Err(status) if status.transaction_error() == binder::StatusCode::ALREADY_EXISTS => {
             skip!("service already bound to a controller")
         }
         result => assert_ok!(result),
     };
-    let server_public_key = crypto::P256Point::import(&handshake.serverPublicKey).unwrap();
+    let server_public_key = crypto::P256Point::from(&handshake.serverPublicKey);
 
     // Derive PK from the client side.
     let pk = assert_ok!(crypto::perform_ecdh(client_private_key, &server_public_key));
@@ -97,9 +98,11 @@ fn everything_with_a_shared_session() {
     // Decrypt the wrapped tpm seed.
     let iv = assert_ok!(crypto::Iv::read_from_bytes(session_response.iv.as_slice()));
     let tag = assert_ok!(crypto::Aes256Tag::read_from_bytes(session_response.tag.as_slice()));
-    let encrypted_tpm_seed = session_response.wrappedTpmSeed;
+    let encrypted_tpm_seed = assert_ok!(crypto::WrappedSecret::read_from_bytes(
+        session_response.wrappedTpmSeed.as_slice()
+    ));
     let aad = b"tpm_seed";
-    assert_ok!(crypto::decrypt_aes256_gcm(&sk, &iv, aad, encrypted_tpm_seed.as_slice(), &tag,));
+    assert_ok!(crypto::decrypt_aes256_gcm(&sk, &iv, aad, &encrypted_tpm_seed, &tag,));
 
     // Convert the HMAC into a key.
     let sk = crypto::Key::from(sk);

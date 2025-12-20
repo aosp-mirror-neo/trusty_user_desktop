@@ -69,7 +69,7 @@ impl<T> MapOpenSslErrExt<T> for Result<T, openssl::error::ErrorStack> {
 /// The macro can also be invoked with additional keyword parameters that specify additional
 /// features to be added to the type:
 ///   - generate: add a `generate` function to security generate a new random value
-///   - import: add an `import` function that creates an instance using a slice of bytes
+///   - import: implement From and TryFrom to construct an instance from a blob of input bytes
 ///   - hmac_signable: implement HmacSignable using the bytes as the contents of the message
 ///   - hashable: implement Hashable by hashing the bytes of the blob
 macro_rules! blob_newtype {
@@ -82,9 +82,14 @@ macro_rules! blob_newtype {
         }
     };
     (@feature, $name:ident, import) => {
-        impl $name {
-            /// Import a value that was supplied as a blob of bytes. Can fail if the size is incorrect.
-            pub fn import(value: &[u8]) -> ServiceResult<Self> {
+        impl From<&[u8; $name::SIZE]> for $name {
+            fn from(value: &[u8; $name::SIZE]) -> Self {
+                Self { bytes: *value }
+            }
+        }
+        impl TryFrom<&[u8]> for $name {
+            type Error = ServiceError;
+            fn try_from(value: &[u8]) -> ServiceResult<Self> {
                 Ok(Self {
                     bytes: value.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
                         name: stringify!($name),
@@ -174,6 +179,11 @@ impl_blob_export!(Aes256Tag(self) => SdcpClientSessionResponse.tag as [u8]);
 // can be used to encrypt/decrypt data, and so on.
 blob_newtype!(Secret, 32, generate);
 
+// Define a new type for a Secret encrypted by a symmetric key.
+blob_newtype!(WrappedSecret, 32);
+impl_blob_export!(WrappedSecret(self) => ClientSessionResponse.wrappedTpmSeed as [u8]);
+impl_blob_export!(WrappedSecret(self) => SdcpClientSessionResponse.wrappedTpmSeed as [u8]);
+
 // Define a type for the uncompressed representation of the public key point on the EC P256
 // curve.
 blob_newtype!(P256Point, 65, import, hashable);
@@ -195,13 +205,6 @@ impl TryFrom<&P256Point> for EcKey<Public> {
         })()
         .wrap_openssl_err("failed to convert into a EcKey public key")?;
         Ok(ec_key)
-    }
-}
-
-#[cfg(test)]
-impl From<P256Point> for [u8; 65] {
-    fn from(val: P256Point) -> [u8; 65] {
-        val.bytes
     }
 }
 
@@ -265,7 +268,7 @@ pub fn ec_public_key_serialization(
     let mut ctx = BigNumContext::new()?;
     let public_key_bytes =
         private_key.public_key().to_bytes(&group, PointConversionForm::UNCOMPRESSED, &mut ctx)?;
-    let public_key = P256Point::import(&public_key_bytes)
+    let public_key = P256Point::try_from(public_key_bytes.as_slice())
         .expect("exported p256 uncomprsssed key should be 65 bytes");
     Ok(public_key)
 }
@@ -277,7 +280,7 @@ pub fn ecdsa_sign(dgst: &HashValue, ec_key: &EcKey<Private>) -> ServiceResult<P2
         let r_bytes = ec_sig.r().to_vec_padded(32).expect("r must be at most 32 bytes");
         let s_bytes = ec_sig.s().to_vec_padded(32).expect("s must be at most 32 bytes");
         let sig_bytes = [&r_bytes[..], &s_bytes[..]].concat();
-        Ok(P256Sig::import(&sig_bytes).expect("exact 64 bytes in sig_bytes."))
+        Ok(P256Sig::try_from(sig_bytes.as_slice()).expect("exact 64 bytes in sig_bytes."))
     })()
     .wrap_openssl_err("fail to create ecdsa signature")?;
     Ok(sig)
@@ -316,9 +319,9 @@ pub fn encrypt_aes256_gcm(
     iv: &Iv,
     aad: &[u8],
     data: &Secret,
-) -> Result<(Vec<u8>, Aes256Tag), openssl::error::ErrorStack> {
+) -> ServiceResult<(WrappedSecret, Aes256Tag)> {
     let mut tag = Aes256Tag { bytes: [0u8; Aes256Tag::SIZE] };
-    openssl::symm::encrypt_aead(
+    let enc_data = openssl::symm::encrypt_aead(
         Cipher::aes_256_gcm(),
         &key.bytes,
         Some(&iv.bytes),
@@ -326,7 +329,16 @@ pub fn encrypt_aes256_gcm(
         &data.bytes,
         &mut tag.bytes,
     )
-    .map(|enc_data| (enc_data, tag))
+    .wrap_openssl_err("encryption operation failed")?;
+    let len = enc_data.len();
+    let wrapped_secret = WrappedSecret {
+        bytes: enc_data.try_into().map_err(|_| ServiceError::BufferSizeMismatch {
+            name: "wrapped_secret",
+            expected: WrappedSecret::SIZE,
+            actual: len,
+        })?,
+    };
+    Ok((wrapped_secret, tag))
 }
 
 /// Decrypt a message using AES256-GCM with the given Hmac as a key.
@@ -334,7 +346,7 @@ pub fn decrypt_aes256_gcm(
     key: &Hmac,
     iv: &Iv,
     aad: &[u8],
-    data: &[u8],
+    data: &WrappedSecret,
     tag: &Aes256Tag,
 ) -> ServiceResult<Secret> {
     let secret = openssl::symm::decrypt_aead(
@@ -342,7 +354,7 @@ pub fn decrypt_aes256_gcm(
         &key.bytes,
         Some(&iv.bytes),
         aad,
-        data,
+        &data.bytes,
         &tag.bytes,
     )
     .wrap_openssl_err("decryption operation failed")?;
@@ -668,7 +680,7 @@ mod test {
         let plaintext = Secret { bytes: array::from_fn(|i| i as u8) };
         let (ciphertext, tag) =
             encrypt_aes256_gcm(&hmac, &iv, b"some_aad", &plaintext).expect("encryption failed");
-        assert_ne!(plaintext.bytes, ciphertext.as_slice());
+        assert_ne!(plaintext.bytes, ciphertext.bytes);
         let decrypted = decrypt_aes256_gcm(&hmac, &iv, b"some_aad", &ciphertext, &tag)
             .expect("decryption failed");
         assert_eq!(plaintext.bytes, decrypted.bytes);
@@ -705,7 +717,7 @@ mod test {
             0xa1, 0x89, 0xfc, 0xa6, 0xee, 0x26, 0x45, 0xdd, 0x6c, 0xf6, 0x6e, 0xb1, 0x61, 0x35,
             0xdf, 0xa0, 0xec, 0xb5, 0x77, 0x44, 0xf7, 0xd2, 0x95,
         ];
-        let p256_point = P256Point::import(&public_key_bytes).unwrap();
+        let p256_point = P256Point::from(&public_key_bytes);
         assert!(EcKey::try_from(&p256_point).is_ok());
     }
 
@@ -718,7 +730,7 @@ mod test {
             0x6b, 0xa0, 0x27, 0x3c, 0x75, 0x65, 0xd9, 0xe1, 0x3d, 0x8a, 0xa4, 0xf7, 0xa0, 0x45,
             0x57, 0x76, 0x47, 0x10, 0x67, 0xe0, 0xff, 0xa6,
         ];
-        let p256_sig = P256Sig::import(&sig).unwrap();
+        let p256_sig = P256Sig::from(&sig);
         assert!(EcdsaSig::try_from(&p256_sig).is_ok());
     }
 
@@ -748,10 +760,10 @@ mod test {
             0x6b, 0xa0, 0x27, 0x3c, 0x75, 0x65, 0xd9, 0xe1, 0x3d, 0x8a, 0xa4, 0xf7, 0xa0, 0x45,
             0x57, 0x76, 0x47, 0x10, 0x67, 0xe0, 0xff, 0xa6,
         ];
-        let p256_sig = P256Sig::import(&sig).unwrap();
-        let ksk_point = P256Point::import(&ksk_public_key_bytes).unwrap();
+        let p256_sig = P256Sig::from(&sig);
+        let ksk_point = P256Point::from(&ksk_public_key_bytes);
         let ksk_key = EcKey::try_from(&ksk_point).unwrap();
-        let model_key = P256Point::import(&model_key_bytes).unwrap();
+        let model_key = P256Point::from(&model_key_bytes);
         let dgst = compute_sha256!(&model_key);
         assert!(ksk_point.verify(&dgst, &p256_sig).unwrap());
         assert!(ksk_key.verify(&dgst, &p256_sig).unwrap());

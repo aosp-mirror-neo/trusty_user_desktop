@@ -34,7 +34,7 @@
 package android.desktop.security.finger_guard;
 @VintfStability
 interface IFingerGuard {
-  android.desktop.security.finger_guard.InitResponse init(in byte[] clientPublicKey);
+  android.desktop.security.finger_guard.InitResponse init(in byte[65] clientPublicKey);
   android.desktop.security.finger_guard.ClientSessionResponse createClientSession(in byte[32] clientNonce);
   android.desktop.security.finger_guard.SdcpClientSessionResponse createSdcpClientSession(in android.desktop.security.finger_guard.SdcpClaim claim);
   long generateChallenge(in android.desktop.security.finger_guard.SensorUserPair sensorUserPair);

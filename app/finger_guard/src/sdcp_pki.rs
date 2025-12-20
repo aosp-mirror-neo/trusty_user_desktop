@@ -43,7 +43,7 @@ type EcPointBytes = [u8; 65];
 
 // Helper to convert p256 public key point raw bytes into EcKey<Public>.
 fn parse_public_key_bytes(p256_point_bytes: &EcPointBytes) -> EcKey<Public> {
-    let p256_point = P256Point::import(p256_point_bytes).expect("static key should not fail");
+    let p256_point = P256Point::from(p256_point_bytes);
     EcKey::try_from(&p256_point).expect("static key should not fail.")
 }
 
@@ -105,8 +105,8 @@ mod test {
 
     #[test]
     fn verify_dev_signed_model_key() {
-        let model_key = crypto::P256Point::import(&DEV_MODEL_KEY_BYTES).unwrap();
-        let sig = crypto::P256Sig::import(&DEV_SIG_BYTES).unwrap();
+        let model_key = crypto::P256Point::from(&DEV_MODEL_KEY_BYTES);
+        let sig = crypto::P256Sig::from(&DEV_SIG_BYTES);
         let dev_key_works = verify_public_key_signature(&model_key, &sig).unwrap();
         let dev_key_should_work = cfg!(feature = "dev_sdcp_pki");
         assert_eq!(dev_key_works, dev_key_should_work);
@@ -115,7 +115,7 @@ mod test {
     #[test]
     fn load_prod_roots() {
         for public_key_bytes in KSK_PUBLIC_KEYS.iter() {
-            let p256_point = crypto::P256Point::import(public_key_bytes).unwrap();
+            let p256_point = crypto::P256Point::from(public_key_bytes);
             assert!(EcKey::try_from(&p256_point).is_ok());
         }
     }

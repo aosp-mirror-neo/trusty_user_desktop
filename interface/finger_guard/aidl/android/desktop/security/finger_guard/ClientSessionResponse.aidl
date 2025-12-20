@@ -21,7 +21,7 @@ import android.desktop.security.finger_guard.IClientSession;
 @VintfStability
 parcelable ClientSessionResponse {
     byte[32] nonce;
-    byte[] wrappedTpmSeed;
+    byte[32] wrappedTpmSeed;
     byte[12] iv;
     byte[16] tag;
     IClientSession clientSession;
