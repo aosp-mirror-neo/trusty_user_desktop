@@ -932,7 +932,7 @@ pub mod finish {
         fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
             let static_size = 2 * size_of::<U32LE>();
             let input_len = match params.input.as_ref() {
-                Some(input) => input.len(),
+                Some(input) => input.len().next_multiple_of(4),
                 None => 0,
             };
             if params.signature.is_some() {
@@ -961,7 +961,8 @@ pub mod finish {
                 self.input_data.len().try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?,
             );
             if let Some(input) = params.input.as_ref() {
-                self.input_data.copy_from_slice(input);
+                self.input_data[..input.len()].copy_from_slice(input);
+                self.input_data[input.len()..].fill(0);
             }
             Ok(())
         }
