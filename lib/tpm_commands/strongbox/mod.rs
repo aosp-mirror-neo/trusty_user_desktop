@@ -856,6 +856,7 @@ pub mod update {
 
         fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
             let static_size = 2 * size_of::<U32LE>();
+            let input_len = params.input.len().next_multiple_of(4);
             if params.auth_token.is_some() {
                 km_err!(Unimplemented, "UpdateRequest::auth_token");
             }
@@ -863,7 +864,7 @@ pub mod update {
                 km_err!(Unimplemented, "UpdateRequest::timestamp_token");
             }
             static_size
-                .checked_add(params.input.len())
+                .checked_add(input_len)
                 .ok_or(km_err!(EncodingError, ""))?
                 .try_into()
                 .map_err(|_| km_err!(EncodingError, ""))
@@ -874,7 +875,8 @@ pub mod update {
                 U32LE::new(params.op_handle.try_into().map_err(|_| km_err!(EncodingError, ""))?);
             self.update_size_bytes =
                 U32LE::new(params.input.len().try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?);
-            self.input_data.copy_from_slice(&params.input);
+            self.input_data[..params.input.len()].copy_from_slice(&params.input);
+            self.input_data[params.input.len()..].fill(0);
             Ok(())
         }
     }
