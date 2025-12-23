@@ -957,12 +957,13 @@ pub mod finish {
         fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err> {
             self.operation_id =
                 U32LE::new(params.op_handle.try_into().map_err(|_| km_err!(EncodingError, ""))?);
-            self.update_size_bytes = U32LE::new(
-                self.input_data.len().try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?,
-            );
             if let Some(input) = params.input.as_ref() {
                 self.input_data[..input.len()].copy_from_slice(input);
                 self.input_data[input.len()..].fill(0);
+                self.update_size_bytes =
+                    U32LE::new(input.len().try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?);
+            } else {
+                self.update_size_bytes = U32LE::ZERO;
             }
             Ok(())
         }
