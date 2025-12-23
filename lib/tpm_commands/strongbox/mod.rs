@@ -84,17 +84,17 @@ fn copy_u32le_prefixed_slice<'a>(
     word_padding: bool,
 ) -> Result<&'a mut [u8], Error> {
     dest = copy_u32le(dest, data.len())?;
-    let (dest, suffix) = dest
-        .split_at_mut_checked(if word_padding {
-            byte_len_with_word_padding(data.len())
-        } else {
-            data.len()
-        })
-        .ok_or(km_err!(EncodingError, ""))?;
-    if dest.len() != data.len() {
+    let dest_len = if word_padding { byte_len_with_word_padding(data.len()) } else { data.len() };
+    let (dest, suffix) = dest.split_at_mut_checked(dest_len).ok_or(km_err!(EncodingError, ""))?;
+    if dest.len() != dest_len || dest_len < data.len() {
         return Err(km_err!(
             EncodingError,
-            format!("copy_u32le_prefixed_slice, dest {}, data {}", dest.len(), data.len())
+            format!(
+                "copy_u32le_prefixed_slice, dest {}, needed {}, data {}",
+                dest.len(),
+                dest_len,
+                data.len()
+            )
         ));
     }
     dest[..data.len()].copy_from_slice(data);
