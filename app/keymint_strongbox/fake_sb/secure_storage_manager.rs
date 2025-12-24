@@ -22,6 +22,9 @@ use log::info;
 use protobuf::{self, Message};
 use storage::{OpenMode, Port, SecureFile, Session};
 
+use kmr_common::vec_try_with_capacity;
+use kmr_wire::keymint;
+
 const PORT: Port = Port::TamperDetectPersist;
 
 /// Filename for holding UDS Certificate.
@@ -87,6 +90,24 @@ pub fn maybe_delete_uds_cert_chain() -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+/// Retrieve the UdsCerts from the file in secure storage.
+pub(crate) fn read_uds_cert() -> Result<Vec<keymint::Certificate>, Error> {
+    let session = new_storage_session()?;
+    let mut uds_certs_pb: UdsCerts = session.read_protobuf(KM_RKP_UDS_CERT_FILENAME)?;
+
+    let certs = uds_certs_pb.take_certs();
+    let num_certs = certs.len();
+    if num_certs == 0 {
+        return Err(km_err!(UnknownError, "UdsCerts file found but it had nothing"));
+    }
+    let mut certificates = vec_try_with_capacity!(num_certs)?;
+    for mut cert in certs {
+        let km_cert_pb = keymint::Certificate { encoded_certificate: cert.take_content() };
+        certificates.push(km_cert_pb);
+    }
+    Ok(certificates)
 }
 
 /// An abstract interface for a transactional secure storage session.

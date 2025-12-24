@@ -17,6 +17,8 @@
 //! This library implements the functionality used by the KeyMint Strongbox
 //! Trusty application.
 
+#![allow(dead_code)]
+
 use alloc::{rc::Rc, vec::Vec};
 use core::{cell::RefCell, fmt};
 use keymint::{CertSignInfo, TrustyKeys, TrustyMonotonicClock, TrustyRng, TrustyRpc};
@@ -35,7 +37,7 @@ use trusty_std::alloc::TryAllocFrom;
 
 #[allow(warnings)]
 mod keymaster_attributes;
-mod secure_storage_manager;
+pub mod secure_storage_manager;
 
 /// Port that handles new style keymint messages from non-secure world
 const KM_NS_TIPC_SRV_PORT: &str = "com.android.trusty.keymint.strongbox";

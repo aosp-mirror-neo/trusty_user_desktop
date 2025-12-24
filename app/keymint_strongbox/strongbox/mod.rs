@@ -25,7 +25,7 @@ use kmr_wire::{
     cbor::cbor,
     frp::ErrorCode as FrpErrorCode,
     keymint::{BootInfo, ErrorCode, KeyParam, SecurityLevel, VerifiedBootState},
-    rpc::{EekCurve, IRPC_V2, IRPC_V3, MINIMUM_SUPPORTED_KEYS_IN_CSR},
+    rpc::*,
     *,
 };
 use log::{error, info, trace, warn};
@@ -129,6 +129,10 @@ impl StrongBox {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceBegin(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::DeviceBegin, err),
             },
+            // For SBS there's nothing to do here.
+            PerformOpReq::DeviceDeleteKey(_) => {
+                op_ok_rsp(PerformOpRsp::DeviceDeleteKey(DeleteKeyResponse {}))
+            }
             PerformOpReq::DeviceGenerateKey(req) => match device::generate_key(req, &self.tpm) {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::DeviceGenerateKey(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::DeviceGenerateKey, err),
@@ -165,11 +169,11 @@ impl StrongBox {
                     Err(err) => op_error_rsp(KeyMintOperation::RpcGenerateEcdsaP256KeyPair, err),
                 }
             }
-            PerformOpReq::RpcGetHardwareInfo(_) => match self.rpc_hardware_info() {
+            PerformOpReq::RpcGetHardwareInfo(_req) => match self.get_rpc_hardware_info() {
                 Ok(ret) => {
                     op_ok_rsp(PerformOpRsp::RpcGetHardwareInfo(GetRpcHardwareInfoResponse { ret }))
                 }
-                Err(err) => op_error_rsp(KeyMintOperation::RpcGetHardwareInfo, err),
+                Err(e) => op_error_rsp(GetRpcHardwareInfoRequest::CODE, e),
             },
             PerformOpReq::SetAdditionalAttestationInfo(req) => {
                 for param in req.info {
@@ -240,7 +244,38 @@ impl StrongBox {
                     op_ok_rsp(PerformOpRsp::SetHalInfo(SetHalInfoResponse {}))
                 }
             }
+            PerformOpReq::DeviceEarlyBootEnded(_req) => {
+                op_ok_rsp(PerformOpRsp::DeviceEarlyBootEnded(EarlyBootEndedResponse {}))
+            }
+            PerformOpReq::SetHalVersion(_req) => {
+                op_ok_rsp(PerformOpRsp::SetHalVersion(SetHalVersionResponse {}))
+            }
+            PerformOpReq::GetRootOfTrustChallenge(_req) => {
+                op_ok_rsp(PerformOpRsp::GetRootOfTrustChallenge(GetRootOfTrustChallengeResponse {
+                    ret: [0u8; 16],
+                }))
+            }
+
             _ => error_rsp(ErrorCode::Unimplemented as i32),
+        }
+    }
+
+    fn get_rpc_hardware_info(&self) -> Result<kmr_wire::rpc::HardwareInfo, Error> {
+        match &self.rpc_info {
+            RpcInfo::V2(rpc_info_v2) => Ok(kmr_wire::rpc::HardwareInfo {
+                version_number: IRPC_V2,
+                rpc_author_name: rpc_info_v2.author_name.to_string(),
+                supported_eek_curve: rpc_info_v2.supported_eek_curve,
+                unique_id: Some(rpc_info_v2.unique_id.to_string()),
+                supported_num_keys_in_csr: MINIMUM_SUPPORTED_KEYS_IN_CSR,
+            }),
+            RpcInfo::V3(rpc_info_v3) => Ok(kmr_wire::rpc::HardwareInfo {
+                version_number: IRPC_V3,
+                rpc_author_name: rpc_info_v3.author_name.to_string(),
+                supported_eek_curve: EekCurve::None,
+                unique_id: Some(rpc_info_v3.unique_id.to_string()),
+                supported_num_keys_in_csr: rpc_info_v3.supported_num_of_keys_in_csr,
+            }),
         }
     }
 
@@ -298,25 +333,6 @@ impl StrongBox {
 
     pub fn hw_info(&self) -> &HardwareInfo {
         &self.hw_info
-    }
-
-    fn rpc_hardware_info(&self) -> Result<rpc::HardwareInfo, Error> {
-        match &self.rpc_info {
-            RpcInfo::V2(rpc_info_v2) => Ok(rpc::HardwareInfo {
-                version_number: IRPC_V2,
-                rpc_author_name: rpc_info_v2.author_name.to_string(),
-                supported_eek_curve: rpc_info_v2.supported_eek_curve,
-                unique_id: Some(rpc_info_v2.unique_id.to_string()),
-                supported_num_keys_in_csr: MINIMUM_SUPPORTED_KEYS_IN_CSR,
-            }),
-            RpcInfo::V3(rpc_info_v3) => Ok(kmr_wire::rpc::HardwareInfo {
-                version_number: IRPC_V3,
-                rpc_author_name: rpc_info_v3.author_name.to_string(),
-                supported_eek_curve: EekCurve::P256,
-                unique_id: Some(rpc_info_v3.unique_id.to_string()),
-                supported_num_keys_in_csr: rpc_info_v3.supported_num_of_keys_in_csr,
-            }),
-        }
     }
 
     pub fn rpc_info(&self) -> &RpcInfo {

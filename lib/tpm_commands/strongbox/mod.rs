@@ -24,6 +24,8 @@ use kmr_wire::{
     keymint::{Certificate, KeyCreationResult, KeyMintHardwareInfo, SecurityLevel},
     *,
 };
+use openssl::bn::BigNum;
+use openssl::ecdsa::EcdsaSig;
 use zerocopy::{
     FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, BE, I32, I64, LE, U16, U32,
 };
@@ -89,7 +91,13 @@ fn copy_u32le_prefixed_slice<'a>(
             data.len()
         })
         .ok_or(km_err!(EncodingError, ""))?;
-    dest[0..data.len()].copy_from_slice(data);
+    if dest.len() != data.len() {
+        return Err(km_err!(
+            EncodingError,
+            format!("copy_u32le_prefixed_slice, dest {}, data {}", dest.len(), data.len())
+        ));
+    }
+    dest[..data.len()].copy_from_slice(data);
     Ok(suffix)
 }
 
@@ -924,7 +932,7 @@ pub mod finish {
         fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
             let static_size = 2 * size_of::<U32LE>();
             let input_len = match params.input.as_ref() {
-                Some(input) => input.len(),
+                Some(input) => input.len().next_multiple_of(4),
                 None => 0,
             };
             if params.signature.is_some() {
@@ -953,7 +961,8 @@ pub mod finish {
                 self.input_data.len().try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?,
             );
             if let Some(input) = params.input.as_ref() {
-                self.input_data.copy_from_slice(input);
+                self.input_data[..input.len()].copy_from_slice(input);
+                self.input_data[input.len()..].fill(0);
             }
             Ok(())
         }
@@ -972,7 +981,18 @@ pub mod finish {
 
         /// Convert a response into a kmr_wire::FinishResponse.
         fn try_from(response: &mut Response) -> Result<kmr_wire::FinishResponse, Error> {
-            Ok(kmr_wire::FinishResponse { ret: response.ret.to_vec() })
+            if response.ret.len() != 64 {
+                return Err(km_err!(EncodingError, "unexpected signature size"));
+            }
+            let r = BigNum::from_slice(&response.ret[0..32])
+                .map_err(|_| km_err!(EncodingError, "bignum"))?;
+            let s = BigNum::from_slice(&response.ret[32..])
+                .map_err(|_| km_err!(EncodingError, "bignum"))?;
+            let ret = EcdsaSig::from_private_components(r, s)
+                .map_err(|_| km_err!(EncodingError, "from components"))?
+                .to_der()
+                .map_err(|_| km_err!(EncodingError, "to der"))?;
+            Ok(kmr_wire::FinishResponse { ret })
         }
     }
 }
