@@ -84,17 +84,17 @@ fn copy_u32le_prefixed_slice<'a>(
     word_padding: bool,
 ) -> Result<&'a mut [u8], Error> {
     dest = copy_u32le(dest, data.len())?;
-    let (dest, suffix) = dest
-        .split_at_mut_checked(if word_padding {
-            byte_len_with_word_padding(data.len())
-        } else {
-            data.len()
-        })
-        .ok_or(km_err!(EncodingError, ""))?;
-    if dest.len() != data.len() {
+    let dest_len = if word_padding { byte_len_with_word_padding(data.len()) } else { data.len() };
+    let (dest, suffix) = dest.split_at_mut_checked(dest_len).ok_or(km_err!(EncodingError, ""))?;
+    if dest.len() != dest_len || dest_len < data.len() {
         return Err(km_err!(
             EncodingError,
-            format!("copy_u32le_prefixed_slice, dest {}, data {}", dest.len(), data.len())
+            format!(
+                "copy_u32le_prefixed_slice, dest {}, needed {}, data {}",
+                dest.len(),
+                dest_len,
+                data.len()
+            )
         ));
     }
     dest[..data.len()].copy_from_slice(data);
@@ -856,6 +856,7 @@ pub mod update {
 
         fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
             let static_size = 2 * size_of::<U32LE>();
+            let input_len = params.input.len().next_multiple_of(4);
             if params.auth_token.is_some() {
                 km_err!(Unimplemented, "UpdateRequest::auth_token");
             }
@@ -863,7 +864,7 @@ pub mod update {
                 km_err!(Unimplemented, "UpdateRequest::timestamp_token");
             }
             static_size
-                .checked_add(params.input.len())
+                .checked_add(input_len)
                 .ok_or(km_err!(EncodingError, ""))?
                 .try_into()
                 .map_err(|_| km_err!(EncodingError, ""))
@@ -874,7 +875,8 @@ pub mod update {
                 U32LE::new(params.op_handle.try_into().map_err(|_| km_err!(EncodingError, ""))?);
             self.update_size_bytes =
                 U32LE::new(params.input.len().try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?);
-            self.input_data.copy_from_slice(&params.input);
+            self.input_data[..params.input.len()].copy_from_slice(&params.input);
+            self.input_data[params.input.len()..].fill(0);
             Ok(())
         }
     }
@@ -957,12 +959,13 @@ pub mod finish {
         fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err> {
             self.operation_id =
                 U32LE::new(params.op_handle.try_into().map_err(|_| km_err!(EncodingError, ""))?);
-            self.update_size_bytes = U32LE::new(
-                self.input_data.len().try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?,
-            );
             if let Some(input) = params.input.as_ref() {
                 self.input_data[..input.len()].copy_from_slice(input);
                 self.input_data[input.len()..].fill(0);
+                self.update_size_bytes =
+                    U32LE::new(input.len().try_into().map_err(|_| km_err!(InvalidKeyBlob, ""))?);
+            } else {
+                self.update_size_bytes = U32LE::ZERO;
             }
             Ok(())
         }
