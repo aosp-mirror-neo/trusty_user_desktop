@@ -405,31 +405,64 @@ pub mod generate_key {
         type Err = Error;
 
         fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
-            let static_size = size_of::<U32LE>();
-            let attestation_key_size =
-                params.attestation_key.as_ref().map_or(0, |a| a.key_blob.len());
+            const WORD_SIZE: usize = size_of::<U32LE>();
+            let static_size = WORD_SIZE;
+            let (attestation_key_size, issuer_subject_size) = params
+                .attestation_key
+                .as_ref()
+                .map_or((0, 0), |a| (a.key_blob.len(), a.issuer_subject_name.len()));
+            let rounded_issuer_subject_size = if issuer_subject_size % WORD_SIZE != 0 {
+                issuer_subject_size + WORD_SIZE - issuer_subject_size % WORD_SIZE
+            } else {
+                issuer_subject_size
+            };
+
+            // We expect the key blob size to be aligned to the word boundary
+            if attestation_key_size % WORD_SIZE != 0 {
+                return Err(km_err!(EncodingError, ""));
+            }
+
             static_size
                 .checked_add(key_param::expected_size(&params.key_params))
                 .ok_or(km_err!(EncodingError, ""))?
                 .checked_add(attestation_key_size)
+                .ok_or(km_err!(EncodingError, ""))?
+                .checked_add(WORD_SIZE) // size word for issuer_subject
+                .ok_or(km_err!(EncodingError, ""))?
+                .checked_add(rounded_issuer_subject_size)
                 .ok_or(km_err!(EncodingError, ""))?
                 .try_into()
                 .map_err(|_| km_err!(EncodingError, ""))
         }
 
         fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err> {
+            const WORD_SIZE: usize = size_of::<U32LE>();
             self.tags_len_words = U32LE::new(
-                (key_param::expected_size(&params.key_params) / 4)
+                (key_param::expected_size(&params.key_params) / WORD_SIZE)
                     .try_into()
                     .map_err(|_| km_err!(EncodingError, ""))?,
             );
 
             let remainder = key_param::serialize_key_params(&mut self.suffix, &params.key_params);
             if let Some(attestation_key) = params.attestation_key {
-                if remainder.len() != attestation_key.key_blob.len() {
+                let attest_key_len = attestation_key.key_blob.len();
+                let issuer_subject_len = attestation_key.issuer_subject_name.len();
+                let rounded_issuer_subject_len = if issuer_subject_len % WORD_SIZE != 0 {
+                    issuer_subject_len + WORD_SIZE - issuer_subject_len % WORD_SIZE
+                } else {
+                    issuer_subject_len
+                };
+                if remainder.len() != attest_key_len + rounded_issuer_subject_len + WORD_SIZE {
                     return Err(km_err!(EncodingError, ""));
                 }
-                remainder.copy_from_slice(&attestation_key.key_blob);
+                remainder[..attest_key_len].copy_from_slice(&attestation_key.key_blob);
+                let issuer_subject_len_bytes = (issuer_subject_len as u32).to_le_bytes();
+                remainder[attest_key_len..attest_key_len + WORD_SIZE]
+                    .copy_from_slice(&issuer_subject_len_bytes);
+                remainder
+                    [attest_key_len + WORD_SIZE..attest_key_len + WORD_SIZE + issuer_subject_len]
+                    .copy_from_slice(&attestation_key.issuer_subject_name);
+                remainder[attest_key_len + WORD_SIZE + issuer_subject_len..].fill(0);
             } else if !remainder.is_empty() {
                 return Err(km_err!(EncodingError, ""));
             }
