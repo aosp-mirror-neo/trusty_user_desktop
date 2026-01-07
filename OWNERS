@@ -1,5 +1,5 @@
 # Bug component: 1593252
 
 include /SECURITY_OWNERS
-# TODO: b/361840829 - Include general trusty OWNERS
+include trusty:main:/OWNERS
 

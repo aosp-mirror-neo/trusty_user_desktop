@@ -584,7 +584,11 @@ mod tests {
     #[test]
     fn get_dice_chain() {
         let tpm = GscServiceClient::default().0;
-        assert_matches!(rkp::get_dice_chain(&tpm), Ok(_));
+
+        let ret = rkp::get_dice_chain(&tpm);
+        assert_matches!(ret.as_ref(), Ok(_));
+
+        log_bytes(&ret.unwrap());
     }
 
     #[test]
