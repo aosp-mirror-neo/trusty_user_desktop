@@ -59,13 +59,11 @@ pub type U32LE = U32<LE>;
 /// Type alias to work around macro issues.
 pub type I64LE = I64<LE>;
 
+// The word size used by the GSC.
+const WORD_SIZE: usize = size_of::<U32LE>();
+
 /// The ordinal value that is used for all strongbox commands
 const VENDOR_COMMAND_STRONGBOX: U32<BE> = U32::new(0x20000001);
-
-/// Helper function that rounds up to the nearest 4-byte word.
-const fn byte_len_with_word_padding(before: usize) -> usize {
-    (before + 3) & (!0x3usize)
-}
 
 /// Helper function to serialize a u32le length into a slice.
 fn copy_u32le(dest: &mut [u8], len: usize) -> Result<&mut [u8], Error> {
@@ -84,7 +82,7 @@ fn copy_u32le_prefixed_slice<'a>(
     word_padding: bool,
 ) -> Result<&'a mut [u8], Error> {
     dest = copy_u32le(dest, data.len())?;
-    let dest_len = if word_padding { byte_len_with_word_padding(data.len()) } else { data.len() };
+    let dest_len = if word_padding { data.len().next_multiple_of(WORD_SIZE) } else { data.len() };
     let (dest, suffix) = dest.split_at_mut_checked(dest_len).ok_or(km_err!(EncodingError, ""))?;
     if dest.len() != dest_len || dest_len < data.len() {
         return Err(km_err!(
@@ -98,6 +96,7 @@ fn copy_u32le_prefixed_slice<'a>(
         ));
     }
     dest[..data.len()].copy_from_slice(data);
+    dest[data.len()..].fill(0);
     Ok(suffix)
 }
 
@@ -128,7 +127,7 @@ pub struct MacedPublicKey {
 impl MacedPublicKey {
     /// The byte size of a MacedPublicKey with the specified key length in bytes.
     pub const fn expected_size(key_len_bytes: usize) -> usize {
-        size_of::<U32LE>() + byte_len_with_word_padding(key_len_bytes)
+        WORD_SIZE + key_len_bytes.next_multiple_of(WORD_SIZE)
     }
 }
 
@@ -187,7 +186,7 @@ pub mod generate_certificate_request_v2 {
         type Err = Error;
 
         fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
-            let static_size = 3 * size_of::<U32LE>();
+            let static_size = 3 * WORD_SIZE;
             let mut maced_keys_size = 0usize;
             for key_to_sign in params.request.keys_to_sign.iter() {
                 maced_keys_size = maced_keys_size
@@ -197,9 +196,9 @@ pub mod generate_certificate_request_v2 {
             static_size
                 .checked_add(maced_keys_size)
                 .ok_or(km_err!(EncodingError, ""))?
-                .checked_add(byte_len_with_word_padding(params.request.challenge.len()))
+                .checked_add(params.request.challenge.len().next_multiple_of(WORD_SIZE))
                 .ok_or(km_err!(EncodingError, ""))?
-                .checked_add(byte_len_with_word_padding(params.device_info.len()))
+                .checked_add(params.device_info.len().next_multiple_of(WORD_SIZE))
                 .ok_or(km_err!(EncodingError, ""))?
                 .try_into()
                 .map_err(|_| km_err!(EncodingError, ""))
@@ -356,10 +355,10 @@ pub mod generate_ecdsa_p256_keypair {
                 .get() as usize;
             let (key_blob, suffix) = response
                 .suffix
-                .split_at_mut_checked((key_blob_words + 1) * 4)
+                .split_at_mut_checked((key_blob_words + 1) * WORD_SIZE)
                 .ok_or(km_err!(EncodingError, "split response"))?;
             let (suffix, maced_key_bytes, maced_key) = get_u32le_prefixed_slice(suffix)?;
-            if suffix.len() + maced_key.len() > byte_len_with_word_padding(maced_key.len()) {
+            if suffix.len() + maced_key.len() > maced_key.len().next_multiple_of(WORD_SIZE) {
                 return Err(km_err!(EncodingError, "trailing bytes"));
             }
 
@@ -405,21 +404,15 @@ pub mod generate_key {
         type Err = Error;
 
         fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
-            const WORD_SIZE: usize = size_of::<U32LE>();
-            let static_size = WORD_SIZE;
+            let static_size = WORD_SIZE * 2; // Attestation key size and issuer size.
             let (attestation_key_size, issuer_subject_size) = params
                 .attestation_key
                 .as_ref()
                 .map_or((0, 0), |a| (a.key_blob.len(), a.issuer_subject_name.len()));
-            let rounded_issuer_subject_size = if issuer_subject_size % WORD_SIZE != 0 {
-                issuer_subject_size + WORD_SIZE - issuer_subject_size % WORD_SIZE
-            } else {
-                issuer_subject_size
-            };
 
             // We expect the key blob size to be aligned to the word boundary
             if attestation_key_size % WORD_SIZE != 0 {
-                return Err(km_err!(EncodingError, ""));
+                return Err(km_err!(EncodingError, "attestation_key not padded correctly"));
             }
 
             static_size
@@ -427,16 +420,13 @@ pub mod generate_key {
                 .ok_or(km_err!(EncodingError, ""))?
                 .checked_add(attestation_key_size)
                 .ok_or(km_err!(EncodingError, ""))?
-                .checked_add(WORD_SIZE) // size word for issuer_subject
-                .ok_or(km_err!(EncodingError, ""))?
-                .checked_add(rounded_issuer_subject_size)
+                .checked_add(issuer_subject_size.next_multiple_of(WORD_SIZE))
                 .ok_or(km_err!(EncodingError, ""))?
                 .try_into()
                 .map_err(|_| km_err!(EncodingError, ""))
         }
 
         fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err> {
-            const WORD_SIZE: usize = size_of::<U32LE>();
             self.tags_len_words = U32LE::new(
                 (key_param::expected_size(&params.key_params) / WORD_SIZE)
                     .try_into()
@@ -445,24 +435,15 @@ pub mod generate_key {
 
             let remainder = key_param::serialize_key_params(&mut self.suffix, &params.key_params);
             if let Some(attestation_key) = params.attestation_key {
-                let attest_key_len = attestation_key.key_blob.len();
-                let issuer_subject_len = attestation_key.issuer_subject_name.len();
-                let rounded_issuer_subject_len = if issuer_subject_len % WORD_SIZE != 0 {
-                    issuer_subject_len + WORD_SIZE - issuer_subject_len % WORD_SIZE
-                } else {
-                    issuer_subject_len
-                };
-                if remainder.len() != attest_key_len + rounded_issuer_subject_len + WORD_SIZE {
+                let (attest_key, suffix) = remainder
+                    .split_at_mut_checked(attestation_key.key_blob.len())
+                    .ok_or(km_err!(EncodingError, "split response"))?;
+                attest_key.copy_from_slice(&attestation_key.key_blob);
+                let suffix =
+                    copy_u32le_prefixed_slice(suffix, &attestation_key.issuer_subject_name, true)?;
+                if !suffix.is_empty() {
                     return Err(km_err!(EncodingError, ""));
                 }
-                remainder[..attest_key_len].copy_from_slice(&attestation_key.key_blob);
-                let issuer_subject_len_bytes = (issuer_subject_len as u32).to_le_bytes();
-                remainder[attest_key_len..attest_key_len + WORD_SIZE]
-                    .copy_from_slice(&issuer_subject_len_bytes);
-                remainder
-                    [attest_key_len + WORD_SIZE..attest_key_len + WORD_SIZE + issuer_subject_len]
-                    .copy_from_slice(&attestation_key.issuer_subject_name);
-                remainder[attest_key_len + WORD_SIZE + issuer_subject_len..].fill(0);
             } else if !remainder.is_empty() {
                 return Err(km_err!(EncodingError, ""));
             }
@@ -484,7 +465,7 @@ pub mod generate_key {
     impl TryFrom<&mut Response> for kmr_wire::GenerateKeyResponse {
         type Error = Error;
 
-        /// Convert a response into a kmr_wire::GenerateEcdsaP256KeyPairResponse.
+        /// Convert a response into a kmr_wire::GenerateKeyResponse.
         fn try_from(response: &mut Response) -> Result<kmr_wire::GenerateKeyResponse, Error> {
             let view = BufferedResponse::try_from(response)?;
             Ok(kmr_wire::GenerateKeyResponse {
@@ -519,10 +500,11 @@ pub mod generate_key {
                 .get() as usize;
             let (key_blob, suffix) = response
                 .suffix
-                .split_at_mut_checked((key_blob_words + 1) * 4)
+                .split_at_mut_checked((key_blob_words + 1) * WORD_SIZE)
                 .ok_or(km_err!(EncodingError, "split response"))?;
-            let (cert_chain_bytes, suffix) =
-                suffix.split_at_mut_checked(4).ok_or(km_err!(EncodingError, "split response"))?;
+            let (cert_chain_bytes, suffix) = suffix
+                .split_at_mut_checked(WORD_SIZE)
+                .ok_or(km_err!(EncodingError, "split response"))?;
             let cert_chain_bytes = U32LE::ref_from_prefix(cert_chain_bytes)
                 .map_err(|_| km_err!(EncodingError, "cert length"))?
                 .0
@@ -718,7 +700,7 @@ pub mod begin {
                 BufferedRequest::new(self, params.key_blob.len(), additional_parameters_bytes)?;
             view.key_blob.copy_from_slice(&params.key_blob);
             *view.additional_parameters_words = U32LE::new(
-                (additional_parameters_bytes / 4)
+                (additional_parameters_bytes / WORD_SIZE)
                     .try_into()
                     .map_err(|_| km_err!(EncodingError, ""))?,
             );
@@ -889,7 +871,7 @@ pub mod update {
 
         fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
             let static_size = 2 * size_of::<U32LE>();
-            let input_len = params.input.len().next_multiple_of(4);
+            let input_len = params.input.len().next_multiple_of(WORD_SIZE);
             if params.auth_token.is_some() {
                 km_err!(Unimplemented, "UpdateRequest::auth_token");
             }
@@ -967,7 +949,7 @@ pub mod finish {
         fn expected_size(params: &Self::BuildParams) -> Result<u32, Self::Err> {
             let static_size = 2 * size_of::<U32LE>();
             let input_len = match params.input.as_ref() {
-                Some(input) => input.len().next_multiple_of(4),
+                Some(input) => input.len().next_multiple_of(WORD_SIZE),
                 None => 0,
             };
             if params.signature.is_some() {
