@@ -22,41 +22,71 @@
 /// basically just a status code that lacks the ability to attach any kind of
 /// informative message or underlying source error.
 #[derive(thiserror::Error, Debug)]
-#[allow(missing_docs)]
 pub enum ServiceError {
-    // Wrapping errors or pseudo-errors that are returned by other libraries.
+    /// Wrap an error from openssl.
     #[error("{0}: openssl error: {1:?}")]
     OpenSsl(&'static str, #[source] Box<dyn std::error::Error>),
+    /// Wrap an error from the trusty storage system.
     #[error("{0}: trusty storage error: {1:?}")]
     TrustyStorage(&'static str, Box<dyn std::fmt::Debug>),
+    /// Wrap a file-specific error from the trusty storage system.
     #[error("{0}: trusty storage file error at {1}: {2:?}")]
     TrustyFile(&'static str, String, Box<dyn std::fmt::Debug>),
+    /// Wrap a zerocopy conversion error.
     #[error("{0}: zerocopy conversion error")]
     ZcConvert(&'static str),
+    /// Wrap a TIPC communication error.
     #[error("{0}: {1:?}")]
     TipcError(&'static str, Box<dyn std::fmt::Debug>),
+    /// Wrap a trusty system error, including the underlying error code.
     #[error("Trusty system api {0} returns an error code: {1}")]
     TrustySysRcError(&'static str, i64),
+
+    /// Keymint failed with an error code.
+    #[error("Keymint {cmd} returned an error code: {code}")]
+    KeymintError {
+        /// Failed Keymint command.
+        cmd: &'static str,
+        /// Error code returned by Keymint.
+        code: u32,
+    },
+    /// Keymint returned a response that could not be parsed.
+    #[error("Keymint {cmd} returned an unparseable response")]
+    KeymintBadResponse {
+        /// Failed Keymint command.
+        cmd: &'static str,
+    },
+
+    /// An authentication error that occurred due to auth lockout.
     #[error("Auth lockout error: {0:?}")]
     AuthLockoutError(Box<dyn std::error::Error>),
-
-    // Errors from interacting with keymint.
-    #[error("Keymint {cmd} returned an error code: {code}")]
-    KeymintError { cmd: &'static str, code: u32 },
-    #[error("Keymint {cmd} returned an unparseable response")]
-    KeymintBadResponse { cmd: &'static str },
-
-    // Errors directly reported by the service implementation itself.
+    /// An error occurred where a given buffer/blob was the wrong size.
     #[error("{name} buffer size mismatch, expected {expected}, got {actual}")]
-    BufferSizeMismatch { name: &'static str, expected: usize, actual: usize },
+    BufferSizeMismatch {
+        /// Name of the buffer.
+        name: &'static str,
+        /// Expected size of the buffer.
+        expected: usize,
+        /// Actual size of the buffer.
+        actual: usize,
+    },
+    /// An error occurred while acquiring a necessary lock. This should not actually happen in
+    /// practice because finger_guard is single threaded.
     #[error("failed to acquire {0} lock")]
     LockAcquire(&'static str),
+    /// Returned when an invalid argument is provided to the service. This should not normally
+    /// be used for internal functions.
     #[error("invalid argument {0}")]
     InvalidArg(&'static str),
+    /// Returned when attempting to initialize internal state which has already been initialized.
     #[error("internal state {0} already exists")]
     StateAlreadyExists(&'static str),
+    /// Returned when internal state is expected to exist but does not.
     #[error("internal state {0} was unavailable")]
     StateUnavailable(&'static str),
+    /// Returned when an HMAC check on a request fails. Similar to InvalidArg but not quite the
+    /// same: passing in a blob which is not a valid HMAC would be InvalidArg, but passing in
+    /// a blob with a valid-but-incorrect HMAC would be BadMac.
     #[error("incorrect mac for {0}")]
     BadMac(&'static str),
 }

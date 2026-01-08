@@ -126,7 +126,6 @@ macro_rules! blob_newtype {
             }
         }
         impl $name {
-            #[allow(dead_code)] // This is not necessarily used on every type.
             const SIZE: usize = $size;
         }
     };
