@@ -199,7 +199,7 @@ pub mod generate_certificate_request_v2 {
                 .ok_or(km_err!(EncodingError, ""))?
                 .checked_add(byte_len_with_word_padding(params.request.challenge.len()))
                 .ok_or(km_err!(EncodingError, ""))?
-                .checked_add(params.device_info.len())
+                .checked_add(byte_len_with_word_padding(params.device_info.len()))
                 .ok_or(km_err!(EncodingError, ""))?
                 .try_into()
                 .map_err(|_| km_err!(EncodingError, ""))
@@ -217,7 +217,7 @@ pub mod generate_certificate_request_v2 {
             }
 
             suffix = copy_u32le_prefixed_slice(suffix, &request.challenge, true)?;
-            suffix = copy_u32le_prefixed_slice(suffix, &device_info, false)?;
+            suffix = copy_u32le_prefixed_slice(suffix, &device_info, true)?;
 
             if !suffix.is_empty() {
                 return Err(km_err!(EncodingError, ""));
