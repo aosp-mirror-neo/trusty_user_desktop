@@ -1,0 +1,15 @@
+{
+    "app_name": "vm_rkp_app",
+    "uuid": "598c7f41-167b-4df6-9cc3-4491b119d335",
+    "min_heap": 65536,
+    "min_stack": 32768,
+    "start_ports": [
+        {
+            "name": "android.trusty.vm_attestation.IVmAttestation/default",
+            "flags": {
+                "allow_ta_connect": true,
+                "allow_ns_connect": true
+            }
+        }
+    ]
+}

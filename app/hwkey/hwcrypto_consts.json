@@ -85,6 +85,11 @@
             "name": "KM_STRONGBOX_APP_UUID",
             "value": "c6b5b730-f21c-480b-ad6f-cc197680b76c",
             "type": "uuid"
+        },
+        {
+            "name": "RKP_TA_UUID",
+            "value": "598c7f41-167b-4df6-9cc3-4491b119d335",
+            "type": "uuid"
         }
     ]
 }

@@ -1,0 +1,6 @@
+{
+        "app_name": "vm_rkp_lib",
+        "uuid": "d9ee7957-6216-489c-9b47-331410a22eec",
+        "min_heap": 20480,
+        "min_stack": 20480
+}
