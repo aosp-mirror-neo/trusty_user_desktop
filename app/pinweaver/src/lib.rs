@@ -40,8 +40,18 @@ impl service::PinWeaverServiceDeps for ProdDeps {
     type Gsc = GscServiceClient;
 }
 
+fn log_formatter(record: &log::Record) -> String {
+    // line number should be present, so keeping it simple by just returning a 0.
+    let line = record.line().unwrap_or(0);
+    let file = record.file().unwrap_or("unknown file");
+    format!("{}: pinweaver: {}:{} {}\n", record.level(), file, line, record.args())
+}
+
 pub fn init_and_start_loop() -> tipc::Result<()> {
-    trusty_log::init();
+    let config = trusty_log::TrustyLoggerConfig::default()
+        .with_min_level(log::Level::Info)
+        .format(log_formatter);
+    trusty_log::init_with_config(config);
     let storage = Arc::new(StorageClient::default());
     let storage_service = StorageClientService::new(storage.clone());
     let gsc = Arc::new(GscServiceClient::default());
