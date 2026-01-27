@@ -18,7 +18,7 @@
 use crate::crypto::Key;
 use crate::error::{ServiceError, ServiceResult};
 use crate::identifiers::{AuthenticatorId, SecureUserId};
-use crate::service::{InitParams, SdcpParams, TrustyEnvironment};
+use crate::service::{InitParams, SdcpParams, TrustyEnvironment, VerifiedBootState};
 use crate::time::{Clock, Instant};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -66,6 +66,7 @@ impl Clock for SimulatedClock {
 pub struct SimulatedTrusty {
     clock: &'static SimulatedClock,
     auth_token_key: Mutex<Vec<u8>>,
+    device_boot_state: Mutex<VerifiedBootState>,
     files: Mutex<BTreeMap<String, Vec<u8>>>,
 }
 impl SimulatedTrusty {
@@ -77,6 +78,7 @@ impl SimulatedTrusty {
         Self {
             clock: SimulatedClock::new(),
             auth_token_key: Default::default(),
+            device_boot_state: Default::default(),
             files: Default::default(),
         }
     }
@@ -120,6 +122,10 @@ impl TrustyEnvironment for SimulatedTrusty {
         let key = self.auth_token_key.lock().unwrap();
         Key::read_from_bytes(key.as_slice())
             .map_err(|_| ServiceError::StateUnavailable("no auth token key"))
+    }
+    fn get_device_boot_state(&self) -> ServiceResult<VerifiedBootState> {
+        let device_boot_state = self.device_boot_state.lock().unwrap();
+        Ok(device_boot_state.clone())
     }
     fn load_init_params(&self) -> ServiceResult<InitParams> {
         self.load_bytes::<InitParams>(InitParams::FILE_NAME)

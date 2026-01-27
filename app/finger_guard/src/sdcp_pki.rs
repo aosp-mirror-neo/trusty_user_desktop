@@ -18,6 +18,7 @@
 
 use crate::crypto::{compute_sha256, P256Point, P256Sig, P256SigVerifier};
 use crate::error::ServiceResult;
+use crate::service::VerifiedBootState;
 use once_cell::sync::OnceCell;
 use openssl::ec::EcKey;
 use openssl::pkey::Public;
@@ -51,6 +52,7 @@ fn parse_public_key_bytes(p256_point_bytes: &EcPointBytes) -> EcKey<Public> {
 pub fn verify_public_key_signature(
     model_key: &P256Point,
     key_sig: &P256Sig,
+    boot_state: &VerifiedBootState,
 ) -> ServiceResult<bool> {
     let trusted_roots = TRUSTED_ROOTS.get_or_init(|| {
         let mut trusted_roots = vec![];
@@ -70,12 +72,9 @@ pub fn verify_public_key_signature(
             return Ok(true);
         }
     }
-    // Allow the model key to be self signed in the unit tests.
-    #[cfg(test)]
-    {
-        if model_key.verify(&dgst, key_sig)? {
-            return Ok(true);
-        }
+    // Allow the model key to be self signed when the device secure boot mode is off.
+    if *boot_state == VerifiedBootState::Unverified && model_key.verify(&dgst, key_sig)? {
+        return Ok(true);
     }
     Ok(false)
 }
@@ -84,6 +83,7 @@ pub fn verify_public_key_signature(
 mod test {
     use super::{verify_public_key_signature, KSK_PUBLIC_KEYS};
     use crate::crypto::{self, compute_sha256};
+    use crate::service::VerifiedBootState;
     use openssl::ec::EcKey;
 
     // A dev firmware model key.
@@ -105,9 +105,10 @@ mod test {
 
     #[test]
     fn verify_dev_signed_model_key() {
+        let boot_state = VerifiedBootState::Verified;
         let model_key = crypto::P256Point::from(&DEV_MODEL_KEY_BYTES);
         let sig = crypto::P256Sig::from(&DEV_SIG_BYTES);
-        let dev_key_works = verify_public_key_signature(&model_key, &sig).unwrap();
+        let dev_key_works = verify_public_key_signature(&model_key, &sig, &boot_state).unwrap();
         let dev_key_should_work = cfg!(feature = "dev_sdcp_pki");
         assert_eq!(dev_key_works, dev_key_should_work);
     }
@@ -122,10 +123,12 @@ mod test {
 
     #[test]
     fn self_signed_model_key() {
+        let boot_state = Default::default();
         let model_private_key = crypto::ec_keygen().unwrap();
         let model_public_key = crypto::ec_public_key_serialization(&model_private_key).unwrap();
         let dgst = compute_sha256!(&model_public_key);
+        // By default the boot state is unverified and self signed key is allowed.
         let p256_sig = crypto::ecdsa_sign(&dgst, &model_private_key).unwrap();
-        assert!(verify_public_key_signature(&model_public_key, &p256_sig).unwrap());
+        assert!(verify_public_key_signature(&model_public_key, &p256_sig, &boot_state).unwrap());
     }
 }

@@ -70,12 +70,42 @@ impl SdcpParams {
     pub const FILE_NAME: &str = "finger_guard_sdcp_params";
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// Represents the device boot state.
+pub enum VerifiedBootState {
+    #[default]
+    /// Either verified boot is disabled, or enabled with a custom verification key.
+    Unverified,
+    /// Verified boot is enabled with the production root of trust.
+    Verified,
+}
+
+impl TryFrom<kmr_common::wire::keymint::VerifiedBootState> for VerifiedBootState {
+    type Error = ServiceError;
+    fn try_from(boot_state: kmr_common::wire::keymint::VerifiedBootState) -> ServiceResult<Self> {
+        match boot_state {
+            kmr_common::wire::keymint::VerifiedBootState::Verified => {
+                Ok(VerifiedBootState::Verified)
+            }
+            kmr_common::wire::keymint::VerifiedBootState::SelfSigned
+            | kmr_common::wire::keymint::VerifiedBootState::Unverified => {
+                Ok(VerifiedBootState::Unverified)
+            }
+            kmr_common::wire::keymint::VerifiedBootState::Failed => {
+                Err(ServiceError::StateUnavailable("verify boot failed"))
+            }
+        }
+    }
+}
+
 /// An interface for all of the interactions that the service has with the trusty environment.
 pub trait TrustyEnvironment: Send + Sync + 'static {
     /// Get a reference to the trusty clock.
     fn clock(&self) -> &'static dyn Clock;
     /// Look up the auth token key from keymint.
     fn get_auth_token_key(&self) -> ServiceResult<crypto::Key>;
+    /// Look up the boot info from keymint.
+    fn get_device_boot_state(&self) -> ServiceResult<VerifiedBootState>;
     /// Load the init parameters.
     fn load_init_params(&self) -> ServiceResult<InitParams>;
     /// Save the init parameters.
@@ -129,6 +159,7 @@ struct ServiceState<T> {
     sdcp_params: OnceCell<SdcpParams>,
     sensor_session: Mutex<SensorSession>,
     auth_token_key: OnceCell<crypto::Key>,
+    device_boot_state: OnceCell<VerifiedBootState>,
     enrollment_challenges: Mutex<BTreeMap<AuthTokenChallenge, Instant>>,
     banned_reset_challenges: Mutex<BTreeMap<AuthTokenChallenge, Instant>>,
     auth_rate_limiters: Mutex<BTreeMap<SensorStateIndex, AuthRateLimiter>>,
@@ -159,6 +190,10 @@ macro_rules! lock_state {
 impl<T: TrustyEnvironment> ServiceState<T> {
     fn get_auth_token_key(&self) -> ServiceResult<&crypto::Key> {
         self.auth_token_key.get_or_try_init(|| self.trusty.get_auth_token_key())
+    }
+
+    fn get_device_boot_state(&self) -> ServiceResult<&VerifiedBootState> {
+        self.device_boot_state.get_or_try_init(|| self.trusty.get_device_boot_state())
     }
 
     fn create_default_arl(&self) -> ServiceResult<AuthRateLimiter> {
@@ -437,6 +472,7 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
                 sdcp_params: OnceCell::new(),
                 sensor_session: Default::default(),
                 auth_token_key: Default::default(),
+                device_boot_state: Default::default(),
                 enrollment_challenges: Default::default(),
                 banned_reset_challenges: Default::default(),
                 auth_rate_limiters: Default::default(),
@@ -538,9 +574,10 @@ impl<T: TrustyEnvironment> FingerGuardService<T> {
         if self.get_init_params().is_some() {
             return Err(ServiceError::StateAlreadyExists("init_params"));
         }
+        let device_boot_state = self.state.get_device_boot_state()?;
         let model_key = crypto::P256Point::from(&sdcp_claim.modelPublicKey);
         let model_key_sig = crypto::P256Sig::from(&sdcp_claim.modelKeySignature);
-        if !sdcp_pki::verify_public_key_signature(&model_key, &model_key_sig)? {
+        if !sdcp_pki::verify_public_key_signature(&model_key, &model_key_sig, device_boot_state)? {
             return Err(ServiceError::InvalidArg("sdcp model key signature"));
         }
         let device_key = crypto::P256Point::from(&sdcp_claim.devicePublicKey);
