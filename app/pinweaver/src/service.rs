@@ -1,5 +1,5 @@
 use binder::Interface;
-use log::{error, warn};
+use log::{error, info, warn};
 use openssl::{
     rand::rand_bytes,
     symm::{decrypt_aead, encrypt_aead, Cipher},
@@ -310,11 +310,17 @@ impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
         // If there are leaves to remove skip the root check since, self.remove_leaf(..) will only
         // succeed if the storage and gsc roots are in sync after the operation.
         if to_remove.is_empty() {
-            return Ok(new_root.0 == gsc_root.0);
+            if new_root.0 != gsc_root.0 {
+                return Ok(false);
+            }
+        } else {
+            // For now there should only be at most one leaf to remove.
+            warn!("GSC and storage out of sync; removing {} leaf", to_remove.len());
+            for leaf_id in to_remove.into_values() {
+                self.remove_leaf(leaf_id)?;
+            }
         }
-        for leaf_id in to_remove.into_values() {
-            self.remove_leaf(leaf_id)?;
-        }
+        info!("log replay successful");
         Ok(true)
     }
 
@@ -1057,6 +1063,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
 
     fn reconcile(&self) -> binder::Result<()> {
         if !self.reconcile_storage_with_gsc()? {
+            error!("log replay failed; resetting pinweaver");
             self.reset_tree()?;
         }
         RECONCILED.store(true, Ordering::Release);

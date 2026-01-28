@@ -19,7 +19,7 @@
 
 use tipc::Uuid;
 
-pub const KEYMINT_ACCESSIBLE_UUIDS: [Uuid; 10] = [
+pub const KEYMINT_ACCESSIBLE_UUIDS: [Uuid; 11] = [
     /* gatekeeper uuid */
     Uuid::new(0x38ba0cdc, 0xdf0e, 0x11e4, [0x98, 0x69, 0x23, 0x3f, 0xb6, 0xae, 0x47, 0x95]),
     /* confirmation UI uuid */
@@ -40,6 +40,8 @@ pub const KEYMINT_ACCESSIBLE_UUIDS: [Uuid; 10] = [
     Uuid::new(0xf23a14c3, 0x9f99, 0x4481, [0xae, 0x41, 0x54, 0xe9, 0x62, 0x7d, 0xef, 0xbe]),
     /* keymint_provisioning trusty app uuid */
     Uuid::new(0x17ef817e, 0x35d9, 0x4e0a, [0xab, 0x2a, 0x78, 0xf8, 0xcc, 0x44, 0xec, 0xce]),
+    /* vm_rkp trusty app uuid */
+    Uuid::new(0x598c7f41, 0x167b, 0x4df6, [0x9c, 0xc3, 0x44, 0x91, 0xb1, 0x19, 0xd3, 0x35]),
 ];
 
 pub fn keymint_check_secure_target_access_policy_provisioning(uuid: &Uuid) -> bool {
@@ -47,11 +49,13 @@ pub fn keymint_check_secure_target_access_policy_provisioning(uuid: &Uuid) -> bo
     const GSC_SVC_UT_UUID: &Uuid = &KEYMINT_ACCESSIBLE_UUIDS[7];
     const KM_CLIENT_UUID: &Uuid = &KEYMINT_ACCESSIBLE_UUIDS[8];
     const KM_PROVISIONING_UUID: &Uuid = &KEYMINT_ACCESSIBLE_UUIDS[9];
+    const RKP_TA_UUID: &Uuid = &KEYMINT_ACCESSIBLE_UUIDS[10];
 
     if uuid == GSC_SVC_UUID
         || uuid == GSC_SVC_UT_UUID
         || uuid == KM_CLIENT_UUID
         || uuid == KM_PROVISIONING_UUID
+        || uuid == RKP_TA_UUID
     {
         return true;
     }

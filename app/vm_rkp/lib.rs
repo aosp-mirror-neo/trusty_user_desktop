@@ -18,9 +18,11 @@ use avf_attestation::{
     AttestationOps, ClientVmDiceChain, InMemoryKeyDerivationOps, KeyDerivationOps,
     RequestProcessingError,
 };
+use ciborium::Value;
 use coset::{CborSerializable, CoseSign1};
 use hwbcc::{get_bcc, sign_data, HwBccMode, SigningAlgorithm, HWBCC_MAX_RESP_PAYLOAD_LENGTH};
 use hwkey::{Hwkey, KdfVersion, OsRollbackVersion, RollbackVersionSource};
+use keymint_legacy_client::KeyMintSecureLegacyClient;
 use log::error;
 use rkp_ta::main_event_loop;
 use tipc::TipcError;
@@ -34,6 +36,9 @@ const VM_RKP_KEK_CONTEXT: &[u8] = b"VmRkp\0";
 
 // Suffix after pvmfw includes Trusty TEE VM and VM RKP app.
 const DICE_CHAIN_SUFFIX_LEN: usize = 2;
+
+// Key for the UDS certificates in the CBOR map.
+const UDS_CERTS_KEY: &str = "ChromeOS PCA v1";
 
 struct Ops {
     bcc: Vec<u8>,
@@ -86,6 +91,49 @@ impl AttestationOps for Ops {
 
     fn validate_vm(&self, _client_chain_suffix: &ClientVmDiceChain) -> avf_attestation::Result<()> {
         Ok(())
+    }
+
+    fn uds_certs(&self) -> avf_attestation::Result<Vec<u8>> {
+        get_uds_certificates()
+    }
+}
+
+/// Helper function to serialize a `cbor::value::Value` into bytes.
+fn serialize_cbor(cbor_value: &Value) -> avf_attestation::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    ciborium::into_writer(cbor_value, &mut buf)
+        .map_err(|_| RequestProcessingError::InternalError)?;
+    Ok(buf)
+}
+
+// Function to get UDS certificates from KeyMint and encode them in a CBOR map.
+fn get_uds_certificates() -> avf_attestation::Result<Vec<u8>> {
+    let mut km = match KeyMintSecureLegacyClient::new() {
+        Ok(km_client) => km_client,
+        Err(e) => {
+            error!("failed to create KeyMint legacy client: {:?}", e);
+            return serialize_cbor(&Value::Map(Vec::new()));
+        }
+    };
+
+    match km.get_uds_certs() {
+        Ok(certs_vec) => {
+            if certs_vec.is_empty() {
+                error!("no UDS certificates found");
+                return serialize_cbor(&Value::Map(Vec::new()));
+            }
+            let encoded_certs = certs_vec.into_iter().map(Value::Bytes).collect::<Vec<_>>();
+            let uds_certs_cbor = Value::Map(vec![(
+                Value::Text(UDS_CERTS_KEY.to_string()),
+                Value::Array(encoded_certs),
+            )]);
+
+            serialize_cbor(&uds_certs_cbor)
+        }
+        Err(e) => {
+            error!("failed to get UDS certs: {:?}, returning empty certs", e);
+            serialize_cbor(&Value::Map(Vec::new()))
+        }
     }
 }
 
