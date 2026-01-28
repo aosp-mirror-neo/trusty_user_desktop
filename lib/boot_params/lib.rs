@@ -49,9 +49,9 @@ impl Default for BootParams {
     }
 }
 
-#[cfg(feature = "builtin-bcc")]
+#[cfg(any(feature = "builtin-bcc", test))]
 const BOOT_PARAM_KEY: i32 = 2;
-#[cfg(feature = "builtin-bcc")]
+#[cfg(any(feature = "builtin-bcc", test))]
 const DICE_KEY: i32 = 3;
 
 impl BootParams {
@@ -152,10 +152,11 @@ mod tests {
         let data = read_to_value(data).unwrap();
         let data = data.as_map().unwrap();
 
-        let dice = find_in_cbor_map(data, Value::Integer(2.into())).unwrap();
+        let dice = find_in_cbor_map(data, Value::Integer(DICE_KEY.into())).unwrap();
         let _ = DiceHandover::from_cbor_value(dice.clone()).unwrap();
 
-        let gsc_boot_params = find_in_cbor_map(data, Value::Integer(3.into())).unwrap();
+        let gsc_boot_params =
+            find_in_cbor_map(data, Value::Integer(BOOT_PARAM_KEY.into())).unwrap();
         let _ = GscBootParams::from_cbor_value(gsc_boot_params.clone()).unwrap();
     }
 }
