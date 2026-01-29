@@ -17,4 +17,8 @@
 [
     # userspace tests that don't use storage
     porttest("com.android.trusty.rust.boot_params.test"),
+    porttest("com.android.trusty.rust.finger_guard_svc.test"),
+    porttest("com.android.trusty.rust.gsc_svc.test"),
+    porttest("com.android.trusty.rust.gsc_svc_client.test"),
+    porttest("com.android.trusty.rust.pinweaver.test"),
 ]
