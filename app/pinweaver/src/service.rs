@@ -27,10 +27,7 @@ use std::{
     collections::BTreeMap as Map,
     ffi::CStr,
     ops::{Deref, DerefMut},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 use tipc::TipcError;
 use tpm_commands::pinweaver::{
@@ -46,8 +43,6 @@ use zerocopy::{IntoBytes, LittleEndian, U64};
 
 const DEFAULT_TREE_HEIGHT: u8 = 6u8;
 const DEFAULT_TREE_BITS_PER_LEVEL: u8 = 2u8;
-
-static RECONCILED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) mod api_to_gsc {
     use super::*;
@@ -213,13 +208,6 @@ pub struct PinWeaverService<Deps: PinWeaverServiceDeps> {
 impl<Deps: PinWeaverServiceDeps> PinWeaverService<Deps> {
     pub fn new(storage: Arc<Deps::Storage>, gsc: Arc<Deps::Gsc>) -> Self {
         Self { storage, gsc }
-    }
-
-    pub fn reconcile_once(&self) -> binder::Result<()> {
-        if !RECONCILED.load(Ordering::Acquire) {
-            self.reconcile()?;
-        }
-        Ok(())
     }
 
     pub fn reconcile_storage_with_gsc(&self) -> binder::Result<bool> {
@@ -696,7 +684,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         api_delay_schedule: &[DelayScheduleEntry],
         api_insert_mode: InsertMode,
     ) -> binder::Result<()> {
-        self.reconcile_once()?;
+        self.reconcile()?;
 
         // Convert parameters from IPinweaver to storage and GSC types.
         let leaf_id = api_to_storage::leaf_id(api_leaf_id);
@@ -813,7 +801,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         api_leaf_id: &LeafId,
         api_low_entropy_secret: &[u8],
     ) -> binder::Result<TryAuthResponse> {
-        self.reconcile_once()?;
+        self.reconcile()?;
 
         // Convert parameters from IPinweaver to storage and GSC types.
         let leaf_id = api_to_storage::leaf_id(api_leaf_id);
@@ -918,7 +906,7 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         strong_reset: bool,
         api_reset_secret: &[u8],
     ) -> binder::Result<()> {
-        self.reconcile_once()?;
+        self.reconcile()?;
 
         // Convert parameters from IPinweaver to storage and GSC types.
         let leaf_id = api_to_storage::leaf_id(api_leaf_id);
@@ -1003,14 +991,14 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
         _new_high_entropy_secret: Option<&[u8]>,
         _new_delay_schedule: Option<&[Option<DelayScheduleEntry>]>,
     ) -> binder::Result<TryAuthResponse> {
-        self.reconcile_once()?;
+        self.reconcile()?;
 
         // TODO: b/359374997 - Implement.
         Err(binder_error::unsupported_operation())
     }
 
     fn remove(&self, id: &LeafId) -> binder::Result<()> {
-        self.reconcile_once()?;
+        self.reconcile()?;
 
         self.remove_leaf(api_to_storage::leaf_id(id))
     }
@@ -1018,10 +1006,9 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
     fn removeAll(&self, api_leaf_set: LeafSet) -> binder::Result<()> {
         if matches!(api_leaf_set, LeafSet::ALL_LEAVES) {
             self.reset_tree()?;
-            RECONCILED.store(true, Ordering::Release);
             return Ok(());
         }
-        self.reconcile_once()?;
+        self.reconcile()?;
 
         let leaf_set = api_to_storage::leaf_set(api_leaf_set);
 
@@ -1066,7 +1053,6 @@ impl<Deps: PinWeaverServiceDeps> IPinWeaver for PinWeaverService<Deps> {
             error!("log replay failed; resetting pinweaver");
             self.reset_tree()?;
         }
-        RECONCILED.store(true, Ordering::Release);
         Ok(())
     }
 
