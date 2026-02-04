@@ -142,6 +142,10 @@ impl StrongBox {
                     Err(err) => op_error_rsp(KeyMintOperation::DeviceGetHardwareInfo, err),
                 }
             }
+            PerformOpReq::OperationAbort(req) => match operation::abort(req, &self.tpm) {
+                Ok(resp) => op_ok_rsp(PerformOpRsp::OperationAbort(resp)),
+                Err(err) => op_error_rsp(KeyMintOperation::OperationAbort, err),
+            },
             PerformOpReq::OperationFinish(req) => match operation::finish(req, &self.tpm) {
                 Ok(resp) => op_ok_rsp(PerformOpRsp::OperationFinish(resp)),
                 Err(err) => op_error_rsp(KeyMintOperation::OperationFinish, err),

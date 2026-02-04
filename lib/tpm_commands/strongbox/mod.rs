@@ -933,7 +933,7 @@ pub mod finish {
     pub struct Request {
         /// A unique handle for this operation.
         pub operation_id: U32LE,
-        /// The size of the key blob that follows in 32-bit words.
+        /// The size of the data that follows in bytes.
         pub update_size_bytes: U32LE,
         /// The data to process during the update operation.
         pub input_data: [u8],
@@ -1011,6 +1011,65 @@ pub mod finish {
                 .to_der()
                 .map_err(|_| km_err!(EncodingError, "to der"))?;
             Ok(kmr_wire::FinishResponse { ret })
+        }
+    }
+}
+
+/// Keymint Abort Operation - Cr50 doesn't have abort use use finish instead.
+/// Input Buffer (`buf`):
+/// - [ 4 bytes ] uint32_t operation_id: The handle from `begin()`.
+/// - [ 4 bytes ] uint32_t update_size_bytes: Always 0.
+///
+/// Output Buffer (`buf`):
+/// The result of the operation. Specifically for the Strongbox-subset it is:
+/// - [ 64 bytes ] An ECDSA P-256 signature, composed of the 32-byte 'r'
+///   value followed by the 32-byte 's' value - We drop this.
+pub mod abort {
+    use super::*;
+
+    /// The GSC equivalent of kmr_wire::UpdateRequest
+    #[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Request {
+        /// A unique handle for this operation.
+        pub operation_id: U32LE,
+        /// The size of the data that follows in bytes---Always 0.
+        pub update_size_bytes: U32LE,
+    }
+
+    impl_tpmv_request!(FinishRequest);
+
+    impl TpmvRequestBuild for Request {
+        type BuildParams = kmr_wire::AbortRequest;
+
+        type Err = Error;
+
+        fn expected_size(_params: &Self::BuildParams) -> Result<u32, Self::Err> {
+            Ok((2 * size_of::<U32LE>()) as u32)
+        }
+
+        fn init(&mut self, params: Self::BuildParams) -> Result<(), Self::Err> {
+            self.operation_id =
+                U32LE::new(params.op_handle.try_into().map_err(|_| km_err!(EncodingError, ""))?);
+            self.update_size_bytes = U32LE::ZERO;
+            Ok(())
+        }
+    }
+
+    /// The GSC equivalent of kmr_wire::FinishResponse
+    #[derive(Debug, Eq, FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Response {
+        /// Returned bytes.
+        pub ret: [u8],
+    }
+
+    impl TryFrom<&mut Response> for kmr_wire::AbortResponse {
+        type Error = Error;
+
+        /// Convert a response into a kmr_wire::FinishResponse.
+        fn try_from(_response: &mut Response) -> Result<kmr_wire::AbortResponse, Error> {
+            Ok(kmr_wire::AbortResponse {})
         }
     }
 }
