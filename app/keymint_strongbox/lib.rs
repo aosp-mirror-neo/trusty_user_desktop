@@ -21,8 +21,9 @@ use alloc::{rc::Rc, vec::Vec};
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
 use binder::Strong;
 use core::{cell::RefCell, fmt};
-use kmr_common::{km_err, Error, ErrorKind, ErrorLocation};
+use kmr_common::{km_err, km_err_new, Error, ErrorKind, ErrorLocation};
 use kmr_ta::{HardwareInfo, RpcInfo, RpcInfoV3};
+use kmr_wire::keymint::ErrorCode;
 use log::{debug, error, trace};
 use tipc::{
     service_dispatcher, ConnectResult, Deserialize, Handle, Manager, MessageResult, PortCfg,
@@ -355,6 +356,30 @@ impl<'s> Serialize<'s> for KMMessage {
     }
 }
 
+const GSC_TAG_MASK: u32 = 0xff00;
+const GSC_STRONGBOX_SUBSET_TAG: u32 = 0x500;
+const GSC_KEY_MAX_OPS_EXCEEDED: u32 = GSC_STRONGBOX_SUBSET_TAG + 0x38;
+
+fn error_from_tpm(error_code: u32) -> Error {
+    if error_code == GSC_KEY_MAX_OPS_EXCEEDED {
+        return km_err!(TooManyOperations, "too many operations");
+    }
+
+    // Check if it is a SBS error.
+    if error_code & GSC_TAG_MASK == GSC_STRONGBOX_SUBSET_TAG {
+        if let Ok(cast_code) =
+            ErrorCode::try_from((GSC_STRONGBOX_SUBSET_TAG as i32) - (error_code as i32))
+        {
+            return km_err_new!(ErrorKind::Hal(
+                cast_code,
+                format!("converted from SBS 0x{:X}", error_code)
+            ));
+        }
+    }
+
+    km_err!(SecureHwCommunicationFailed, "0x{:X}", error_code)
+}
+
 fn do_rpc<
     GRQ: TpmvRequestBuild<BuildParams = ARQ, Err = Error> + TpmvRequest<TpmvResponse = GRSP> + ?Sized,
     GRSP: FromBytes + IntoBytes + KnownLayout + Unaligned + ?Sized,
@@ -377,7 +402,7 @@ fn do_rpc<
             .map_err(|_| km_err!(EncodingError, "parsing keymint response"))?;
         ret.try_into()
     } else {
-        Err(km_err!(SecureHwCommunicationFailed, "0x{:X}", rsp.header.error_code))
+        Err(error_from_tpm(rsp.header.error_code.get()))
     }
 }
 
