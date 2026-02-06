@@ -19,10 +19,16 @@
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
 use binder::Strong;
 use kmr_common::Error;
-use kmr_wire::{FinishRequest, FinishResponse, UpdateRequest, UpdateResponse};
+use kmr_wire::{
+    AbortRequest, AbortResponse, FinishRequest, FinishResponse, UpdateRequest, UpdateResponse,
+};
 use tpm_commands::strongbox::*;
 
 use crate::do_rpc;
+
+pub fn abort(request: AbortRequest, client: &Strong<dyn IGsc>) -> Result<AbortResponse, Error> {
+    do_rpc::<abort::Request, abort::Response, AbortRequest, AbortResponse>(request, client)
+}
 
 pub fn update(request: UpdateRequest, client: &Strong<dyn IGsc>) -> Result<UpdateResponse, Error> {
     do_rpc::<update::Request, update::Response, UpdateRequest, UpdateResponse>(request, client)

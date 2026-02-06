@@ -22,7 +22,7 @@ use kmr_wire::*;
 use std::any::type_name;
 use zerocopy::{FromBytes, IntoBytes};
 
-use super::byte_len_with_word_padding;
+use super::WORD_SIZE;
 
 const TAG_LEN_BITS: usize = 12;
 const TAG_LEN_SHIFT: i32 = 16;
@@ -59,7 +59,9 @@ fn expected_size_one(param: &KeyParam) -> usize {
             | KeyParam::AttestationIdSerial(value)
             | KeyParam::CertificateSerial(value)
             | KeyParam::CertificateSubject(value) => {
-                return byte_len_with_word_padding(value.len())
+                return value
+                    .len()
+                    .next_multiple_of(WORD_SIZE)
                     .checked_add(size_of::<i32>())
                     .expect("overflow");
             }
@@ -82,7 +84,7 @@ pub fn expected_size(params: &[KeyParam]) -> usize {
 }
 
 fn serialize_bool(slice: &mut [u8], tag: Tag) -> &mut [u8] {
-    let (out, suffix) = slice.split_at_mut(size_of::<i32>());
+    let (out, suffix) = slice.split_at_mut(WORD_SIZE);
     out.copy_from_slice(&(tag as i32).to_le_bytes());
     suffix
 }
@@ -120,9 +122,9 @@ fn serialize_u64(slice: &mut [u8], tag: Tag, val: u64) -> &mut [u8] {
 }
 
 fn serialize_u8_vec<'a>(slice: &'a mut [u8], tag: Tag, val: &[u8]) -> &'a mut [u8] {
-    let (out, suffix) = slice.split_at_mut(size_of::<i32>());
+    let (out, suffix) = slice.split_at_mut(WORD_SIZE);
     out.copy_from_slice(&include_byte_len(tag, val.len()).to_le_bytes());
-    let (out, suffix) = suffix.split_at_mut(byte_len_with_word_padding(val.len()));
+    let (out, suffix) = suffix.split_at_mut(val.len().next_multiple_of(WORD_SIZE));
     out[0..val.len()].copy_from_slice(val);
     suffix
 }
@@ -256,7 +258,7 @@ fn tag_vec_helper<F: FnOnce(Vec<u8>) -> KeyParam>(
     let (buf, next) = buf
         .split_at_checked(len_bytes.div_ceil(size_of::<u32>()) + 1)
         .ok_or_else(|| km_err!(EncodingError, "not enough buffer for tag"))?;
-    Ok((cast(buf.as_bytes()[4..4 + len_bytes].to_vec()), next))
+    Ok((cast(buf.as_bytes()[WORD_SIZE..WORD_SIZE + len_bytes].to_vec()), next))
 }
 
 fn parse_key_param(buf: &[u32]) -> Result<(KeyParam, &[u32]), Error> {
@@ -403,7 +405,7 @@ fn parse_characteristics(buf: &[u32]) -> Result<(KeyCharacteristics, &[u32]), Er
     Ok((KeyCharacteristics { security_level, authorizations }, suffix))
 }
 
-/// Extract theKeyCaracteristics from a key blob so they can be returned in the
+/// Extract the key characteristics from a key blob so they can be returned in the
 /// wire format.
 pub fn characteristics_from_key_blob(key_blob: &[u8]) -> Result<Vec<KeyCharacteristics>, Error> {
     const KEY_CHARACTERISTICS_WORDS: usize = 12;
@@ -518,7 +520,7 @@ mod test {
             Bignum | Bytes => ((tag_word >> 16) & 0x0fffu32) as usize,
             _ => 0,
         };
-        1 + data_len.div_ceil(4)
+        1 + data_len.div_ceil(WORD_SIZE)
     }
 
     fn process_tag(_tag: Tag, _buf: &[u32]) {}
@@ -582,9 +584,9 @@ mod test {
 
         let params_len_bytes = expected_size(&key_params);
         let mut buf = vec![0; params_len_bytes + size_of::<u32>()];
-        buf[0..4].copy_from_slice(&((params_len_bytes / 4) as u32).to_le_bytes());
+        buf[0..WORD_SIZE].copy_from_slice(&((params_len_bytes / WORD_SIZE) as u32).to_le_bytes());
         assert_eq!(
-            serialize_key_params_checked(&mut buf[4..], &key_params)
+            serialize_key_params_checked(&mut buf[WORD_SIZE..], &key_params)
                 .expect("not enough buffer")
                 .len(),
             0
