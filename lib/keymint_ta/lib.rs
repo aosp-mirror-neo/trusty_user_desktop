@@ -62,3 +62,10 @@ pub fn keymint_ta(
     ta.set_device_hmac(alloc::boxed::Box::new(hm));
     ta
 }
+
+/// Get the UDS signer name used when packaging the UDS certificate for RKP CSRs.
+pub fn uds_signer_name() -> &'static str {
+    "ChromeOS PCA v1"
+    // TODO(456000907): Support OT signer names
+    // "OpenTitan NT11"
+}
