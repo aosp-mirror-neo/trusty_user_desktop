@@ -241,30 +241,39 @@ impl IKeyMintProvisioning for KeyMintProvisioningService {
             log::error!("failed to create KeyMint legacy client");
             return Err(binder_error::illegal_state(c"create client"));
         };
-        // TODO: b/460182466 - Use this once the correct values are encoded.
-        let _ids = SetAttestationIdsRequest {
+
+        log::trace!(
+            "appendProductIdentityCertificate: brand: {}, device: {}, product: {}",
+            String::from_utf8_lossy(&brand).as_ref(),
+            String::from_utf8_lossy(&device).as_ref(),
+            String::from_utf8_lossy(&product).as_ref()
+        );
+        log::trace!(
+            "appendProductIdentityCertificate: serial: {}, manufacturer: {}, model: {}",
+            String::from_utf8_lossy(&serial).as_ref(),
+            String::from_utf8_lossy(&manufacturer).as_ref(),
+            String::from_utf8_lossy(&model).as_ref()
+        );
+
+        let mut ids = SetAttestationIdsRequest {
             brand,
             device,
             product,
-            // replace with real serial
-            serial: Vec::new(),
+            serial,
             manufacturer,
             model,
-            imei: Vec::new(),
-            meid: Vec::new(),
-        };
-
-        let ids = SetAttestationIdsRequest {
-            brand: "google".as_bytes().to_vec(),
-            device: "brya".as_bytes().to_vec(),
-            product: "brya".as_bytes().to_vec(),
-            serial,
-            manufacturer: "Google".as_bytes().to_vec(),
-            model: "Brya".as_bytes().to_vec(),
-            // TODO: b/466129460 - Choose a dedicated value for AL devices without cellular
+            // TODO(b/466129460): Choose a dedicated value for AL devices without cellular
             imei: b"867400022047199".to_vec(),
             meid: Vec::new(),
         };
+
+        // TODO(b/460182466): For brya builds, we use "google" to match
+        // `ro.product.brand`. Note that if a mismatch occurs, RKP/gECC/HPA will
+        // fail.
+        if product_data.get_device() == "brya" {
+            ids.brand = "google".as_bytes().to_vec();
+        }
+
         km.set_attestation_ids(ids).map_err(|e| {
             log::error!("Failed to set attestation IDs: {e}");
             binder_error::attestation_unsuccessful()
