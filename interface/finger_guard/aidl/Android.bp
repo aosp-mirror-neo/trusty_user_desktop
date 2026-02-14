@@ -20,7 +20,7 @@ aidl_interface {
         "android/desktop/security/finger_guard/SdcpClientSessionResponse.aidl",
         "android/desktop/security/finger_guard/SensorUserPair.aidl",
     ],
-    frozen: false,
+    frozen: true,
     stability: "vintf",
     backend: {
         rust: {
@@ -40,4 +40,11 @@ aidl_interface {
             enabled: false,
         },
     },
+    versions_with_info: [
+        {
+            version: "1",
+            imports: [],
+        },
+    ],
+
 }
