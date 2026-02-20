@@ -14,16 +14,23 @@
  * limitations under the License.
  */
 
+use coset::{CoseError, TaggedCborSerializable};
 use finger_guard::crypto;
 use finger_guard::error::{ServiceError, ServiceResult};
+use kmr_common::wire::keymint::BootInfo;
 use kmr_common::wire::legacy::{self, TrustyKeymasterSecureOperation};
+use kmr_common::wire::{
+    AsCborValue, CborError, GetRootOfTrustRequest, PerformOpReq, PerformOpResponse, PerformOpRsp,
+};
 use std::ffi::CStr;
 use tipc::{Deserialize, Handle, Serialize, Serializer, TipcError};
 use trusty_std::alloc::TryAllocFrom;
 use zerocopy::FromBytes;
 
-// The port string for keymint.
-const KEYMINT_PORT: &CStr = c"com.android.trusty.keymaster.secure";
+// The port string for keymint's legacy keymaster interface.
+const KEYMINT_KM_PORT: &CStr = c"com.android.trusty.keymaster.secure";
+// The port string for keymint's normal service interface.
+const KEYMINT_PORT: &CStr = c"com.android.trusty.keymint";
 
 // Create a byte buffer contains the serialized GetAuthTokenKeyRequest.
 fn get_auth_token_key_request() -> Vec<u8> {
@@ -42,7 +49,22 @@ impl<T> MapTipcErrExt<T> for Result<T, TipcError> {
     }
 }
 
-// Since we are only interested in sending/receiving the GetAuthTokenKey
+// Extend Result with a function that can map Cbor/Cose errors to service errors.
+trait MapCborErrExt<T> {
+    fn wrap_cbor_err(self, msg: &'static str) -> ServiceResult<T>;
+}
+impl<T> MapCborErrExt<T> for Result<T, CborError> {
+    fn wrap_cbor_err(self, msg: &'static str) -> ServiceResult<T> {
+        self.map_err(|e| ServiceError::CborError(msg, Box::new(e)))
+    }
+}
+impl<T> MapCborErrExt<T> for Result<T, CoseError> {
+    fn wrap_cbor_err(self, msg: &'static str) -> ServiceResult<T> {
+        self.map_err(|e| ServiceError::CborError(msg, Box::new(e)))
+    }
+}
+
+// Since we are initially only interested in sending/receiving the GetAuthTokenKey
 // request/response, which have simple layouts, the hardcoded request/response
 // encoding and parsing is much easier to produce and maintain. The full
 // service interface is a legacy Keymaster interface without an AIDL
@@ -51,6 +73,7 @@ impl<T> MapTipcErrExt<T> for Result<T, TipcError> {
 // KMMessage implements a naive serde for a byte buffer. This allows we send
 // and receive a byte buffer directly with a tipc::Handle object so that we can
 // plug in the hardcoded request encoder and response decoder.
+// We also use KMMessage for sending/receiving the GetRootOfTrust request/response.
 struct KMMessage(Vec<u8>);
 const MAX_MESSAGE_SIZE: usize = 1024;
 
@@ -73,7 +96,7 @@ impl Deserialize for KMMessage {
 }
 
 fn raw_get_auth_token_key_response() -> tipc::Result<Vec<u8>> {
-    let session = Handle::connect(KEYMINT_PORT)?;
+    let session = Handle::connect(KEYMINT_KM_PORT)?;
     let req = KMMessage(get_auth_token_key_request());
     session.send(&req)?;
     let mut buf = [0u8; MAX_MESSAGE_SIZE];
@@ -110,5 +133,50 @@ pub fn get_auth_token_key() -> ServiceResult<crypto::Key> {
         Err(ServiceError::KeymintError { cmd: "GetAuthTokenKey", code: error_message.error_code })
     } else {
         Err(ServiceError::KeymintBadResponse { cmd: "GetAuthTokenKey" })
+    }
+}
+
+// Create a byte buffer contains the serialized GetRootOfTrustRequest.
+fn get_root_of_trust_request() -> Vec<u8> {
+    let challenge = [0u8; 16];
+    let request = GetRootOfTrustRequest { challenge };
+    let req_bytes = PerformOpReq::GetRootOfTrust(request)
+        .into_vec()
+        .expect("GetRootOfTrustRequest serialization failed");
+    req_bytes
+}
+
+// Send the serialized GetRootOfTrustRequest and get a raw response.
+fn raw_get_root_of_trust_response() -> tipc::Result<Vec<u8>> {
+    let session = Handle::connect(KEYMINT_PORT)?;
+    let req = KMMessage(get_root_of_trust_request());
+    session.send(&req)?;
+    let mut buf = [0u8; MAX_MESSAGE_SIZE];
+    let resp: KMMessage = session.recv(&mut buf)?;
+    Ok(resp.0)
+}
+
+// Parse the raw response of GetRootOfTrust to obtain BootInfo.
+pub fn get_boot_info() -> ServiceResult<BootInfo> {
+    let raw_response =
+        raw_get_root_of_trust_response().wrap_tipc_err("Keymint connection failed")?;
+    // Raw responses from keymint standard services are chunked. The first byte of each chunk
+    // indicates whether there is a next chunk. Since GetRootOfTrust response is small enough to
+    // fit in one chunk (4000 byte), the first byte of the raw response is always 0 and the rest
+    // contains the cbor encoded service response.
+    if raw_response[0] != 0u8 {
+        return Err(ServiceError::KeymintBadResponse { cmd: "GetRootOfTrust" });
+    }
+    let response = PerformOpResponse::from_slice(&raw_response[1..])
+        .wrap_cbor_err("GetRootOfTrust raw response decode failed")?;
+    if let Some(PerformOpRsp::GetRootOfTrust(rsp)) = response.rsp {
+        let cose_mac0 = coset::CoseMac0::from_tagged_slice(rsp.ret.as_slice())
+            .wrap_cbor_err("GetRootOfTrustResponse decode as CoseMac0 failed")?;
+        let payload =
+            cose_mac0.payload.ok_or(ServiceError::KeymintBadResponse { cmd: "GetRootOfTrust" })?;
+        BootInfo::from_tagged_slice(payload.as_slice())
+            .wrap_cbor_err("CoseMac0 payload decode as BootInfo failed")
+    } else {
+        Err(ServiceError::KeymintBadResponse { cmd: "GetRootOfTrust" })
     }
 }

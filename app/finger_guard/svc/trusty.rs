@@ -22,7 +22,7 @@ use crate::storage::{PersistedState, SingleFileState};
 use finger_guard::crypto;
 use finger_guard::error::ServiceResult;
 use finger_guard::identifiers::{AuthenticatorId, SecureUserId};
-use finger_guard::service::{InitParams, SdcpParams, TrustyEnvironment};
+use finger_guard::service::{InitParams, SdcpParams, TrustyEnvironment, VerifiedBootState};
 use finger_guard::time::Clock;
 
 // Init params are persisted to a single fixed file.
@@ -49,6 +49,11 @@ impl TrustyEnvironment for Trusty {
     }
     fn get_auth_token_key(&self) -> ServiceResult<crypto::Key> {
         keymint::get_auth_token_key()
+    }
+    fn get_device_boot_state(&self) -> ServiceResult<VerifiedBootState> {
+        //TODO(b/479513503): use the auth token key to verify the mac in BootInfo.
+        let boot_info = keymint::get_boot_info()?;
+        VerifiedBootState::try_from(boot_info.verified_boot_state)
     }
     fn load_init_params(&self) -> ServiceResult<InitParams> {
         InitParams::load()

@@ -38,6 +38,9 @@ pub enum ServiceError {
     /// Wrap a TIPC communication error.
     #[error("{0}: {1:?}")]
     TipcError(&'static str, Box<dyn std::fmt::Debug>),
+    /// Wrap a CBOR encoding/decoding error.
+    #[error("{0}: {1:?}")]
+    CborError(&'static str, Box<dyn std::fmt::Debug>),
     /// Wrap a trusty system error, including the underlying error code.
     #[error("Trusty system api {0} returns an error code: {1}")]
     TrustySysRcError(&'static str, i64),

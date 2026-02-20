@@ -25,6 +25,7 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := finger_guard_svc
 
 MODULE_LIBRARY_DEPS += \
+	$(call FIND_CRATE,coset) \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,zerocopy) \
 	trusty/user/base/lib/keymint-rust/boringssl \
