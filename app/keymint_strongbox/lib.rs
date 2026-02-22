@@ -21,7 +21,7 @@ use alloc::{rc::Rc, vec::Vec};
 use android_system_desktop_security_gsc::aidl::android::system::desktop::security::gsc::IGsc::IGsc;
 use binder::Strong;
 use core::{cell::RefCell, fmt};
-use kmr_common::{km_err, km_err_new, Error, ErrorKind, ErrorLocation};
+use kmr_common::{km_err, km_verr, Error, ErrorKind, ErrorLocation};
 use kmr_ta::{HardwareInfo, RpcInfo, RpcInfoV3};
 use kmr_wire::keymint::ErrorCode;
 use log::{debug, error, trace};
@@ -370,10 +370,7 @@ fn error_from_tpm(error_code: u32) -> Error {
         if let Ok(cast_code) =
             ErrorCode::try_from((GSC_STRONGBOX_SUBSET_TAG as i32) - (error_code as i32))
         {
-            return km_err_new!(ErrorKind::Hal(
-                cast_code,
-                format!("converted from SBS 0x{:X}", error_code)
-            ));
+            return km_verr!(cast_code, "converted from SBS 0x{:X}", error_code);
         }
     }
 
