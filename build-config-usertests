@@ -21,4 +21,5 @@
     porttest("com.android.trusty.rust.gsc_svc.test"),
     porttest("com.android.trusty.rust.gsc_svc_client.test"),
     porttest("com.android.trusty.rust.pinweaver.test"),
+    porttest("com.android.trusty.rust.secretkeeper_desktop.test"),
 ]

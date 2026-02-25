@@ -1,0 +1,6 @@
+{
+        "app_name": "secretkeeper_desktop_lib",
+        "uuid": "42f86a25-4c38-42c8-ae60-d24a667acf8c",
+        "min_heap": 20480,
+        "min_stack": 20480
+}

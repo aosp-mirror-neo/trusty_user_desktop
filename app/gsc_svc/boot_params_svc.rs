@@ -15,9 +15,9 @@
 */
 
 use alloc::vec::Vec;
-use android_desktop_security_boot_params::aidl::android::desktop::security::boot_params::IBootParams::IBootParams;
+use android_desktop_security_boot_params::aidl::android::desktop::security::boot_params::IBootParams::{ERROR_INVALID_ARGUMENT, ERROR_OPENSSL, IBootParams};
 use android_desktop_security_boot_params::aidl::android::desktop::security::boot_params::IBootParams::BnBootParams;
-use binder::{BinderFeatures, Interface, Result as BinderResult, Strong};
+use binder::{BinderFeatures, Interface, Result as BinderResult, Status, Strong};
 use boot_params::BootParams;
 #[cfg(not(feature = "builtin-bcc"))]
 use vmm_obj::get_vmm_obj;
@@ -40,6 +40,27 @@ impl IBootParams for Server {
     }
     fn getAuthTokenKeySeed(&self) -> BinderResult<Vec<u8>> {
         Ok(self.params.gsc_boot_params.auth_token_key_seed.to_vec())
+    }
+    fn deriveSessionKey(&self, salt: &[u8]) -> BinderResult<Vec<u8>> {
+        if salt.is_empty() {
+            return Err(Status::new_service_specific_error(
+                ERROR_INVALID_ARGUMENT,
+                Some(c"Salt must not be empty"),
+            ));
+        }
+
+        let md = openssl::md::Md::sha256();
+        let mut out = [0; 32];
+        openssl::hkdf::hkdf_extract(
+            &mut out,
+            md,
+            &self.params.gsc_boot_params.session_key_seed,
+            salt,
+        )
+        .map_err(|_| {
+            Status::new_service_specific_error(ERROR_OPENSSL, Some(c"HDF extraction failed"))
+        })?;
+        Ok(out.to_vec())
     }
 }
 
