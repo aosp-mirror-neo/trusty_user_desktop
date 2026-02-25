@@ -16,7 +16,7 @@
 
 //! Structs and items that define TPM communications with the GSC
 
-use kmr_common::Error;
+use kmr_common::{km_err, Error};
 use kmr_wire::keymint::*;
 use kmr_wire::*;
 use std::any::type_name;
@@ -247,7 +247,7 @@ fn tag_datetime_helper(buf: &[u32]) -> Result<DateTime, Error> {
 
 fn tag_int_helper<T: TryFrom<i32>>(v: u32) -> Result<T, Error> {
     T::try_from(i32::from_ne_bytes(v.to_ne_bytes()))
-        .map_err(|_| km_err!(EncodingError, type_name::<T>()))
+        .map_err(|_| km_err!(EncodingError, "{}", type_name::<T>()))
 }
 
 fn tag_vec_helper<F: FnOnce(Vec<u8>) -> KeyParam>(
@@ -367,7 +367,7 @@ fn parse_key_param(buf: &[u32]) -> Result<(KeyParam, &[u32]), Error> {
         }
 
         _ => {
-            return Err(km_err!(Unimplemented, format!("unexpected tag: {tag:?}")));
+            return Err(km_err!(Unimplemented, "unexpected tag: {tag:?}"));
         }
     };
     Ok((

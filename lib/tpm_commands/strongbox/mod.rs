@@ -19,7 +19,7 @@
 #![allow(clippy::result_unit_err)]
 
 use crate::{TpmvRequest, TpmvRequestBuild, NO_SESSION_TAG};
-use kmr_common::Error;
+use kmr_common::{km_err, Error};
 use kmr_wire::{
     keymint::{Certificate, KeyCreationResult, KeyMintHardwareInfo, SecurityLevel},
     *,
@@ -29,16 +29,6 @@ use openssl::ecdsa::EcdsaSig;
 use zerocopy::{
     FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, BE, I32, I64, LE, U16, U32,
 };
-
-/// This is a rewrite of the copy from kmr_common without alloc.
-macro_rules! km_err {
-    { $error_code:ident, $msg:expr } => {
-        kmr_common::km_err_new!(kmr_common::ErrorKind::Hal(
-            kmr_wire::keymint::ErrorCode::$error_code,
-            $msg.to_string(),
-        ))
-    }
-}
 
 macro_rules! impl_tpmv_request {
     ($kmr_wire_req:ident) => {
@@ -87,12 +77,10 @@ fn copy_u32le_prefixed_slice<'a>(
     if dest.len() != dest_len || dest_len < data.len() {
         return Err(km_err!(
             EncodingError,
-            format!(
-                "copy_u32le_prefixed_slice, dest {}, needed {}, data {}",
-                dest.len(),
-                dest_len,
-                data.len()
-            )
+            "copy_u32le_prefixed_slice, dest {}, needed {}, data {}",
+            dest.len(),
+            dest_len,
+            data.len()
         ));
     }
     dest[..data.len()].copy_from_slice(data);
