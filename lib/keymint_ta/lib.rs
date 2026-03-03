@@ -65,7 +65,11 @@ pub fn keymint_ta(
 
 /// Get the UDS signer name used when packaging the UDS certificate for RKP CSRs.
 pub fn uds_signer_name() -> &'static str {
-    "ChromeOS PCA v1"
-    // TODO(456000907): Support OT signer names
-    // "OpenTitan NT11"
+    match desktop_trusty_build_params::GSC_FW_TYPE {
+        "cr50" => "ChromeOS PCA v1",
+        "ti50" => "OpenTitan NT11",
+        // Populate the default case with a unique string for debugging as opposed to crashing TEE
+        // KeyMint.
+        _ => "Unknown signer",
+    }
 }
