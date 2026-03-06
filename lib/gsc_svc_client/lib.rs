@@ -19,13 +19,16 @@ use binder::Strong;
 use rpcbinder::RpcSession;
 use std::ffi::CStr;
 use tpm_commands::{
-    TpmInterface, TpmRequestMessage, TpmResponseHeader, TpmResponseMessage, TpmvRequest,
-    TpmvRequestBuild,
+    get_device_ids, TpmInterface, TpmRequestMessage, TpmResponseHeader, TpmResponseMessage,
+    TpmvRequest, TpmvRequestBuild,
 };
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
-pub use tpm_commands::trusty_storage_superblock_mac::{
-    TrustyStorageFlags, TrustyStorageMac, TrustyStorageMacData, TrustyStorageMacFileIndex,
+pub use tpm_commands::{
+    self,
+    trusty_storage_superblock_mac::{
+        TrustyStorageFlags, TrustyStorageMac, TrustyStorageMacData, TrustyStorageMacFileIndex,
+    },
 };
 
 const GSC_SERVICE_PORT: &CStr = c"com.android.trusty.rust.GscAppService.V1";
@@ -63,6 +66,42 @@ impl GscServiceClient {
         Ok(Self(get_service(GSC_SERVICE_PORT)?))
     }
 
+    // TOOO: This is a temporary fix for a gsc_svc design problem. The gsc_svc
+    // should be ready to accept commands when it is starts accepting connections.
+    //
+    /// Wait until `gsc_svc` is fully connected to the tpm by retrying a command
+    /// and waiting.
+    pub fn wait_for_gsc_svc(
+        &self,
+        delay: std::time::Duration,
+        max_attempts: usize,
+    ) -> Result<(), GscServiceClientError> {
+        let mut attempt = 0;
+        loop {
+            if self
+                .read_trusty_storage_superblock_mac(TrustyStorageMacFileIndex::TamperDetectPersist)
+                .is_ok()
+            {
+                log::debug!("wait_for_gsc_svc: attempt {attempt} of {max_attempts} succeeded, delay {delay:?}");
+                break Ok(());
+            }
+
+            attempt += 1;
+            if attempt >= max_attempts {
+                return Err(GscServiceClientError::ConnectError);
+            }
+
+            // SAFETY: `clock_id` and `flags` are both zero, as required by the `trusty_nanosleep`
+            // docs.
+            //
+            // Ignore errors if sleeping fails, we'll bail out of this loop after `max_attempts` in
+            // that case.
+            unsafe {
+                trusty_sys::nanosleep(0, 0, delay.as_nanos() as u64);
+            }
+        }
+    }
+
     /// Get the superblock `mac` value stored on the GSC for a given `index`.
     pub fn read_trusty_storage_superblock_mac(
         &self,
@@ -97,6 +136,17 @@ impl GscServiceClient {
         let _: Response = self.transmit(Request::new_delete(index))?;
 
         Ok(())
+    }
+
+    /// Get device IDs stored on the GSC
+    pub fn get_device_ids(
+        &self,
+        subcommand: get_device_ids::Subcommand,
+    ) -> Result<get_device_ids::Response, GscServiceClientError> {
+        use get_device_ids::{Request, Response};
+        let response: Response = self.transmit(Request { subcommand })?;
+
+        Ok(response)
     }
 }
 
