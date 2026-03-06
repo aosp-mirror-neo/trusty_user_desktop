@@ -28,6 +28,7 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,open-enum) \
 	$(call FIND_CRATE,paste) \
+	$(call FIND_CRATE,static_assertions) \
 	$(call FIND_CRATE,thiserror) \
 	$(call FIND_CRATE,zerocopy) \
 	trusty/user/base/lib/keymint-rust/common \

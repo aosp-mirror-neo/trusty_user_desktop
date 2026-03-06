@@ -20,6 +20,7 @@ rust_defaults {
         "liblog_rust",
         "libopen_enum",
         "libopenssl",
+        "libstatic_assertions",
         "libthiserror",
         "libzerocopy",
     ],
