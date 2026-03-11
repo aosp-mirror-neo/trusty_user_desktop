@@ -17,9 +17,22 @@ package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
+filegroup {
+    name: "sdcp_pki_data",
+    srcs: ["src/sdcp_pki_data/*"],
+}
+
+filegroup {
+    name: "test_data",
+    srcs: ["src/test_data/*"],
+}
+
 rust_defaults {
     name: "libdesktop_finger_guard_defaults",
-    srcs: ["src/lib.rs"],
+    srcs: [
+        "src/lib.rs",
+        ":sdcp_pki_data",
+    ],
     crate_name: "desktop_finger_guard",
     rustlibs: [
         "libbinder_rs",
@@ -33,6 +46,14 @@ rust_defaults {
     ],
 }
 
+rust_defaults {
+    name: "libdesktop_finger_guard_test_defaults",
+    defaults: ["libdesktop_finger_guard_defaults"],
+    srcs: [":test_data"],
+    test_suites: ["general-tests"],
+    auto_gen_config: true,
+}
+
 rust_library {
     name: "libdesktop_finger_guard",
     defaults: ["libdesktop_finger_guard_defaults"],
@@ -41,15 +62,11 @@ rust_library {
 
 rust_test_host {
     name: "libdesktop_finger_guard_test",
-    defaults: ["libdesktop_finger_guard_defaults"],
-    test_suites: ["general-tests"],
-    auto_gen_config: true,
+    defaults: ["libdesktop_finger_guard_test_defaults"],
 }
 
 rust_test_host {
     name: "libdesktop_finger_guard_dev_test",
-    defaults: ["libdesktop_finger_guard_defaults"],
+    defaults: ["libdesktop_finger_guard_test_defaults"],
     features: ["dev_sdcp_pki"],
-    test_suites: ["general-tests"],
-    auto_gen_config: true,
 }

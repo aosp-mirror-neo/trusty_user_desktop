@@ -530,6 +530,176 @@ pub mod trusty_storage_superblock_mac {
     }
 }
 
+/// Contains the requests and responses used to get device IDs from the GSC.
+pub mod get_device_ids {
+    use super::*;
+    use core::mem;
+    use kmr_wire::legacy::SetAttestationIdsRequest;
+    use static_assertions::const_assert_eq;
+
+    const WORD_SIZE: usize = mem::size_of::<u32>();
+    const UNUSED_HEADER_BYTES: usize = 2;
+    const DEVICE_ID_MAX_STR_LEN: usize = 32;
+    const DEVICE_ID_FIELD_SIZE: usize = 33;
+    const DEVICE_IDS_FIELD_COUNT: usize = 8;
+
+    /// Subcommand to select the location to read from.
+    #[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, PartialEq, Unaligned)]
+    #[repr(u8)]
+    pub enum Subcommand {
+        /// Read device IDs from the scratch location in NVMEM.
+        Nvmem = 1,
+        /// Read device IDs stored in the info page.
+        Info = 2,
+    }
+
+    /// A single field contating a device ID.
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        Default,
+        Eq,
+        FromBytes,
+        Immutable,
+        IntoBytes,
+        KnownLayout,
+        PartialEq,
+        Unaligned,
+    )]
+    #[repr(C)]
+    pub struct DeviceIDField {
+        /// Length of the string stored in value.
+        pub size: u8,
+        /// Value is the stored string. 0xff for all unused bytes.
+        pub value: [u8; DEVICE_ID_MAX_STR_LEN],
+    }
+    const_assert_eq!(mem::size_of::<DeviceIDField>(), DEVICE_ID_FIELD_SIZE);
+    const_assert_eq!((mem::size_of::<DeviceIDField>() * DEVICE_IDS_FIELD_COUNT) % WORD_SIZE, 0);
+
+    impl DeviceIDField {
+        /// Initialize a new device ID field from a string.
+        pub fn new(s: &str) -> Self {
+            let mut value = [0xff; DEVICE_ID_MAX_STR_LEN];
+            if s.is_empty() {
+                Self { size: 0xff, value }
+            } else {
+                let len = s.len().min(DEVICE_ID_MAX_STR_LEN);
+                value[..len].copy_from_slice(s.as_bytes());
+                Self { size: len as u8, value }
+            }
+        }
+
+        /// Build a vector from the device ID field.
+        pub fn to_vec(&self) -> Vec<u8> {
+            self.value[..self.size.min(DEVICE_ID_MAX_STR_LEN as u8) as usize].to_vec()
+        }
+    }
+
+    impl std::fmt::Display for DeviceIDField {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", String::from_utf8_lossy(&self.to_vec()))
+        }
+    }
+
+    /// Get device IDs header
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        Default,
+        FromBytes,
+        Immutable,
+        IntoBytes,
+        KnownLayout,
+        PartialEq,
+        Unaligned,
+    )]
+    #[repr(C)]
+    pub struct DeviceIDsHeader {
+        /// Version is the Device ID header version
+        pub version: u8,
+        /// storage_type indicates if the IDs are stored in INFO or scratch
+        pub storage_type: u8,
+        /// Total number of fields
+        pub field_count: u8,
+        /// Total size of all of the fields
+        pub data_size: [u8; 2],
+        /// Status of the entire struct. 0 for completely initialized and ok to
+        /// commit.
+        pub status: u8,
+        /// Unused.
+        pub unused: [u8; UNUSED_HEADER_BYTES],
+    }
+    const_assert_eq!(mem::size_of::<DeviceIDsHeader>() % WORD_SIZE, 0);
+
+    /// Get device IDs request
+    #[derive(Debug, Eq, IntoBytes, Immutable, PartialEq, Unaligned)]
+    #[repr(C)]
+    pub struct Request {
+        /// Subcommand
+        pub subcommand: Subcommand,
+    }
+
+    /// Get device IDs response
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        Default,
+        FromBytes,
+        Immutable,
+        IntoBytes,
+        KnownLayout,
+        PartialEq,
+        Unaligned,
+    )]
+    #[repr(C)]
+    pub struct Response {
+        /// The header for the struct.
+        pub header: DeviceIDsHeader,
+        /// Brand
+        pub brand: DeviceIDField,
+        /// Device
+        pub device: DeviceIDField,
+        /// Product
+        pub product: DeviceIDField,
+        /// Manufacturer
+        pub manufacturer: DeviceIDField,
+        /// Model
+        pub model: DeviceIDField,
+        /// Serial number
+        pub serial: DeviceIDField,
+        /// Imei
+        pub imei: DeviceIDField,
+        /// Meid
+        pub meid: DeviceIDField,
+    }
+    const_assert_eq!(mem::size_of::<Response>() % WORD_SIZE, 0);
+
+    impl From<Response> for SetAttestationIdsRequest {
+        fn from(val: Response) -> Self {
+            SetAttestationIdsRequest {
+                brand: val.brand.to_vec(),
+                device: val.device.to_vec(),
+                product: val.product.to_vec(),
+                manufacturer: val.manufacturer.to_vec(),
+                model: val.model.to_vec(),
+                serial: val.serial.to_vec(),
+                imei: val.imei.to_vec(),
+                meid: val.meid.to_vec(),
+            }
+        }
+    }
+
+    impl TpmvRequest for Request {
+        const TAG: U16<BE> = NO_SESSION_TAG;
+        const COMMAND_CODE: U16<BE> = U16::new(0x004F);
+        const ORDINAL: U32<BE> = VENDOR_COMMAND_ORDINAL;
+        type TpmvResponse = Response;
+    }
+}
+
 pub mod strongbox;
 
 #[cfg(test)]
@@ -838,5 +1008,80 @@ mod tests {
         assert_eq!(buf, [1, 2, 3], "expected_size error should not affect buf");
         let res = TpmRequestMessage::<FakeRequest>::new_in_vec(&mut buf, true);
         assert!(matches!(res, Err(TpmRequestBuildError::Internal("init"))));
+    }
+
+    #[test]
+    fn test_get_device_ids_deserialize() {
+        use get_device_ids::{DeviceIDField, DeviceIDsHeader, Response};
+
+        // Captured from a lapis device
+        let bytes: [u8; 284] = [
+            0x80, 0x01, // header.tag
+            0x00, 0x00, 0x01, 0x1c, // header.length
+            0x00, 0x00, 0x00, 0x00, // header.error_code
+            0x00, 0x4f, // header.command_code
+            0x01, // header.version
+            0x02, // header.storage_type
+            0x08, // header.field_count
+            0x08, 0x01, // header.data_size
+            0x00, // header.status
+            0xff, 0xff, // header.unused
+            // brand
+            0x04, 0x41, 0x73, 0x75, 0x73, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, // device
+            0x05, 0x6c, 0x61, 0x70, 0x69, 0x73, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, // product
+            0x05, 0x6c, 0x61, 0x70, 0x69, 0x73, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, // manufacturer
+            0x04, 0x41, 0x73, 0x75, 0x73, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, // model
+            0x09, 0x43, 0x58, 0x39, 0x34, 0x30, 0x36, 0x43, 0x41, 0x41, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, // serial
+            0x0f, 0x54, 0x43, 0x4e, 0x54, 0x4c, 0x50, 0x30, 0x30, 0x30, 0x32, 0x32, 0x30, 0x35,
+            0x30, 0x38, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, // imei
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, // meid
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff,
+        ];
+
+        let expected_response = TpmResponseMessage {
+            header: TpmResponseHeader {
+                tag: U16::new(0x8001),
+                length: U32::new(0x0000011c),
+                error_code: U32::new(0x00000000),
+                command_code: U16::new(0x004F),
+            },
+
+            response: Response {
+                header: DeviceIDsHeader {
+                    version: 1,
+                    storage_type: 2,
+                    field_count: 8,
+                    data_size: [0x08, 0x01],
+                    status: 0,
+                    unused: [0xff, 0xff],
+                },
+                brand: DeviceIDField::new("Asus"),
+                device: DeviceIDField::new("lapis"),
+                product: DeviceIDField::new("lapis"),
+                manufacturer: DeviceIDField::new("Asus"),
+                model: DeviceIDField::new("CX9406CAA"),
+                serial: DeviceIDField::new("TCNTLP000220508"),
+                imei: DeviceIDField::new(""),
+                meid: DeviceIDField::new(""),
+            },
+        };
+
+        let tpm_response = TpmResponseMessage::<Response>::ref_from_bytes(&bytes).unwrap();
+        assert_eq!(*tpm_response, expected_response);
     }
 }
