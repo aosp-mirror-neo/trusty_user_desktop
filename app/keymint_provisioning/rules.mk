@@ -25,19 +25,21 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := keymint_provisioning
 
 MODULE_LIBRARY_DEPS += \
+    $(DESKTOP_TRUSTY_BUILD_PARAMS_RS) \
     $(call FIND_CRATE,libc) \
     $(call FIND_CRATE,log) \
     $(call FIND_CRATE,protobuf) \
-    $(call FIND_CRATE,x509-cert) \
     $(call FIND_CRATE,spki) \
+    $(call FIND_CRATE,x509-cert) \
     frameworks/native/libs/binder/trusty/rust \
     frameworks/native/libs/binder/trusty/rust/rpcbinder \
     trusty/user/base/lib/keymint-rust/common \
     trusty/user/base/lib/keymint-rust/wire \
+    trusty/user/base/lib/openssl-rust \
     trusty/user/base/lib/tipc/rust \
     trusty/user/base/lib/trusty-log \
-    trusty/user/base/lib/openssl-rust \
     trusty/user/desktop/interface/keymint_provisioning \
+    trusty/user/desktop/lib/gsc_svc_client \
     trusty/user/desktop/lib/keymint_legacy_client \
 
 MODULE_RUST_USE_CLIPPY := true

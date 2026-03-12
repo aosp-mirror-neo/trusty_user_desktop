@@ -14,6 +14,7 @@
 * limitations under the License.
 */
 
+mod gsc_device_ids;
 mod keymint_provisioning_service;
 mod proto;
 
@@ -46,6 +47,14 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
         .with_min_level(log::Level::Info)
         .format(log_formatter);
     trusty_log::init_with_config(config);
+
+    // If device ids are committed in the GSC on Ti50 devices, use those for
+    // provisioning.
+    if desktop_trusty_build_params::GSC_FW_TYPE == "ti50"
+        && gsc_device_ids::provision_device_ids_from_gsc().is_err()
+    {
+        log::error!("failed to provision device ids from gsc");
+    }
 
     let mut dispatcher = KeyMintProvisioningServiceDispatcher::<PORT_COUNT>::new()
         .expect("Could not create dispatcher");
