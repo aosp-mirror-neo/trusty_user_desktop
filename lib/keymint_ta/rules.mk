@@ -23,11 +23,12 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := desktop_keymint
 
 MODULE_LIBRARY_DEPS += \
+	$(DESKTOP_TRUSTY_BUILD_PARAMS_RS) \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/base/lib/keymint-rust/common \
-	trusty/user/base/lib/keymint-rust/wire \
 	trusty/user/base/lib/keymint-rust/ta \
+	trusty/user/base/lib/keymint-rust/wire \
 	trusty/user/base/lib/service_manager/client \
 	trusty/user/base/lib/trusty-std \
 	trusty/user/desktop/interface/boot_params/aidl \
