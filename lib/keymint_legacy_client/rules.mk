@@ -29,12 +29,13 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,thiserror) \
 	trusty/user/base/lib/keymint-rust/common \
-	trusty/user/base/lib/keymint-rust/wire \
 	trusty/user/base/lib/keymint-rust/ta \
+	trusty/user/base/lib/keymint-rust/wire \
+	trusty/user/base/lib/rng \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/trusty-std \
-	trusty/user/base/lib/rng \
+	trusty/user/desktop/lib/keymint_ta \
 
 MODULE_RUST_TESTS := true
 MODULE_RUST_USE_CLIPPY := true
