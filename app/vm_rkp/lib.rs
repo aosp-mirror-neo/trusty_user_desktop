@@ -117,19 +117,20 @@ fn get_uds_certificates() -> avf_attestation::Result<Vec<u8>> {
         Ok(certs_vec) => {
             if certs_vec.is_empty() {
                 error!("no UDS certificates found");
-                return serialize_cbor(&Value::Map(Vec::new()));
-            }
-            let encoded_certs = certs_vec.into_iter().map(Value::Bytes).collect::<Vec<_>>();
-            let uds_certs_cbor = Value::Map(vec![(
-                Value::Text(desktop_keymint::uds_signer_name().to_string()),
-                Value::Array(encoded_certs),
-            )]);
+                Err(RequestProcessingError::InvalidUdsCerts)
+            } else {
+                let encoded_certs = certs_vec.into_iter().map(Value::Bytes).collect::<Vec<_>>();
+                let uds_certs_cbor = Value::Map(vec![(
+                    Value::Text(desktop_keymint::uds_signer_name().to_string()),
+                    Value::Array(encoded_certs),
+                )]);
 
-            serialize_cbor(&uds_certs_cbor)
+                serialize_cbor(&uds_certs_cbor)
+            }
         }
         Err(e) => {
-            error!("failed to get UDS certs: {:?}, returning empty certs", e);
-            serialize_cbor(&Value::Map(Vec::new()))
+            error!("failed to get UDS certs: {:?}", e);
+            Err(RequestProcessingError::InvalidUdsCerts)
         }
     }
 }
