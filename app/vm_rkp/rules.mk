@@ -40,6 +40,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/desktop/lib/keymint_legacy_client \
+	trusty/user/desktop/lib/keymint_ta \
 
 MODULE_RUST_USE_CLIPPY := true
 
