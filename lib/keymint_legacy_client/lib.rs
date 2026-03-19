@@ -215,8 +215,11 @@ where
         let mut map: HashMap<String, Vec<Vec<u8>>> =
             kmr_wire::cbor::from_reader(rsp.uds_certs.as_slice())
                 .map_err(|e| KeyMintClientError::Cbor(format!("{e}")))?;
-        const SIGNER_NAME: &str = "ChromeOS PCA v1";
-        let certs = map.remove(SIGNER_NAME).ok_or(KeyMintClientError::MissingUdsCertsKey)?;
+        #[cfg(target_os = "trusty")]
+        let signer_name = desktop_keymint::uds_signer_name();
+        #[cfg(not(target_os = "trusty"))]
+        let signer_name = "ChromeOS PCA v1";
+        let certs = map.remove(signer_name).ok_or(KeyMintClientError::MissingUdsCertsKey)?;
 
         Ok(certs)
     }

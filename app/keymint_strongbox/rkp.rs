@@ -66,7 +66,7 @@ pub fn generate_certificate_request_v2(
                 .map(|cert| Value::Bytes(cert.encoded_certificate))
                 .collect::<Vec<_>>();
             serialize_cbor(&Value::Map(vec![(
-                Value::Text("ChromeOS PCA v1".to_string()),
+                Value::Text(desktop_keymint::uds_signer_name().to_string()),
                 Value::Array(encoded_certs),
             )]))
         }

@@ -31,6 +31,7 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,zerocopy) \
 	frameworks/native/libs/binder/trusty/rust \
 	trusty/user/app/keymint \
+	trusty/user/base/lib/keymint-rust/boringssl \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/keymint-rust/ta \
 	trusty/user/base/lib/keymint-rust/wire \
@@ -40,8 +41,8 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/trusty-std \
 	trusty/user/desktop/interface/gscd \
 	trusty/user/desktop/lib/gsc_svc_client \
+	trusty/user/desktop/lib/keymint_ta \
 	trusty/user/desktop/lib/tpm_commands \
-	trusty/user/base/lib/keymint-rust/boringssl \
 
 MODULE_RUST_USE_CLIPPY := true
 MODULE_RUST_TESTS := true

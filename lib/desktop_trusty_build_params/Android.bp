@@ -32,7 +32,7 @@ genrule {
     cmd: "(" +
         "    echo '#![no_std]';" +
         "    echo '#![allow(missing_docs)]';" +
-        "    echo 'pub const GSC_FW_TYPE: &str = " + GSC_FW_TYPE + ";'" +
+        "    echo 'pub const GSC_FW_TYPE: &str = \"" + GSC_FW_TYPE + "\";'" +
         ") > $(genDir)/lib.rs;" +
         "cp $(location desktop_trusty_build_params_rules.mk) $(genDir)/rules.mk;",
 }

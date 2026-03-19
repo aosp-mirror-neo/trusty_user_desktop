@@ -105,7 +105,10 @@ pub fn start() {
         sk_wrapper: None,
         tup: Box::new(kmr_ta::device::TrustedPresenceUnsupported),
         legacy_key: None,
-        rpc: Box::new(TrustyRpc::new_with_signer_name(&mut TrustyRng, "ChromeOS PCA v1")),
+        rpc: Box::new(TrustyRpc::new_with_signer_name(
+            &mut TrustyRng,
+            desktop_keymint::uds_signer_name(),
+        )),
     };
 
     handle_port_connections(hw_info, RpcInfo::V3(rpc_info_v3), imp, dev)
