@@ -67,7 +67,9 @@ pub fn keymint_ta(
 pub fn uds_signer_name() -> &'static str {
     match desktop_trusty_build_params::GSC_FW_TYPE {
         "cr50" => "ChromeOS PCA v1",
-        "ti50" => "OpenTitan NT11",
+        // TODO: Use the NT signer name when local UDS certs are configured
+        "ti50" => "ChromeOS PCA v1",
+        // "ti50" => "OpenTitan NT11",
         // Populate the default case with a unique string for debugging as opposed to crashing TEE
         // KeyMint.
         _ => "Unknown signer",
