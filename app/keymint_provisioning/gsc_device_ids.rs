@@ -63,6 +63,19 @@ pub fn provision_device_ids_from_gsc() -> Result<(), TipcError> {
     // TODO(b/466129461): Choose a dedicated value for AL devices without cellular
     ids.imei = b"867400022047199".to_vec();
 
+    // Device id workarounds for mis-provisioned GSCs to fix attestation. We can't fix this on the
+    // GSC side since they're programmed into a write once info page. So, we use this as a very
+    // temporary solution for test devices.
+    #[allow(clippy::single_match)]
+    match (ids.device.as_slice(), ids.manufacturer.as_slice(), ids.model.as_slice()) {
+        // lapis EVT devices
+        (b"lapis", b"Asus", b"CX9406CAA") => {
+            ids.manufacturer = b"ASUS".to_vec();
+            ids.model = b"CX9406CAA_CB9406CAA".to_vec();
+        }
+        _ => {}
+    }
+
     let mut km = KeyMintSecureLegacyClient::new().map_err(|e| {
         error!("failed to create KeyMint legacy client: {e}");
         TipcError::UnknownError
