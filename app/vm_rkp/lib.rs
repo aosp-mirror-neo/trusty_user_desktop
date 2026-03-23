@@ -37,9 +37,6 @@ const VM_RKP_KEK_CONTEXT: &[u8] = b"VmRkp\0";
 // Suffix after pvmfw includes Trusty TEE VM and VM RKP app.
 const DICE_CHAIN_SUFFIX_LEN: usize = 2;
 
-// Key for the UDS certificates in the CBOR map.
-const UDS_CERTS_KEY: &str = "ChromeOS PCA v1";
-
 struct Ops {
     bcc: Vec<u8>,
     key_derivation_ops: InMemoryKeyDerivationOps,
@@ -124,7 +121,7 @@ fn get_uds_certificates() -> avf_attestation::Result<Vec<u8>> {
             }
             let encoded_certs = certs_vec.into_iter().map(Value::Bytes).collect::<Vec<_>>();
             let uds_certs_cbor = Value::Map(vec![(
-                Value::Text(UDS_CERTS_KEY.to_string()),
+                Value::Text(desktop_keymint::uds_signer_name().to_string()),
                 Value::Array(encoded_certs),
             )]);
 
