@@ -108,6 +108,7 @@ pub fn start() {
         rpc: Box::new(TrustyRpc::new_with_signer_name(
             &mut TrustyRng,
             desktop_keymint::uds_signer_name(),
+            keymint::RequireUdsCertificates(true),
         )),
     };
 
