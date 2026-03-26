@@ -1,0 +1,22 @@
+{
+    "app_name": "secretkeeper_desktop_app",
+    "uuid": "0ec49f18-d909-400d-9590-fe405a6ec5b6",
+    "min_heap": 491520,
+    "min_stack": 65536,
+    "start_ports": [
+        {
+            "name": "com.android.trusty.secretkeeper",
+            "flags": {
+                "allow_ta_connect": false,
+                "allow_ns_connect": true
+            }
+        },
+        {
+            "name": "com.android.trusty.secretkeeper.authgraph",
+            "flags": {
+                "allow_ta_connect": false,
+                "allow_ns_connect": true
+            }
+        }
+    ]
+}

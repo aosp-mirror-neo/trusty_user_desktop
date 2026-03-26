@@ -30,6 +30,7 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,protobuf) \
 	$(call FIND_CRATE,x509-cert) \
 	$(call FIND_CRATE,spki) \
+	trusty/user/base/lib/openssl-rust \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/keymint-rust/wire \

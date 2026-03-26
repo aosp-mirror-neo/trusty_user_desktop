@@ -164,7 +164,7 @@ service_dispatcher! {
 }
 
 const PORT_COUNT: usize = 3;
-const CONNECTION_COUNT: usize = 8;
+const CONNECTION_COUNT: usize = 9;
 
 pub fn init_and_start_loop() -> Result<(), TipcError> {
     trusty_log::init();
