@@ -58,7 +58,7 @@ pub fn generate_certificate_request_v2(
 
     let dice_cert_chain = read_to_value(&get_dice_chain(client)?)?;
 
-    // Construct `UdsCerts` as an empty CBOR map if not exist
+    // Construct `UdsCerts` or error out if they're not set
     let uds_certs = match crate::fake_sb::secure_storage_manager::read_uds_cert() {
         Ok(uds_certs) => {
             let encoded_certs = uds_certs
@@ -71,8 +71,8 @@ pub fn generate_certificate_request_v2(
             )]))
         }
         Err(err) => {
-            log::warn!("Failed to read UDS certificates: {err:?}");
-            serialize_cbor(&Value::Map(Vec::new()))
+            log::error!("Failed to read UDS certificates: {err:?}");
+            Err(kmr_common::rpc_err!(Failed, "Failed to read UDS certificates: {err:?}"))
         }
     }?;
     let uds_certs = read_to_value(&uds_certs)?;
