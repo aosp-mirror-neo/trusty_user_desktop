@@ -27,7 +27,7 @@ use spki::{Error as SpkiError, ObjectIdentifier};
 use x509_cert::{
     certificate::CertificateInner,
     der::{
-        asn1::{OctetString, PrintableStringRef},
+        asn1::OctetString,
         Decode,
     },
     ext::{Extension, Extensions},
@@ -35,7 +35,6 @@ use x509_cert::{
 
 const TRUSTED_ROOT_CA_DER: &[u8] = include_bytes!("privacy_root_ca.der");
 const CHROME_ANDROID_IDENTITY_DATA_OID: &str = "1.3.6.1.4.1.11129.2.1.54";
-const ORGANIZATIONAL_UNIT_NAME_OID: &str = "2.5.4.11";
 
 type Certificate = CertificateInner<CustomProfile>;
 
@@ -77,18 +76,6 @@ fn get_android_identity_extension<'a>(
     let found_extension: Option<&'a Extension> =
         extensions.iter().find(|ext| ext.extn_id == target_oid);
     Ok(found_extension)
-}
-
-fn get_brand(cert: &Certificate) -> Option<&str> {
-    let org_unit_name_oid = ORGANIZATIONAL_UNIT_NAME_OID.parse::<ObjectIdentifier>().unwrap();
-    cert.tbs_certificate
-        .subject
-        .0
-        .iter()
-        .flat_map(|rdn| rdn.0.iter())
-        .find(|attr| attr.oid == org_unit_name_oid)
-        .and_then(|attr| PrintableStringRef::try_from(&attr.value).ok())
-        .map(|printable_ref| printable_ref.as_str())
 }
 
 fn check_non_empty(data: Vec<u8>, field_name: &str) -> Result<Vec<u8>, BinderStatus> {
@@ -222,6 +209,7 @@ impl IKeyMintProvisioning for KeyMintProvisioningService {
 
         let product_data = identity_data.get_product_data_info().get_product_data();
         let serial_number_info = identity_data.get_serial_number_info();
+        let brand = check_non_empty(product_data.get_brand().as_bytes().to_vec(), "brand")?;
         let device = check_non_empty(product_data.get_device().as_bytes().to_vec(), "device")?;
         let product = check_non_empty(product_data.get_product().as_bytes().to_vec(), "product")?;
         let serial =
@@ -229,13 +217,6 @@ impl IKeyMintProvisioning for KeyMintProvisioningService {
         let manufacturer =
             check_non_empty(product_data.get_manufacturer().as_bytes().to_vec(), "manufacturer")?;
         let model = check_non_empty(product_data.get_model().as_bytes().to_vec(), "model")?;
-
-        let brand = get_brand(&cert);
-        if brand.is_none() {
-            log::error!("Failed to find brand in the certificate subject");
-            return Err(binder_error::identity_field_missing());
-        }
-        let brand = brand.unwrap().as_bytes().to_vec();
 
         let Ok(mut km) = KeyMintSecureLegacyClient::new() else {
             log::error!("failed to create KeyMint legacy client");
@@ -255,7 +236,7 @@ impl IKeyMintProvisioning for KeyMintProvisioningService {
             String::from_utf8_lossy(&model).as_ref()
         );
 
-        let mut ids = SetAttestationIdsRequest {
+        let ids = SetAttestationIdsRequest {
             brand,
             device,
             product,
@@ -266,13 +247,6 @@ impl IKeyMintProvisioning for KeyMintProvisioningService {
             imei: b"867400022047199".to_vec(),
             meid: Vec::new(),
         };
-
-        // TODO(b/460182466): For brya builds, we use "google" to match
-        // `ro.product.brand`. Note that if a mismatch occurs, RKP/gECC/HPA will
-        // fail.
-        if product_data.get_device() == "brya" {
-            ids.brand = "google".as_bytes().to_vec();
-        }
 
         km.set_attestation_ids(ids).map_err(|e| {
             log::error!("Failed to set attestation IDs: {e}");
