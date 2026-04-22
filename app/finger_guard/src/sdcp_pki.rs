@@ -29,8 +29,8 @@ pub static TRUSTED_ROOTS: OnceCell<Vec<EcKey<Public>>> = OnceCell::new();
 type EcPointBytes = [u8; 65];
 
 /// The production version of Google key signing keys.
-//TODO(b/444233621): create a prod signing key.
-const KSK_PUBLIC_KEYS: [&EcPointBytes; 0] = [];
+const KSK_PUBLIC_KEYS: [&EcPointBytes; 1] =
+    [include_bytes!("sdcp_pki_data/fingerprint-model-root-key-prod-v2026-04-10.bin")];
 
 /// The development version of key signing keys.
 #[cfg(feature = "dev_sdcp_pki")]
